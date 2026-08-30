@@ -182,17 +182,22 @@ async function invoke(channel: string, ...args: unknown[]): Promise<any> {
 
 type BuiltHtml = { html: string; printSettings: PrintSettings }
 
-function thermalWidthOf(printSettings: PrintSettings): number | undefined {
+/**
+ * QZ Tray بيعلّق (hang) لو الـconfig من غير "size" خالص — لازم عرض حقيقي دايمًا (تفصيل في qzPrint.ts).
+ * الحراري بياخد عرضه الفعلي، والرسمي (A4/A5) بياخد عرض الورقة القياسي بالمليمتر (بورتريه).
+ */
+function widthMmOf(printSettings: PrintSettings): number {
   if (printSettings.paperSize === '80mm') return 80
   if (printSettings.paperSize === '58mm') return 58
-  return undefined
+  if (printSettings.paperSize === 'A5') return 148
+  return 210 // A4
 }
 
 /** طباعة فعلية على الطابعة عبر QZ Tray — نفس النمط لكل أنواع الطباعة (إيصال/عرض سعر/إذن/وردية). */
 async function fetchAndPrint(
   fetcher: () => Promise<BuiltHtml | null>,
   notFoundError: string,
-  options: { printerOverride?: string | null; skipThermalSizing?: boolean } = {}
+  options: { printerOverride?: string | null; widthMmOverride?: number } = {}
 ): Promise<PrintResult> {
   try {
     const built = await fetcher()
@@ -200,7 +205,7 @@ async function fetchAndPrint(
     const { printHtmlViaQz } = await import('./qzPrint')
     await printHtmlViaQz(built.html, {
       printerName: options.printerOverride || built.printSettings.defaultPrinter,
-      thermalWidthMm: options.skipThermalSizing ? undefined : thermalWidthOf(built.printSettings)
+      widthMm: options.widthMmOverride ?? widthMmOf(built.printSettings)
     })
     return { ok: true }
   } catch (err: any) {
@@ -256,10 +261,19 @@ function printApi() {
       fetchAndPreview(() => invoke('print:getShiftSummaryHtml', sessionId), 'الوردية غير موجودة'),
 
     /** الليبل مقاسه بيتحدد من إعدادات الليبل نفسها (labelWidthMm/labelHeightMm) مش من عرض الورق الحراري. */
-    labels: (items: { barcode: string; name: string; price: number }[]): Promise<PrintResult> =>
-      fetchAndPrint(() => invoke('print:getLabelsHtml', items), 'اختر صنف واحد على الأقل', {
-        skipThermalSizing: true
-      }),
+    labels: async (items: { barcode: string; name: string; price: number }[]): Promise<PrintResult> => {
+      try {
+        const built = await invoke('print:getLabelsHtml', items)
+        if (!built) return { ok: false, error: 'اختر صنف واحد على الأقل' }
+        const { labelSettings } = built
+        const widthMm = labelSettings.orientation === 'vertical' ? labelSettings.labelWidthMm : labelSettings.labelHeightMm
+        const { printHtmlViaQz } = await import('./qzPrint')
+        await printHtmlViaQz(built.html, { printerName: built.printSettings.defaultPrinter, widthMm })
+        return { ok: true }
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? 'تعذرت الطباعة' }
+      }
+    },
 
     kitchenTicket: (
       meta: KitchenTicketMeta,

@@ -1066,7 +1066,7 @@ function buildFormalShiftSummaryHtml(
 
 export async function buildBarcodeLabelsHtml(
   items: { barcode: string; name: string; price: number }[]
-): Promise<{ html: string; printSettings: PrintSettings }> {
+): Promise<{ html: string; printSettings: PrintSettings; labelSettings: BarcodeLabelSettings }> {
   const [labelSettings, printSettings] = await Promise.all([getBarcodeLabelSettings(), getPrintSettings()])
 
   const labelsHtml = await Promise.all(
@@ -1077,7 +1077,7 @@ export async function buildBarcodeLabelsHtml(
   )
 
   const html = wrapLabelsHtml(labelsHtml.join(''), labelSettings)
-  return { html, printSettings }
+  return { html, printSettings, labelSettings }
 }
 
 function buildLabelHtml(

@@ -31,20 +31,25 @@ async function ensureConnected(): Promise<void> {
 
 export interface QzPrintOptions {
   printerName?: string | null
-  /** عرض الورق الحراري بالمليمتر (80 أو 58) — لو مش موجود بيبقى طباعة رسمية (A4/A5). */
-  thermalWidthMm?: number
+  /**
+   * عرض الصفحة بالمليمتر (الطول بيتحدد تلقائيًا حسب المحتوى الفعلي) — لازم قيمة هنا دايمًا.
+   * اتأكد بالتجربة الفعلية إن QZ Tray بيعلّق (hang) على طباعة HTML من غير أي "size" في الـconfig
+   * خالص — حتى لو HTML نفسه فيه "@page { size: auto }"، عكس Electron اللي كان بيتعامل مع الحالة دي عادي.
+   * فمفيش قيمة افتراضية آمنة نسيبها فاضية؛ كل نوع طباعة (حراري 80/58 أو ليبل) لازم يبعت عرضه الحقيقي.
+   */
+  widthMm: number
 }
 
 /** بيطبع HTML جاهز فعليًا على الطابعة عبر QZ Tray — بيستخدم نفس منطق تحديد الطابعة الافتراضية لو مفيش اسم محدد. */
-export async function printHtmlViaQz(html: string, options: QzPrintOptions = {}): Promise<void> {
+export async function printHtmlViaQz(html: string, options: QzPrintOptions): Promise<void> {
   await ensureConnected()
 
   const printerName = options.printerName || (await qz.printers.getDefault())
   if (!printerName) throw new Error('مفيش طابعة افتراضية متعرّفة على الجهاز ده')
 
   const config = qz.configs.create(printerName, {
-    // للإيصال الحراري بنسيب الطول تلقائي (QZ بياخد ارتفاع المحتوى الفعلي)، وبنحدد العرض بالمليمتر
-    ...(options.thermalWidthMm ? { size: { width: options.thermalWidthMm, height: 0 }, units: 'mm' } : {})
+    size: { width: options.widthMm, height: 0 },
+    units: 'mm'
   })
 
   await qz.print(config, [{ type: 'pixel', format: 'html', flavor: 'plain', data: html }])
