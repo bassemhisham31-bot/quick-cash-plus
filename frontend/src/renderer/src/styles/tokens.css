@@ -1,0 +1,75 @@
+:root {
+  --qcp-bg: #F3F4F8;
+  --qcp-bg-elevated: #FFFFFF;
+  --qcp-bg-sunken: #EEF0F6;
+  --qcp-ink: #111827;
+  --qcp-ink-muted: #6B7280;
+  --qcp-ink-faint: #9CA3AF;
+  --qcp-border: #E5E7EB;
+  --qcp-border-strong: #D1D5DB;
+
+  --qcp-accent: #4F46E5;
+  --qcp-accent-strong: #4338CA;
+  --qcp-accent-soft: #E0E7FF;
+  --qcp-gradient: linear-gradient(135deg, #6366F1 0%, #3B82F6 100%);
+
+  --qcp-success: #16A34A;
+  --qcp-success-soft: #DCFCE7;
+  --qcp-warn: #D97706;
+  --qcp-warn-soft: #FEF3C7;
+  --qcp-critical: #DC2626;
+  --qcp-critical-soft: #FEE2E2;
+
+  --qcp-sidebar-bg: #111729;
+  --qcp-sidebar-bg-elevated: #1B2338;
+  --qcp-sidebar-ink: #E5E7EB;
+  --qcp-sidebar-ink-muted: #8891A8;
+  --qcp-sidebar-border: #262E45;
+
+  --qcp-shadow: 0 1px 2px rgba(17, 24, 39, 0.05), 0 8px 24px -8px rgba(17, 24, 39, 0.14);
+  --qcp-radius: 12px;
+  --qcp-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --qcp-sans: 'Segoe UI', Tahoma, Arial, sans-serif;
+
+  --qcp-icon-blue: #3B82F6;
+  --qcp-icon-blue-soft: #DBEAFE;
+  --qcp-icon-green: #16A34A;
+  --qcp-icon-green-soft: #DCFCE7;
+  --qcp-icon-purple: #8B5CF6;
+  --qcp-icon-purple-soft: #EDE9FE;
+  --qcp-icon-orange: #F97316;
+  --qcp-icon-orange-soft: #FFEDD5;
+  --qcp-icon-pink: #EC4899;
+  --qcp-icon-pink-soft: #FCE7F3;
+}
+
+:root[data-theme='dark'] {
+  --qcp-bg: #0B0F1A;
+  --qcp-bg-elevated: #141A2A;
+  --qcp-bg-sunken: #0F1422;
+  --qcp-ink: #E5E7EB;
+  --qcp-ink-muted: #9AA3B8;
+  --qcp-ink-faint: #6B7488;
+  --qcp-border: #232B41;
+  --qcp-border-strong: #2E3752;
+
+  --qcp-accent: #818CF8;
+  --qcp-accent-strong: #A5B4FC;
+  --qcp-accent-soft: #262C55;
+  --qcp-gradient: linear-gradient(135deg, #6366F1 0%, #3B82F6 100%);
+
+  --qcp-success: #4ADE80;
+  --qcp-success-soft: #123322;
+  --qcp-warn: #FBBF24;
+  --qcp-warn-soft: #3A2C0F;
+  --qcp-critical: #F87171;
+  --qcp-critical-soft: #3A1717;
+
+  --qcp-sidebar-bg: #0A0E1A;
+  --qcp-sidebar-bg-elevated: #131A2C;
+  --qcp-sidebar-ink: #E5E7EB;
+  --qcp-sidebar-ink-muted: #7A85A0;
+  --qcp-sidebar-border: #1D2438;
+
+  --qcp-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px -10px rgba(0, 0, 0, 0.6);
+}
