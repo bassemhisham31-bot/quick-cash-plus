@@ -1,0 +1,117 @@
+/**
+ * القنوات اللي بتغيّر بيانات فعليًا — تستوجب إشعار باقي الأجهزة والواجهة المحلية بالتحديث،
+ * وكمان بتتسجّل تلقائيًا في سجل نشاط المستخدمين (user_activity_log).
+ * ملف مشترك (بدون أي استيراد من main/preload) عشان يُستخدم من الطرفين: main/ipc/handlers.ts وpreload/index.ts.
+ */
+export const MUTATING_CHANNELS = new Set<string>([
+  'catalog:createCategory',
+  'catalog:createUnit',
+  'catalog:createProduct',
+  'catalog:updateProduct',
+  'catalog:deleteProduct',
+  'catalog:createWarehouse',
+  'catalog:importProducts',
+  'users:create',
+  'users:update',
+  'users:delete',
+  'shortcuts:update',
+  'shortcuts:create',
+  'shortcuts:delete',
+  'pos:checkout',
+  'invoices:delete',
+  'invoices:restore',
+  'invoices:update',
+  'invoices:returnLines',
+  'cash:openDay',
+  'cash:closeDay',
+  'customers:create',
+  'customers:recordPayment',
+  'customers:updateLoyaltyEnabled',
+  'customers:linkVendor',
+  'customers:unlinkVendor',
+  'vendors:create',
+  'vendors:recordPayment',
+  'stock:transfer',
+  'purchases:create',
+  'purchases:returnLines',
+  'stockPermits:create',
+  'stockPermits:delete',
+  'expenses:createCategory',
+  'expenses:create',
+  'employees:create',
+  'employees:recordTransaction',
+  'employees:updateTransaction',
+  'employees:deleteTransaction',
+  'employees:startNewPeriod',
+  'salesReps:create',
+  'salesReps:update',
+  'salesReps:setActive',
+  'quotations:create',
+  'quotations:updateStatus',
+  'quotations:convertToInvoice',
+  'settings:updateTax',
+  'settings:updatePrint',
+  'settings:updateBarcodeLabel',
+  'settings:updateDevice',
+  'settings:updateStore',
+  'settings:updateLoyalty',
+  'settings:updateAssistant',
+  'settings:updateWhatsApp',
+  'license:activate',
+  'backup:updateSettings',
+  'dataReset:customers',
+  'dataReset:products',
+  'dataReset:sales',
+  'dataReset:vendors',
+  'dataReset:categories',
+  'dataReset:expenses',
+  'dataReset:assistantChat',
+  'dataReset:factoryReset',
+  'settings:updatePosUi',
+  'priceCheckerSync:update',
+  'restaurant:upsertTable',
+  'restaurant:deleteTable',
+  'restaurant:mergeTables',
+  'restaurant:transferTable',
+  'restaurant:openOrder',
+  'restaurant:addItems',
+  'restaurant:updateItem',
+  'restaurant:updateOrderMeta',
+  'delivery:upsertZone',
+  'delivery:deleteZone',
+  'delivery:updateStatus',
+  'delivery:reassignDriver',
+  'reservations:create',
+  'reservations:updateStatus',
+  'reservations:delete',
+  'restaurant:removeItem',
+  'restaurant:sendToKitchen',
+  'restaurant:setKitchenStatus',
+  'restaurant:closeOrder',
+  'restaurant:cancelOrder',
+  'recipes:set',
+  'settings:updateRestaurant',
+  'settings:setCategoryPrinter',
+  'settings:upsertDeliveryDriver',
+  'settings:deleteDeliveryDriver',
+  'settings:upsertCaptain',
+  'settings:deleteCaptain'
+])
+
+/**
+ * القنوات اللي بتغيّر بيانات الأصناف/الوحدات — بتشغّل مزامنة (debounced) مع SQL Server
+ * الخاص بجهاز Price Checker، لو المزامنة مفعّلة في الإعدادات (priceCheckerSync.ts).
+ */
+export const CATALOG_SYNC_CHANNELS = new Set<string>([
+  'catalog:createProduct',
+  'catalog:updateProduct',
+  'catalog:deleteProduct',
+  'catalog:createUnit',
+  'catalog:importProducts'
+])
+
+/**
+ * قنوات عندها بالفعل نداء يدوي لـ logUserActivity جوه الـservice نفسه (بتفصيل مفيد زي الدور
+ * أو "تعطيل بدل الحذف") — مُستثناة من التسجيل التلقائي المركزي عشان الحركة ما تتسجّلش مرتين.
+ */
+export const MANUALLY_LOGGED_CHANNELS = new Set<string>(['users:create', 'users:update', 'users:delete'])
