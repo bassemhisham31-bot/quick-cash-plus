@@ -180,6 +180,116 @@ async function invoke(channel: string, ...args: unknown[]): Promise<any> {
   return payload.result
 }
 
+type BuiltHtml = { html: string; printSettings: PrintSettings }
+
+function thermalWidthOf(printSettings: PrintSettings): number | undefined {
+  if (printSettings.paperSize === '80mm') return 80
+  if (printSettings.paperSize === '58mm') return 58
+  return undefined
+}
+
+/** طباعة فعلية على الطابعة عبر QZ Tray — نفس النمط لكل أنواع الطباعة (إيصال/عرض سعر/إذن/وردية). */
+async function fetchAndPrint(
+  fetcher: () => Promise<BuiltHtml | null>,
+  notFoundError: string,
+  options: { printerOverride?: string | null; skipThermalSizing?: boolean } = {}
+): Promise<PrintResult> {
+  try {
+    const built = await fetcher()
+    if (!built) return { ok: false, error: notFoundError }
+    const { printHtmlViaQz } = await import('./qzPrint')
+    await printHtmlViaQz(built.html, {
+      printerName: options.printerOverride || built.printSettings.defaultPrinter,
+      thermalWidthMm: options.skipThermalSizing ? undefined : thermalWidthOf(built.printSettings)
+    })
+    return { ok: true }
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذرت الطباعة' }
+  }
+}
+
+/**
+ * معاينة بس (بدون طباعة فعلية) — بتفتح النتيجة في تاب جديد بالمتصفح.
+ * بنستخدم رابط Blob + نقرة على <a> بدل window.open() المباشر لأن متصفحات كتير (ومتصفحات
+ * الاختبار الآلي) بتمنع window.open() المُستدعى من كود، لكن نقرة فعلية على رابط بتتفادى المنع ده.
+ */
+async function fetchAndPreview(fetcher: () => Promise<BuiltHtml | null>, notFoundError: string): Promise<PrintResult> {
+  try {
+    const built = await fetcher()
+    if (!built) return { ok: false, error: notFoundError }
+    const blob = new Blob([built.html], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.target = '_blank'
+    link.rel = 'noopener'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+    return { ok: true }
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذرت المعاينة' }
+  }
+}
+
+function printApi() {
+  return {
+    receipt: (invoiceId: number): Promise<PrintResult> =>
+      fetchAndPrint(() => invoke('print:getReceiptHtml', invoiceId), 'الفاتورة غير موجودة'),
+    previewReceipt: (invoiceId: number): Promise<PrintResult> =>
+      fetchAndPreview(() => invoke('print:getReceiptHtml', invoiceId), 'الفاتورة غير موجودة'),
+
+    quotation: (quotationId: number): Promise<PrintResult> =>
+      fetchAndPrint(() => invoke('print:getQuotationHtml', quotationId), 'عرض السعر غير موجود'),
+    previewQuotation: (quotationId: number): Promise<PrintResult> =>
+      fetchAndPreview(() => invoke('print:getQuotationHtml', quotationId), 'عرض السعر غير موجود'),
+
+    stockPermit: (permitId: number): Promise<PrintResult> =>
+      fetchAndPrint(() => invoke('print:getStockPermitHtml', permitId), 'الإذن غير موجود'),
+    previewStockPermit: (permitId: number): Promise<PrintResult> =>
+      fetchAndPreview(() => invoke('print:getStockPermitHtml', permitId), 'الإذن غير موجود'),
+
+    shiftSummary: (sessionId: number): Promise<PrintResult> =>
+      fetchAndPrint(() => invoke('print:getShiftSummaryHtml', sessionId), 'الوردية غير موجودة'),
+    previewShiftSummary: (sessionId: number): Promise<PrintResult> =>
+      fetchAndPreview(() => invoke('print:getShiftSummaryHtml', sessionId), 'الوردية غير موجودة'),
+
+    /** الليبل مقاسه بيتحدد من إعدادات الليبل نفسها (labelWidthMm/labelHeightMm) مش من عرض الورق الحراري. */
+    labels: (items: { barcode: string; name: string; price: number }[]): Promise<PrintResult> =>
+      fetchAndPrint(() => invoke('print:getLabelsHtml', items), 'اختر صنف واحد على الأقل', {
+        skipThermalSizing: true
+      }),
+
+    kitchenTicket: (
+      meta: KitchenTicketMeta,
+      printerName: string | null,
+      items: { name: string; qty: number; note: string | null }[]
+    ): Promise<PrintResult> =>
+      fetchAndPrint(() => invoke('print:getKitchenTicketHtml', meta, items), 'تعذر تجهيز بون المطبخ', {
+        printerOverride: printerName
+      }),
+
+    /** فتح درج الكاشير — أمر ESC/POS خام بيتبعت مباشرة عبر QZ Tray، مش HTML. */
+    openDrawer: async (): Promise<PrintResult> => {
+      try {
+        const [printSettings, deviceSettings] = await Promise.all([
+          invoke('settings:getPrint'),
+          invoke('settings:getDevice')
+        ])
+        if (!printSettings.defaultPrinter) {
+          return { ok: false, error: 'حدد طابعة افتراضية من إعدادات الطباعة أولًا' }
+        }
+        const { openCashDrawerViaQz } = await import('./qzPrint')
+        await openCashDrawerViaQz(printSettings.defaultPrinter, deviceSettings.drawerPin === 'pin5' ? 'pin5' : 'pin2')
+        return { ok: true }
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? 'تعذر فتح الدرج' }
+      }
+    }
+  }
+}
+
 const api = {
   session: {
     setActiveUser: (): void => {
@@ -529,66 +639,7 @@ const api = {
     decodeWeight: (barcode: string): Promise<WeightBarcodeResult> =>
       invoke('barcode:decodeWeight', barcode)
   },
-  print: {
-    /** طباعة فعلية على الطابعة عبر QZ Tray (لازم يكون مثبت وشغال على جهاز الفرع ده). */
-    receipt: async (invoiceId: number): Promise<PrintResult> => {
-      try {
-        const built = await invoke('print:getReceiptHtml', invoiceId)
-        if (!built) return { ok: false, error: 'الفاتورة غير موجودة' }
-        const { printHtmlViaQz } = await import('./qzPrint')
-        const thermalWidthMm =
-          built.printSettings.paperSize === '80mm' ? 80 : built.printSettings.paperSize === '58mm' ? 58 : undefined
-        await printHtmlViaQz(built.html, {
-          printerName: built.printSettings.defaultPrinter,
-          thermalWidthMm
-        })
-        return { ok: true }
-      } catch (err: any) {
-        return { ok: false, error: err?.message ?? 'تعذرت الطباعة' }
-      }
-    },
-    /**
-     * معاينة بس (بدون طباعة فعلية) — بتفتح الإيصال في تاب جديد بالمتصفح.
-     * بنستخدم رابط Blob + نقرة على <a> بدل window.open() المباشر لأن متصفحات كتير (ومتصفحات
-     * الاختبار الآلي) بتمنع window.open() المُستدعى من كود، لكن نقرة فعلية على رابط بتتفادى المنع ده.
-     */
-    previewReceipt: async (invoiceId: number): Promise<PrintResult> => {
-      try {
-        const built = await invoke('print:getReceiptHtml', invoiceId)
-        if (!built) return { ok: false, error: 'الفاتورة غير موجودة' }
-        const blob = new Blob([built.html], { type: 'text/html' })
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.target = '_blank'
-        link.rel = 'noopener'
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        setTimeout(() => URL.revokeObjectURL(url), 30000)
-        return { ok: true }
-      } catch (err: any) {
-        return { ok: false, error: err?.message ?? 'تعذرت المعاينة' }
-      }
-    },
-    labels: (items: { barcode: string; name: string; price: number }[]): Promise<PrintResult> =>
-      invoke('print:labels', items),
-    quotation: (quotationId: number): Promise<PrintResult> => invoke('print:quotation', quotationId),
-    previewQuotation: (quotationId: number): Promise<PrintResult> =>
-      invoke('print:previewQuotation', quotationId),
-    shiftSummary: (sessionId: number): Promise<PrintResult> => invoke('print:shiftSummary', sessionId),
-    previewShiftSummary: (sessionId: number): Promise<PrintResult> =>
-      invoke('print:previewShiftSummary', sessionId),
-    stockPermit: (permitId: number): Promise<PrintResult> => invoke('print:stockPermit', permitId),
-    previewStockPermit: (permitId: number): Promise<PrintResult> =>
-      invoke('print:previewStockPermit', permitId),
-    openDrawer: (): Promise<PrintResult> => invoke('print:openDrawer'),
-    kitchenTicket: (
-      meta: KitchenTicketMeta,
-      printerName: string | null,
-      items: { name: string; qty: number; note: string | null }[]
-    ): Promise<PrintResult> => invoke('print:kitchenTicket', meta, printerName, items)
-  },
+  print: printApi(),
   license: {
     getStatus: (): Promise<LicenseStatus> => invoke('license:getStatus'),
     activate: (key: string): Promise<ActivateLicenseResult> => invoke('license:activate', key)

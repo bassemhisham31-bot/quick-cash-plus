@@ -175,7 +175,14 @@ import {
   upsertTable
 } from './services/restaurant'
 import { getRecipe, setRecipe } from './services/recipes'
-import { buildInvoiceHtml, printKitchenTicket } from './services/print'
+import {
+  buildBarcodeLabelsHtml,
+  buildInvoiceHtml,
+  buildKitchenTicketHtml,
+  buildQuotationHtml,
+  buildShiftSummaryHtml,
+  buildStockPermitHtml
+} from './services/print'
 import type {
   AssistantSettings,
   BackupSettings,
@@ -451,13 +458,17 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'barcode:generate': (value: string, type?: BarcodeLabelType) => generateBarcodeDataUrl(value, type),
     'barcode:decodeWeight': async (barcode: string) => decodeWeightBarcode(barcode, await getDeviceSettings()),
 
-    'print:kitchenTicket': (
-      meta: KitchenTicketMeta,
-      printerName: string | null,
-      items: { name: string; qty: number; note: string | null }[]
-    ) => printKitchenTicket(meta, printerName, items),
-    /** بيرجع HTML الإيصال الجاهز — الطباعة الفعلية بتتم من المتصفح نفسه عبر QZ Tray (مرحلة 4). */
+    /** كل قنوات print:get*Html بترجع HTML جاهز بس — الطباعة الفعلية بتتم من المتصفح عبر QZ Tray (مرحلة 4). */
     'print:getReceiptHtml': (invoiceId: number) => buildInvoiceHtml(invoiceId),
+    'print:getKitchenTicketHtml': (
+      meta: KitchenTicketMeta,
+      items: { name: string; qty: number; note: string | null }[]
+    ) => buildKitchenTicketHtml(meta, items),
+    'print:getQuotationHtml': (quotationId: number) => buildQuotationHtml(quotationId),
+    'print:getStockPermitHtml': (permitId: number) => buildStockPermitHtml(permitId),
+    'print:getShiftSummaryHtml': (sessionId: number) => buildShiftSummaryHtml(sessionId),
+    'print:getLabelsHtml': (items: { barcode: string; name: string; price: number }[]) =>
+      buildBarcodeLabelsHtml(items),
 
     'license:getStatus': () => getLicenseStatus(),
     'license:activate': (key: string) => activateLicense(key),

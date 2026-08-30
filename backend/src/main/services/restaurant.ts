@@ -1,7 +1,6 @@
 import { getDb } from '../db'
 import { checkout } from './pos'
-import { getCategoryPrinters, getPrintSettings, getRestaurantSettings } from './settings'
-import { printKitchenTicket } from './print'
+import { getRestaurantSettings } from './settings'
 import type {
   CartLine,
   CloseRestaurantOrderInput,
@@ -298,43 +297,9 @@ export async function sendToKitchen(orderId: number): Promise<{ ok: boolean; pri
   const items = itemsRs.rows as any[]
   if (!items.length) return { ok: true, printedCount: 0 }
 
-  const [categoryPrinters, restaurantSettings, printSettings] = await Promise.all([
-    getCategoryPrinters(),
-    getRestaurantSettings(),
-    getPrintSettings()
-  ])
-  const printerByCategory = new Map(categoryPrinters.map((cp) => [cp.categoryId, cp.printerName]))
-  const fallbackPrinter = restaurantSettings.defaultKitchenPrinter || printSettings.defaultPrinter || null
-
-  const groups = new Map<string, { name: string; qty: number; note: string | null }[]>()
-  for (const item of items) {
-    const printerName = (item.categoryId != null ? printerByCategory.get(Number(item.categoryId)) : null) ?? fallbackPrinter
-    const key = printerName ?? '__none__'
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key)!.push({ name: item.product_name, qty: Number(item.qty), note: item.note ?? null })
-  }
-
-  const tableRs = await db.execute({
-    sql: `SELECT t.name FROM restaurant_order_tables ot JOIN restaurant_tables t ON t.id = ot.table_id WHERE ot.order_id = ?`,
-    args: [orderId]
-  })
-  const tableLabel = (tableRs.rows as any[]).map((r) => r.name).join(' + ') || null
-
-  const meta = {
-    orderNumber: order.number,
-    orderType: order.order_type,
-    tableLabel,
-    customerName: order.customerName ?? null,
-    customerPhone: order.customerPhone ?? null,
-    driverName: order.driverName ?? null,
-    deliveryAddress: order.deliveryAddress ?? null,
-    captainName: order.captainName ?? null
-  }
-
-  for (const [printerKey, groupItems] of groups) {
-    await printKitchenTicket(meta, printerKey === '__none__' ? null : printerKey, groupItems)
-  }
-
+  // الطباعة الفعلية بقت مسؤولية المتصفح (QZ Tray) مش السيرفر — تجميع الأصناف حسب طابعة كل تصنيف
+  // وبناء HTML بون المطبخ بيحصل دلوقتي في الواجهة (renderer) بعد نجاح الاستدعاء ده، عبر قناة
+  // 'print:getKitchenTicketHtml' لكل مجموعة، بدل ما يحصل هنا زي الأوفلاين.
   const ids = items.map((i) => Number(i.id))
   await db.execute({
     sql: `UPDATE restaurant_order_items SET kitchen_sent = 1, kitchen_sent_at = datetime('now')

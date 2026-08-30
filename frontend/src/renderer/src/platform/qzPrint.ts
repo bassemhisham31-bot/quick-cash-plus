@@ -59,3 +59,17 @@ export async function isQzAvailable(): Promise<boolean> {
     return false
   }
 }
+
+/**
+ * فتح درج الكاشير: أمر ESC/POS خام (Generate pulse) بيتبعت مباشرة للطابعة عبر QZ Tray —
+ * بديل rawPrinter.ts القديم اللي كان بيبعت البايتات دي من السيرفر (main process) عبر winspool.drv،
+ * مش منطقي على سيرفر بعيد عن الطابعة. نفس الأمر بالظبط: ESC p m t1 t2.
+ */
+export async function openCashDrawerViaQz(printerName: string, pin: 'pin2' | 'pin5'): Promise<void> {
+  await ensureConnected()
+  if (!printerName) throw new Error('حدد طابعة افتراضية من إعدادات الطباعة أولًا')
+
+  const m = pin === 'pin5' ? 1 : 0
+  const config = qz.configs.create(printerName)
+  await qz.print(config, [{ type: 'raw', format: 'command', data: [0x1b, 0x70, m, 0x19, 0xfa] }])
+}
