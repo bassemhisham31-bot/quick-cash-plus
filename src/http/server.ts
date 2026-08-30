@@ -58,7 +58,25 @@ export function createApp(): express.Express {
     res.json({ ok: true, token, user: result.user })
   })
 
-  app.use('/api', requireAuth)
+  /**
+   * استثناء واحد قبل بوابة المصادقة: شاشة تسجيل الدخول نفسها محتاجة بيانات المتجر (الاسم/الشعار/الهاتف)
+   * للعرض قبل ما يكون فيه توكن أصلاً — نفس القناة (settings:getStore) بترجع بيانات عرض فقط، مش حساسة.
+   *
+   * ملحوظة مهمة: الاستثناء ده لازم يتعمل بمطابقة نص حرفية لـreq.path، مش بتسجيل route منفصل
+   * زي app.post('/api/rpc/settings:getStore', ...) — لأن Express (path-to-regexp) بيفسّر أي ':'
+   * جوه نص الـpath كـparameter مش حرف حرفي، فـ'settings:getStore' كانت بتتحول لـ'settings' + parameter
+   * اسمه getStore بيطابق أي قناة تانية تبدأ بـ'settings' زي settings:getPosUi أو settings:updateStore —
+   * يعني كل قنوات settings:* كانت بتتنفذ من غير مصادقة بالغلط. اتصلح بفحص req.path يدويًا هنا بدل ده.
+   */
+  app.use('/api', (req: AuthedRequest, res, next) => {
+    if (req.path === '/rpc/settings:getStore') {
+      handlers['settings:getStore']()
+        .then((result: unknown) => res.json({ ok: true, result }))
+        .catch((err: any) => res.status(500).json({ ok: false, error: err?.message ?? 'حدث خطأ غير متوقع' }))
+      return
+    }
+    requireAuth(req, res, next)
+  })
 
   app.get('/api/me', (req: AuthedRequest, res) => {
     res.json({ ok: true, auth: req.auth })
