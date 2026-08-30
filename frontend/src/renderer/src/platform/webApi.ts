@@ -530,9 +530,47 @@ const api = {
       invoke('barcode:decodeWeight', barcode)
   },
   print: {
-    receipt: (invoiceId: number): Promise<PrintResult> => invoke('print:receipt', invoiceId),
-    previewReceipt: (invoiceId: number): Promise<PrintResult> =>
-      invoke('print:previewReceipt', invoiceId),
+    /** طباعة فعلية على الطابعة عبر QZ Tray (لازم يكون مثبت وشغال على جهاز الفرع ده). */
+    receipt: async (invoiceId: number): Promise<PrintResult> => {
+      try {
+        const built = await invoke('print:getReceiptHtml', invoiceId)
+        if (!built) return { ok: false, error: 'الفاتورة غير موجودة' }
+        const { printHtmlViaQz } = await import('./qzPrint')
+        const thermalWidthMm =
+          built.printSettings.paperSize === '80mm' ? 80 : built.printSettings.paperSize === '58mm' ? 58 : undefined
+        await printHtmlViaQz(built.html, {
+          printerName: built.printSettings.defaultPrinter,
+          thermalWidthMm
+        })
+        return { ok: true }
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? 'تعذرت الطباعة' }
+      }
+    },
+    /**
+     * معاينة بس (بدون طباعة فعلية) — بتفتح الإيصال في تاب جديد بالمتصفح.
+     * بنستخدم رابط Blob + نقرة على <a> بدل window.open() المباشر لأن متصفحات كتير (ومتصفحات
+     * الاختبار الآلي) بتمنع window.open() المُستدعى من كود، لكن نقرة فعلية على رابط بتتفادى المنع ده.
+     */
+    previewReceipt: async (invoiceId: number): Promise<PrintResult> => {
+      try {
+        const built = await invoke('print:getReceiptHtml', invoiceId)
+        if (!built) return { ok: false, error: 'الفاتورة غير موجودة' }
+        const blob = new Blob([built.html], { type: 'text/html' })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.target = '_blank'
+        link.rel = 'noopener'
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        setTimeout(() => URL.revokeObjectURL(url), 30000)
+        return { ok: true }
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? 'تعذرت المعاينة' }
+      }
+    },
     labels: (items: { barcode: string; name: string; price: number }[]): Promise<PrintResult> =>
       invoke('print:labels', items),
     quotation: (quotationId: number): Promise<PrintResult> => invoke('print:quotation', quotationId),

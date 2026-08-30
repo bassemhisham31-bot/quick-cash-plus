@@ -175,7 +175,7 @@ import {
   upsertTable
 } from './services/restaurant'
 import { getRecipe, setRecipe } from './services/recipes'
-import { printKitchenTicket } from './services/print'
+import { buildInvoiceHtml, printKitchenTicket } from './services/print'
 import type {
   AssistantSettings,
   BackupSettings,
@@ -456,6 +456,8 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
       printerName: string | null,
       items: { name: string; qty: number; note: string | null }[]
     ) => printKitchenTicket(meta, printerName, items),
+    /** بيرجع HTML الإيصال الجاهز — الطباعة الفعلية بتتم من المتصفح نفسه عبر QZ Tray (مرحلة 4). */
+    'print:getReceiptHtml': (invoiceId: number) => buildInvoiceHtml(invoiceId),
 
     'license:getStatus': () => getLicenseStatus(),
     'license:activate': (key: string) => activateLicense(key),
