@@ -7,7 +7,8 @@ import { CATALOG_SYNC_CHANNELS, MANUALLY_LOGGED_CHANNELS } from '../shared/mutat
 import { ACTOR_META_KEY, type ActorMeta } from '../shared/activityActor'
 import { login } from '../main/services/auth'
 import { logUserActivity } from '../main/services/users'
-import { getDb } from '../main/db'
+import { statfsSync } from 'fs'
+import { getDb, getDbPath } from '../main/db'
 import { licenseBlockReason } from '../main/services/license'
 import { printCapture, type DevicePrintProfile, type PrintJob } from '../main/services/printContext'
 import { triggerDebouncedSync } from '../main/services/priceCheckerSync'
@@ -43,16 +44,38 @@ export function createApp(): express.Express {
   // الواجهة بتبعت undefined كعلامة {__undef:true} (JSON مابيفرّقش بين undefined وnull وقنوات كتير بتعتمد على الفرق، مثلاً LIMIT null بيفشل)
   app.use(express.json({ limit: '25mb', reviver: (_k, v) => (v && typeof v === 'object' && (v as any).__undef === true ? undefined : v) }))
 
-  // فحص صحة للمراقبة الخارجية: بيتأكد إن القاعدة بترد فعلاً (503 لو لأ) — من غير أي بيانات حساسة
+  // فحص صحة للمراقبة الخارجية: القاعدة بترد + مساحة القرص + حداثة آخر نسخة احتياطية (503 لو فيه مشكلة) — من غير بيانات حساسة
   app.get('/api/health', async (_req, res) => {
+    const problems: string[] = []
     try {
-      await getDb().execute('SELECT 1')
-      res.json({ ok: true, service: 'qcp-web-backend', time: new Date().toISOString() })
+      const db = getDb()
+      await db.execute('SELECT 1')
+
+      try {
+        const st = statfsSync(process.env.QCP_DATA_DIR ?? process.cwd())
+        const usedPct = Math.round((1 - Number(st.bavail) / Number(st.blocks)) * 100)
+        if (usedPct >= Number(process.env.QCP_HEALTH_MAX_DISK_PCT ?? 85)) problems.push('disk ' + usedPct + '% full')
+      } catch {
+        // statfs مش متاح — مش سبب كافي لإنذار
+      }
+
+      // نسخة احتياطية قديمة (SQLite محلية فقط؛ Turso ليه نسخه). نسيب أول 10 دقايق بعد التشغيل عشان النسخة الأولى تتعمل
+      const remoteDb = getDbPath().startsWith('libsql:') || getDbPath().startsWith('http')
+      if (!remoteDb && process.uptime() > 600) {
+        const row = (await db.execute('SELECT last_backup_at FROM backup_settings WHERE id = 1')).rows[0] as any
+        const last = row?.last_backup_at ? Date.parse(String(row.last_backup_at).replace(' ', 'T') + 'Z') : NaN
+        if (Number.isNaN(last) || Date.now() - last > 30 * 3600 * 1000) problems.push('no backup in the last 30h')
+      }
     } catch {
       res.status(503).json({ ok: false, service: 'qcp-web-backend', error: 'database unavailable' })
+      return
     }
+    if (problems.length) {
+      res.status(503).json({ ok: false, service: 'qcp-web-backend', problems })
+      return
+    }
+    res.json({ ok: true, service: 'qcp-web-backend', time: new Date().toISOString() })
   })
-
   app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body ?? {}
     if (typeof username !== 'string' || typeof password !== 'string') {

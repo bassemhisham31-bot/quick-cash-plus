@@ -13,6 +13,7 @@ async function json(res: Response): Promise<any> {
 
 const TEST_DB_PATH = join(process.cwd(), 'data', 'self-test.sqlite')
 const PORT = 4999
+process.env.QCP_HEALTH_MAX_DISK_PCT = '100' // جهاز التطوير ممكن قرصه شبه ممتلي — الاختبار مش بيفحص القرص
 const BASE = `http://127.0.0.1:${PORT}`
 
 let passed = 0
