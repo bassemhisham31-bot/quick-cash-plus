@@ -176,6 +176,22 @@ async function main(): Promise<void> {
     const drawer = await rpc('print:openDrawer', [], { printProfile })
     assert(drawer.printJobs?.[0]?.kind === 'drawer' && drawer.printJobs[0].printer === 'TestPrinter', 'فتح الدرج رجع job drawer')
     await rpc('held:delete', [heldId])
+
+    console.log('\n14) تصدير/استيراد Excel وPDF...')
+    await rpc('catalog:createProduct', [{ name: 'صنف للتصدير', barcode: 'EXP-1', categoryId: null, unitId: null, vendorId: null, costPrice: 5, retailPrice: 9, wholesalePrice: 8, wholesale2Price: 7, packPrice: 0, openingQuantity: 4, reorderPoint: 1, warehouseId: 1, expiryDate: null, serialNumber: null, showInPos: true, serialTrackingEnabled: false, imageDataUrl: null }])
+    const exp = await rpc('catalog:exportProducts')
+    assert(exp.ok && exp.result?.ok && String(exp.result.fileName).endsWith('.xlsx') && exp.result.dataBase64.length > 100, 'catalog:exportProducts رجع ملف xlsx')
+    const tpl = await rpc('catalog:exportProductsTemplate')
+    assert(tpl.result?.ok && tpl.result.dataBase64.length > 100, 'القالب اتولّد')
+    const imp = await rpc('catalog:importProducts', [exp.result.dataBase64])
+    assert(imp.result?.ok === true && imp.result.updated >= 1 && imp.result.rowErrors.length === 0, 'استيراد نفس الملف حدّث الأصناف بدون أخطاء: ' + JSON.stringify(imp.result))
+    const bad = await rpc('catalog:importProducts', [Buffer.from('not an excel file').toString('base64')])
+    assert(bad.result?.ok === false, 'ملف غير صالح اترفض برسالة خطأ')
+    const rep = { title: 'تقرير تجربة', columns: [{ key: 'a', label: 'عمود' }], rows: [{ a: 'x<y' }], totals: { a: 1 } }
+    const xl = await rpc('reports:exportExcel', [rep])
+    assert(xl.result?.ok && xl.result.fileName === 'تقرير تجربة.xlsx' && xl.result.dataBase64.length > 100, 'reports:exportExcel رجع xlsx')
+    const pdf = await rpc('reports:exportPdf', [rep])
+    assert(pdf.result?.ok && String(pdf.result.html).includes('x&lt;y'), 'reports:exportPdf رجع HTML آمن للطباعة')
   } finally {
     server.close()
   }

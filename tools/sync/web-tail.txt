@@ -1,0 +1,78 @@
+  /**
+   * مزامنة الأجهزة عبر الشبكة المحلية (جهاز رئيسي/فرعي) كانت مفهوم خاص بنسخة الأوفلاين —
+   * في نسخة الويب كل "جهاز" هو مجرد متصفح بيتصل بالسيرفر المركزي مباشرة عبر الإنترنت،
+   * فمفهوم "الجهاز الرئيسي" نفسه بقى متقاعد. قيم افتراضية ثابتة بس عشان أي شاشة إعدادات
+   * قديمة بتعرض الحالة دي متتعطلش.
+   */
+  network: {
+    getConfig: (): Promise<NetworkConfig> =>
+      Promise.resolve({
+        role: 'standalone',
+        deviceName: 'ويب',
+        port: 0,
+        connectionCode: '',
+        mainHost: null,
+        mainPort: null,
+        mainConnectionCode: null
+      }),
+    updateConfig: (config: NetworkConfig): Promise<NetworkConfig> => Promise.resolve(config),
+    getStatus: (): Promise<NetworkStatus> =>
+      Promise.resolve({
+        role: 'standalone',
+        serverRunning: false,
+        connectedDeviceCount: 0,
+        connectedToMain: false,
+        localIpAddresses: [],
+        lastConnectionError: null,
+        serverError: null
+      }),
+    regenerateCode: (): Promise<string> => Promise.resolve(''),
+    getLocalIps: (): Promise<string[]> => Promise.resolve([])
+  },
+  system: {
+    /** فتح بروتوكول خاص (anydesk:, teamviewer10:) من المتصفح — بيشتغل لو البرنامج مثبت فعليًا على جهاز المستخدم. */
+    openRemoteSupportApp: (appName: RemoteSupportAppName): Promise<RemoteSupportResult> => {
+      const protocols: Record<string, string> = { anydesk: 'anydesk:', teamviewer: 'teamviewer10:' }
+      const protocol = protocols[appName]
+      if (!protocol) return Promise.resolve({ ok: false, error: 'برنامج غير معروف' })
+      try {
+        window.open(protocol, '_self')
+        return Promise.resolve({ ok: true })
+      } catch {
+        return Promise.resolve({ ok: false, error: 'تعذر فتح البرنامج' })
+      }
+    }
+  },
+  /** بديل قناة IPC 'data:changed' — بث لحظي عبر WebSocket على /ws من نفس الباك إند. */
+  onDataChanged: (callback: () => void): (() => void) => {
+    let ws: WebSocket | null = null
+    let closed = false
+
+    function connect(): void {
+      if (closed || !authToken) return
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      ws = new WebSocket(`${proto}//${window.location.host}/ws?token=${authToken}`)
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg?.type === 'changed') callback()
+        } catch {
+          // تجاهل رسائل غير متوقعة
+        }
+      }
+      ws.onclose = () => {
+        if (!closed) setTimeout(connect, 2000)
+      }
+    }
+    connect()
+
+    return () => {
+      closed = true
+      ws?.close()
+    }
+  },
+  /** إعادة تشغيل Electron مش مفهوم موجود في متصفح — أقرب مكافئ هو إعادة تحميل الصفحة. */
+  relaunchApp: (): Promise<void> => {
+    window.location.reload()
+    return Promise.resolve()
+  }

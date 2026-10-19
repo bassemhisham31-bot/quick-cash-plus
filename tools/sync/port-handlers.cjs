@@ -7,8 +7,6 @@ const dropLinesStartingWith = (prefix) => {
   lines = lines.filter((l) => !l.startsWith(prefix))
   if (lines.length === before) throw new Error('not found: ' + prefix)
 }
-dropLinesStartingWith('import { exportReportToExcel')
-dropLinesStartingWith('import { exportProductsTemplate')
 dropLinesStartingWith('import { connectGoogleDrive')
 dropLinesStartingWith('import { openAttachment')
 dropLinesStartingWith('import { dispatchToDevice')
@@ -16,8 +14,8 @@ dropLinesStartingWith('import type { PrintJob }')
 dropLinesStartingWith('import type { PrinterInfo }')
 
 for (const ch of [
-  'catalog:exportProducts', 'catalog:exportProductsTemplate', 'catalog:importProducts',
-  'attachments:pick', 'attachments:open', 'reports:exportExcel', 'reports:exportPdf',
+
+  'attachments:pick', 'attachments:open',
   'net:registerPrinters', 'net:listPrinters', 'net:relayPrint',
   'googleDrive:connect', 'googleDrive:disconnect', 'googleDrive:upload'
 ]) dropLinesStartingWith("    '" + ch + "':")
@@ -32,6 +30,8 @@ s = s.slice(0, a) + "    'settings:getPrinters': () => getSystemPrinters(),\n" +
 
 // trailing comma before the closing of the map (googleDrive was the last entry)
 s = s.replace("'dataReset:factoryReset': (userId: number) => resetFactory(userId),\n\n  }", 'x')
+s = s.replace('importProductsFromExcel()', 'importProductsFromExcel(dataBase64)').replace("'catalog:importProducts': ()", "'catalog:importProducts': (dataBase64: string)")
+// (نسخة الويب: الملف بيتبعت base64 من المتصفح)
 s = s.split("'../services/").join("'./services/").split("'../../shared/").join("'../shared/")
 fs.writeFileSync('D:/quick-cash-plus-web/backend/src/main/handlers.ts', s)
 console.log('ok')

@@ -4,7 +4,6 @@ const WEB_API = 'D:/quick-cash-plus-web/frontend/src/renderer/src/platform/webAp
 const norm = (t) => t.split('\r\n').join('\n')
 
 const preload = norm(fs.readFileSync('D:/New Project/src/preload/index.ts', 'utf8'))
-const oldWeb = norm(fs.readFileSync(WEB_API, 'utf8'))
 const prelude = norm(fs.readFileSync(SCRATCH + 'prelude.txt', 'utf8'))
 
 let s = preload
@@ -14,6 +13,7 @@ s = s.replace("import { contextBridge, ipcRenderer } from 'electron'\n", '')
 s = s.replace("import type { CashSessionView } from '../main/services/cashSession'\n", '')
 s = s.replace("import { MUTATING_CHANNELS } from '../shared/mutatingChannels'\n", '')
 s = s.replace("import { ACTOR_META_KEY } from '../shared/activityActor'\n", '')
+s = s.replace('import type {\n  EventBooking,', 'import type {\n  SessionUser,\n  EventBooking,')
 s = s.replace("} from '../shared/types'", "} from '../../../shared/types'")
 
 // ---- prelude: replace from the activeUser comment through the end of function invoke
@@ -45,7 +45,7 @@ function replaceBlock(name, text) {
 replaceBlock(
   'session',
   `  session: {
-    setActiveUser: (): void => {
+    setActiveUser: (_id?: number, _username?: string): void => {
       // التتبع بقى عبر التوكن نفسه (setToken) مش user id/username منفصلين — موجودة هنا بس عشان
       // appStore.ts بينادي الدالة دي، فمحتاجينها تفضل موجودة بدون ما تعمل حاجة إضافية.
     },
@@ -67,6 +67,11 @@ replaceBlock(
       const payload = await res.json()
       if (!payload.ok) return { ok: false, error: payload.error }
       setToken(payload.token)
+      try {
+        localStorage.setItem('qcp_web_user', JSON.stringify(payload.user))
+      } catch {
+        // التخزين المحلي مش متاح — الجلسة هتنتهي بإعادة التحميل
+      }
       return { ok: true, user: payload.user }
     },
     /** قبل تسجيل الدخول مفيش توكن — على الإنترنت مش هنكشف قايمة المستخدمين، فالشاشة بتكتب الاسم يدويًا. */
@@ -98,23 +103,18 @@ replaceBlock(
   }`
 )
 
-const stubExport = (re, replacement) => {
-  const before = s
-  s = s.replace(re, replacement)
-  if (s === before) throw new Error('stub target not found: ' + re)
+const repl = (from, to) => {
+  if (!s.includes(from)) throw new Error("target not found: " + from)
+  s = s.split(from).join(to)
 }
-const notOnWebExport = "Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ExportResult)"
-stubExport(/exportProducts: \(\): Promise<ExportResult> => invoke\('catalog:exportProducts'\)/, 'exportProducts: (): Promise<ExportResult> => ' + notOnWebExport)
-stubExport(/exportProductsTemplate: \(\): Promise<ExportResult> => invoke\('catalog:exportProductsTemplate'\)/, 'exportProductsTemplate: (): Promise<ExportResult> => ' + notOnWebExport)
-stubExport(/importProducts: \(\): Promise<ProductImportResult> => invoke\('catalog:importProducts'\)/, "importProducts: (): Promise<ProductImportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ProductImportResult)")
-stubExport(/exportExcel: \(report: ReportResult\): Promise<ExportResult> => invoke\('reports:exportExcel', report\)/, 'exportExcel: (_report: ReportResult): Promise<ExportResult> => ' + notOnWebExport)
-stubExport(/exportPdf: \(report: ReportResult\): Promise<ExportResult> => invoke\('reports:exportPdf', report\)/, 'exportPdf: (_report: ReportResult): Promise<ExportResult> => ' + notOnWebExport)
+repl("invoke('catalog:exportProducts')", "exportFile('catalog:exportProducts')")
+repl("invoke('catalog:exportProductsTemplate')", "exportFile('catalog:exportProductsTemplate')")
+repl("invoke('catalog:importProducts')", "importProductsFile()")
+repl("invoke('reports:exportExcel', report)", "exportFile('reports:exportExcel', report)")
+repl("invoke('reports:exportPdf', report)", "exportPdf(report)")
 
 // ---- tail: network ... relaunchApp  (taken from the previous web implementation)
-const webTailStart = oldWeb.indexOf('  /**\n   * مزامنة الأجهزة عبر الشبكة المحلية')
-const webTailEnd = oldWeb.indexOf('\n}\n\n/** بيتنادى مرة واحدة')
-if (webTailStart < 0 || webTailEnd < 0) throw new Error('old web tail not found')
-const webTail = oldWeb.slice(webTailStart, webTailEnd)
+const webTail = norm(fs.readFileSync(__dirname + '/web-tail.txt', 'utf8'))
 
 const tailStart = s.indexOf('\n  network: {')
 const tailEnd = s.indexOf('\n}\n\ncontextBridge.exposeInMainWorld')

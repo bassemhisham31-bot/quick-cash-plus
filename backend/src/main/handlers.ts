@@ -72,6 +72,8 @@ import {
   updateInvoice
 } from './services/invoices'
 import { getOverviewSummary, runReport } from './services/reports'
+import { exportReportToExcel, exportReportToPdf } from './services/exportReport'
+import { exportProductsTemplate, exportProductsToExcel, importProductsFromExcel } from './services/catalogImportExport'
 import {
   deleteCaptain,
   deleteDeliveryDriver,
@@ -326,6 +328,9 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'catalog:listWarehouses': () => listWarehouses(),
     'catalog:stockByWarehouse': (productIds: number[]) => getStockByWarehouse(productIds),
     'catalog:createWarehouse': (name: string) => createWarehouse(name),
+    'catalog:exportProducts': () => exportProductsToExcel(),
+    'catalog:exportProductsTemplate': () => exportProductsTemplate(),
+    'catalog:importProducts': (dataBase64: string) => importProductsFromExcel(dataBase64),
     'catalog:bulkUpdatePricesAndImages': (items: BulkPriceUpdateItem[]) => bulkUpdatePricesAndImages(items),
     'catalog:bulkCreateProducts': (inputs: ProductInput[]) => bulkCreateProducts(inputs),
 
@@ -486,6 +491,8 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
 
     'reports:run': (type: ReportType, filter: ReportFilter) => runReport(type, filter),
     'reports:overview': (filter: ReportFilter) => getOverviewSummary(filter),
+    'reports:exportExcel': (report: ReportResult) => exportReportToExcel(report),
+    'reports:exportPdf': (report: ReportResult) => exportReportToPdf(report),
 
     'settings:getTax': () => getTaxSettings(),
     'settings:updateTax': (input: TaxSettings) => updateTaxSettings(input),

@@ -184,7 +184,7 @@ function setToken(token: string | null): void {
   }
 }
 
-/** المستخدم المسجّل من زيارة سابقة (لو التوكن لسه محفوظ) — بيرجّع الجلسة بعد إعادة تحميل الصفحة بدل ما نطلب الدخول تاني. */
+/** المستخدم المسجّل من زيارة سابقة (لو التوكن لسه محفوظ) — بيرجّع الجلسة بعد إعادة تحميل الصفحة. */
 export function getStoredUser(): SessionUser | null {
   if (!authToken) return null
   try {
@@ -248,7 +248,7 @@ async function rpc(channel: string, args: unknown[], printProfile?: DevicePrintP
   })
 
   if (res.status === 401) {
-    // لو كان فيه توكن واتّرفض = الجلسة انتهت (نرجع لشاشة الدخول). لو مفيش توكن أصلاً (قبل الدخول) مفيش داعي لإعادة التحميل.
+    // لو كان فيه توكن واتّرفض = الجلسة انتهت. لو مفيش توكن أصلاً (قبل الدخول) مفيش داعي لإعادة التحميل.
     if (authToken) {
       setToken(null)
       window.location.reload()
@@ -394,6 +394,73 @@ async function invoke(channel: string, ...args: unknown[]): Promise<any> {
 
 const NOT_ON_WEB = 'الميزة دي لسه مش متاحة في نسخة الويب'
 
+/* ------------------------------ تصدير/استيراد ملفات (المتصفح بينزّل ويرفع) ------------------------------ */
+
+function downloadBase64(fileName: string, mimeType: string, dataBase64: string): void {
+  const bytes = Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0))
+  const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(url), 30000)
+}
+
+async function exportFile(channel: string, ...args: unknown[]): Promise<ExportResult> {
+  try {
+    const r = await invoke(channel, ...args)
+    if (!r?.ok) return { ok: false, error: r?.error ?? 'تعذر التصدير' }
+    downloadBase64(r.fileName, r.mimeType, r.dataBase64)
+    return { ok: true, filePath: `${r.fileName} (في مجلد التنزيلات)` }
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر التصدير' }
+  }
+}
+
+/** PDF: بنفتح التقرير في تاب جديد وبنشغّل نافذة الطباعة — اختار "حفظ كـPDF" كطابعة. */
+async function exportPdf(report: ReportResult): Promise<ExportResult> {
+  try {
+    const r = await exportPdf(report)
+    if (!r?.ok) return { ok: false, error: r?.error ?? 'تعذر التصدير' }
+    const html = String((r as any).html).replace('</body>', "<script>window.addEventListener('load',function(){setTimeout(function(){window.print()},300)})</script></body>")
+    openPreviewTab(html)
+    return { ok: true, filePath: 'اختار "حفظ كـ PDF" من نافذة الطباعة' }
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر التصدير' }
+  }
+}
+
+/** لازم يتنادى مباشرة من ضغطة المستخدم (قبل أي await) وإلا المتصفح هيمنع نافذة اختيار الملف. */
+function pickFileAsBase64(accept: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = accept
+    input.onchange = () => {
+      const file = input.files?.[0]
+      if (!file) return resolve(null)
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result).split(',')[1] ?? null)
+      reader.onerror = () => resolve(null)
+      reader.readAsDataURL(file)
+    }
+    input.oncancel = () => resolve(null)
+    input.click()
+  })
+}
+
+async function importProductsFile(): Promise<ProductImportResult> {
+  const data = await pickFileAsBase64('.xlsx')
+  if (!data) return { ok: false, canceled: true, created: 0, updated: 0, rowErrors: [] }
+  try {
+    return await invoke('catalog:importProducts', data)
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر الاستيراد', created: 0, updated: 0, rowErrors: [] }
+  }
+}
+
 const api = {
   ledger: {
     listAccounts: (): Promise<{ code: string; name: string; type: string; isSystem: boolean; active: boolean }[]> => invoke('ledger:listAccounts'),
@@ -493,7 +560,7 @@ const api = {
       if (!payload.ok) return { ok: false, error: payload.error }
       setToken(payload.token)
       try {
-        localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(payload.user))
+        localStorage.setItem('qcp_web_user', JSON.stringify(payload.user))
       } catch {
         // التخزين المحلي مش متاح — الجلسة هتنتهي بإعادة التحميل
       }
@@ -529,9 +596,9 @@ const api = {
     stockByWarehouse: (productIds: number[]): Promise<{ productId: number; warehouseId: number; quantity: number }[]> =>
       invoke('catalog:stockByWarehouse', productIds),
     createWarehouse: (name: string): Promise<Warehouse> => invoke('catalog:createWarehouse', name),
-    exportProducts: (): Promise<ExportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ExportResult),
-    exportProductsTemplate: (): Promise<ExportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ExportResult),
-    importProducts: (): Promise<ProductImportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ProductImportResult),
+    exportProducts: (): Promise<ExportResult> => exportFile('catalog:exportProducts'),
+    exportProductsTemplate: (): Promise<ExportResult> => exportFile('catalog:exportProductsTemplate'),
+    importProducts: (): Promise<ProductImportResult> => importProductsFile(),
     bulkUpdatePricesAndImages: (items: BulkPriceUpdateItem[]): Promise<BulkPriceUpdateResult> =>
       invoke('catalog:bulkUpdatePricesAndImages', items),
     bulkCreateProducts: (inputs: ProductInput[]): Promise<ProductImportResult> =>
@@ -770,8 +837,8 @@ const api = {
   reports: {
     run: (type: ReportType, filter: ReportFilter): Promise<ReportResult> =>
       invoke('reports:run', type, filter),
-    exportExcel: (_report: ReportResult): Promise<ExportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ExportResult),
-    exportPdf: (_report: ReportResult): Promise<ExportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ExportResult),
+    exportExcel: (report: ReportResult): Promise<ExportResult> => exportFile('reports:exportExcel', report),
+    exportPdf: (report: ReportResult): Promise<ExportResult> => exportPdf(report),
     overview: (filter: ReportFilter): Promise<OverviewSummary> => invoke('reports:overview', filter)
   },
   settings: {

@@ -8,6 +8,8 @@
 |---|---|
 | `backend/src/main/db/migrations/*`, `services/*` (معظمها), `shared/*`, `db/seed.ts` | نسخ مباشر من الأوفلاين |
 | `backend/src/main/handlers.ts` | `node tools/sync/port-handlers.cjs` (بيشيل قنوات الملفات/Google Drive/الشبكة المحلية) |
+| `services/catalogImportExport.ts` | `node tools/sync/port-catalog-import.cjs` (base64 بدل حوارات Electron) |
+| `services/exportReport.ts` | `tools/sync/web-overrides/exportReport.ts` (نسخ مباشر؛ PDF = HTML يتطبع من المتصفح) |
 | `backend/src/main/services/print.ts` | `node tools/sync/port-print.cjs` (الطباعة بقت "capture": السيرفر بيرجّع jobs والمتصفح يطبعها عبر QZ Tray) |
 | `frontend/src/renderer/src/platform/webApi.ts` | `node tools/sync/gen-webapi.cjs` (بيتولّد من `src/preload/index.ts` + `prelude.txt`) |
 | باقي `frontend/src/renderer/src/**` | نسخ مباشر، ما عدا `main.tsx` و`platform/` |
@@ -18,4 +20,5 @@
 - `services/attendance.ts`: تحميل `node-zklib` كسول
 - `db/index.ts`: `initDatabase()` بمتغيرات البيئة + قايمة الـmigrations
 - `http/server.ts`: JWT، capture الطباعة، قفل الترخيص، `{__undef:true}` لتمييز undefined من null
-- `catalogImportExport.ts` / `exportReport.ts` / `attachments.ts` / `googleDrive.ts`: مش منقولين (قنوات stub في `webApi.ts`)
+- `attachments.ts` / `googleDrive.ts`: مش منقولين (قنوات stub في `webApi.ts`)
+- `web-tail.txt`: network/system/onDataChanged الخاصين بالويب في `webApi.ts`

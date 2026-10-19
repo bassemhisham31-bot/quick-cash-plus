@@ -1,10 +1,26 @@
 const TOKEN_STORAGE_KEY = 'qcp_web_token'
 let authToken: string | null = localStorage.getItem(TOKEN_STORAGE_KEY)
 
+const USER_STORAGE_KEY = 'qcp_web_user'
+
 function setToken(token: string | null): void {
   authToken = token
   if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token)
-  else localStorage.removeItem(TOKEN_STORAGE_KEY)
+  else {
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
+    localStorage.removeItem(USER_STORAGE_KEY)
+  }
+}
+
+/** المستخدم المسجّل من زيارة سابقة (لو التوكن لسه محفوظ) — بيرجّع الجلسة بعد إعادة تحميل الصفحة. */
+export function getStoredUser(): SessionUser | null {
+  if (!authToken) return null
+  try {
+    const raw = localStorage.getItem(USER_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as SessionUser) : null
+  } catch {
+    return null
+  }
 }
 
 /** يُستخدم من App.tsx عند الإقلاع عشان يعرف لو فيه توكن محفوظ من زيارة سابقة قبل ما يعرض شاشة الدخول. */
@@ -56,12 +72,15 @@ async function rpc(channel: string, args: unknown[], printProfile?: DevicePrintP
   const res = await fetch(`/api/rpc/${channel}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ args, ...(printProfile ? { printProfile } : {}) })
+    body: JSON.stringify({ args, ...(printProfile ? { printProfile } : {}) }, (_k, v) => (v === undefined ? { __undef: true } : v))
   })
 
   if (res.status === 401) {
-    setToken(null)
-    window.location.reload()
+    // لو كان فيه توكن واتّرفض = الجلسة انتهت. لو مفيش توكن أصلاً (قبل الدخول) مفيش داعي لإعادة التحميل.
+    if (authToken) {
+      setToken(null)
+      window.location.reload()
+    }
     throw new Error('انتهت صلاحية الجلسة — لازم تسجّل دخول تاني')
   }
 
@@ -202,3 +221,70 @@ async function invoke(channel: string, ...args: unknown[]): Promise<any> {
 }
 
 const NOT_ON_WEB = 'الميزة دي لسه مش متاحة في نسخة الويب'
+
+/* ------------------------------ تصدير/استيراد ملفات (المتصفح بينزّل ويرفع) ------------------------------ */
+
+function downloadBase64(fileName: string, mimeType: string, dataBase64: string): void {
+  const bytes = Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0))
+  const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(url), 30000)
+}
+
+async function exportFile(channel: string, ...args: unknown[]): Promise<ExportResult> {
+  try {
+    const r = await invoke(channel, ...args)
+    if (!r?.ok) return { ok: false, error: r?.error ?? 'تعذر التصدير' }
+    downloadBase64(r.fileName, r.mimeType, r.dataBase64)
+    return { ok: true, filePath: `${r.fileName} (في مجلد التنزيلات)` }
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر التصدير' }
+  }
+}
+
+/** PDF: بنفتح التقرير في تاب جديد وبنشغّل نافذة الطباعة — اختار "حفظ كـPDF" كطابعة. */
+async function exportPdf(report: ReportResult): Promise<ExportResult> {
+  try {
+    const r = await invoke('reports:exportPdf', report)
+    if (!r?.ok) return { ok: false, error: r?.error ?? 'تعذر التصدير' }
+    const html = String((r as any).html).replace('</body>', "<script>window.addEventListener('load',function(){setTimeout(function(){window.print()},300)})</script></body>")
+    openPreviewTab(html)
+    return { ok: true, filePath: 'اختار "حفظ كـ PDF" من نافذة الطباعة' }
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر التصدير' }
+  }
+}
+
+/** لازم يتنادى مباشرة من ضغطة المستخدم (قبل أي await) وإلا المتصفح هيمنع نافذة اختيار الملف. */
+function pickFileAsBase64(accept: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = accept
+    input.onchange = () => {
+      const file = input.files?.[0]
+      if (!file) return resolve(null)
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result).split(',')[1] ?? null)
+      reader.onerror = () => resolve(null)
+      reader.readAsDataURL(file)
+    }
+    input.oncancel = () => resolve(null)
+    input.click()
+  })
+}
+
+async function importProductsFile(): Promise<ProductImportResult> {
+  const data = await pickFileAsBase64('.xlsx')
+  if (!data) return { ok: false, canceled: true, created: 0, updated: 0, rowErrors: [] }
+  try {
+    return await invoke('catalog:importProducts', data)
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر الاستيراد', created: 0, updated: 0, rowErrors: [] }
+  }
+}
