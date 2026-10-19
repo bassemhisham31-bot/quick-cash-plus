@@ -7,6 +7,7 @@ import { CATALOG_SYNC_CHANNELS, MANUALLY_LOGGED_CHANNELS } from '../shared/mutat
 import { ACTOR_META_KEY, type ActorMeta } from '../shared/activityActor'
 import { login } from '../main/services/auth'
 import { logUserActivity } from '../main/services/users'
+import { getDb } from '../main/db'
 import { licenseBlockReason } from '../main/services/license'
 import { printCapture, type DevicePrintProfile, type PrintJob } from '../main/services/printContext'
 import { triggerDebouncedSync } from '../main/services/priceCheckerSync'
@@ -42,8 +43,14 @@ export function createApp(): express.Express {
   // الواجهة بتبعت undefined كعلامة {__undef:true} (JSON مابيفرّقش بين undefined وnull وقنوات كتير بتعتمد على الفرق، مثلاً LIMIT null بيفشل)
   app.use(express.json({ limit: '25mb', reviver: (_k, v) => (v && typeof v === 'object' && (v as any).__undef === true ? undefined : v) }))
 
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'qcp-web-backend', time: new Date().toISOString() })
+  // فحص صحة للمراقبة الخارجية: بيتأكد إن القاعدة بترد فعلاً (503 لو لأ) — من غير أي بيانات حساسة
+  app.get('/api/health', async (_req, res) => {
+    try {
+      await getDb().execute('SELECT 1')
+      res.json({ ok: true, service: 'qcp-web-backend', time: new Date().toISOString() })
+    } catch {
+      res.status(503).json({ ok: false, service: 'qcp-web-backend', error: 'database unavailable' })
+    }
   })
 
   app.post('/api/auth/login', async (req, res) => {
