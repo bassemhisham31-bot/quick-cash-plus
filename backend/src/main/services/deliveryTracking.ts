@@ -51,10 +51,13 @@ export async function listDeliveryOrders(filter: { from?: string; to?: string } 
 
   const rs = await db.execute({
     sql: `SELECT i.id AS invoiceId, i.number AS invoiceNumber, c.name AS customerName, c.phone AS customerPhone,
-                 ro.delivery_address AS deliveryAddress, d.id AS driverId, d.name AS driverName,
-                 i.delivery_fee AS deliveryFee, i.total, i.delivery_status AS deliveryStatus, i.created_at AS createdAt
+                 COALESCE(ro.delivery_address, i.delivery_address, c.address) AS deliveryAddress,
+                 COALESCE(ro.special_mark, i.delivery_mark) AS specialMark,
+                 d.id AS driverId, d.name AS driverName,
+                 i.delivery_fee AS deliveryFee, i.total, i.delivery_status AS deliveryStatus, i.created_at AS createdAt,
+                 (SELECT GROUP_CONCAT(product_name || ' ×' || printf('%g', qty), '، ') FROM sales_items WHERE invoice_id = i.id) AS itemsSummary
           FROM sales_invoices i
-          JOIN customers c ON c.id = i.customer_id
+          LEFT JOIN customers c ON c.id = i.customer_id
           LEFT JOIN delivery_drivers d ON d.id = i.delivery_driver_id
           LEFT JOIN restaurant_orders ro ON ro.sales_invoice_id = i.id
           WHERE ${conditions.join(' AND ')}
@@ -66,14 +69,16 @@ export async function listDeliveryOrders(filter: { from?: string; to?: string } 
   return rs.rows.map((r: any) => ({
     invoiceId: Number(r.invoiceId),
     invoiceNumber: r.invoiceNumber,
-    customerName: r.customerName,
+    customerName: r.customerName ?? 'عميل عابر',
     customerPhone: r.customerPhone ?? null,
     deliveryAddress: r.deliveryAddress ?? null,
+    specialMark: r.specialMark ?? null,
+    itemsSummary: r.itemsSummary ?? '',
     driverId: r.driverId != null ? Number(r.driverId) : null,
     driverName: r.driverName ?? null,
     deliveryFee: Number(r.deliveryFee),
     total: Number(r.total),
-    deliveryStatus: r.deliveryStatus,
+    deliveryStatus: r.deliveryStatus ?? 'pending',
     createdAt: r.createdAt
   }))
 }

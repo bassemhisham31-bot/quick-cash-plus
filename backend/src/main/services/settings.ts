@@ -1,4 +1,6 @@
 import { getDb } from '../db'
+import { printCapture } from './printContext'
+import { categoryPrinterList } from './devicePrint'
 import type {
   AssistantSettings,
   BackupSettings,
@@ -72,6 +74,9 @@ function mapPrintRow(r: any): PrintSettings {
 }
 
 export async function getPrintSettings(): Promise<PrintSettings> {
+  // طلب جاي من جهاز فرعي: بنستخدم إعدادات طباعة الجهاز ده (مقاس الورق، الطابعة...) مش إعدادات الرئيسي
+  const capture = printCapture.getStore()
+  if (capture) return capture.profile.printSettings
   const db = getDb()
   const rs = await db.execute('SELECT * FROM print_settings WHERE id = 1')
   return mapPrintRow(rs.rows[0])
@@ -415,6 +420,10 @@ function mapPosUiRow(r: any): PosUiSettings {
     soundVolume: Number(r.sound_volume),
     allowTempItem: !!r.allow_temp_item,
     priceEditEnabled: !!r.price_edit_enabled,
+    maxDiscountPercent: r.max_discount_percent != null ? Number(r.max_discount_percent) : 100,
+    allowNegativeStock: !!r.allow_negative_stock,
+    holdInvoicesEnabled: r.hold_invoices_enabled == null ? true : !!r.hold_invoices_enabled,
+    autoHoldOnLeave: r.auto_hold_on_leave == null ? true : !!r.auto_hold_on_leave,
     multiWarehouseEnabled: !!r.multi_warehouse_enabled,
     categorySidebarEnabled: !!r.category_sidebar_enabled,
     currencyCode: r.currency_code,
@@ -432,14 +441,18 @@ export async function updatePosUiSettings(input: PosUiSettings): Promise<PosUiSe
   const db = getDb()
   await db.execute({
     sql: `UPDATE pos_ui_settings
-          SET sound_enabled = ?, sound_volume = ?, allow_temp_item = ?, price_edit_enabled = ?,
-              multi_warehouse_enabled = ?, category_sidebar_enabled = ?, currency_code = ?, currency_symbol = ?
+          SET sound_enabled = ?, sound_volume = ?, allow_temp_item = ?, price_edit_enabled = ?, max_discount_percent = ?,
+              hold_invoices_enabled = ?, auto_hold_on_leave = ?, allow_negative_stock = ?, multi_warehouse_enabled = ?, category_sidebar_enabled = ?, currency_code = ?, currency_symbol = ?
           WHERE id = 1`,
     args: [
       input.soundEnabled ? 1 : 0,
       input.soundVolume,
       input.allowTempItem ? 1 : 0,
       input.priceEditEnabled ? 1 : 0,
+      Math.min(100, Math.max(0, Number(input.maxDiscountPercent) || 0)),
+      input.holdInvoicesEnabled ? 1 : 0,
+      input.autoHoldOnLeave ? 1 : 0,
+      input.allowNegativeStock ? 1 : 0,
       input.multiWarehouseEnabled ? 1 : 0,
       input.categorySidebarEnabled ? 1 : 0,
       input.currencyCode,
@@ -458,7 +471,16 @@ function mapRestaurantRow(r: any): RestaurantSettings {
     serviceChargeEnabled: !!r.service_charge_enabled,
     serviceChargeType: r.service_charge_type,
     serviceChargeValue: Number(r.service_charge_value),
-    defaultKitchenPrinter: r.default_kitchen_printer
+    defaultKitchenPrinter: r.default_kitchen_printer,
+    taxEnabled: !!r.tax_enabled,
+    taxName: r.tax_name ?? 'ضريبة',
+    taxType: r.tax_type === 'value' ? 'value' : 'percent',
+    taxValue: Number(r.tax_value ?? 0),
+    taxDineIn: r.tax_dine_in == null ? true : !!r.tax_dine_in,
+    taxTakeaway: r.tax_takeaway == null ? true : !!r.tax_takeaway,
+    taxDelivery: r.tax_delivery == null ? true : !!r.tax_delivery,
+    autoNewOrderAfterKitchen: r.auto_new_order_after_kitchen == null ? true : !!r.auto_new_order_after_kitchen,
+    kitchenNotifyMode: ['all', 'sub_only', 'main_only', 'off'].includes(r.kitchen_notify_mode) ? r.kitchen_notify_mode : 'all'
   }
 }
 
@@ -473,7 +495,9 @@ export async function updateRestaurantSettings(input: RestaurantSettings): Promi
   await db.execute({
     sql: `UPDATE restaurant_settings
           SET dine_in_enabled = ?, takeaway_enabled = ?, delivery_enabled = ?, recipes_enabled = ?,
-              service_charge_enabled = ?, service_charge_type = ?, service_charge_value = ?, default_kitchen_printer = ?
+              service_charge_enabled = ?, service_charge_type = ?, service_charge_value = ?, default_kitchen_printer = ?,
+              tax_enabled = ?, tax_name = ?, tax_type = ?, tax_value = ?, tax_dine_in = ?, tax_takeaway = ?, tax_delivery = ?,
+              auto_new_order_after_kitchen = ?, kitchen_notify_mode = ?
           WHERE id = 1`,
     args: [
       input.dineInEnabled ? 1 : 0,
@@ -483,13 +507,24 @@ export async function updateRestaurantSettings(input: RestaurantSettings): Promi
       input.serviceChargeEnabled ? 1 : 0,
       input.serviceChargeType,
       input.serviceChargeValue,
-      input.defaultKitchenPrinter
+      input.defaultKitchenPrinter,
+      input.taxEnabled ? 1 : 0,
+      input.taxName?.trim() || 'ضريبة',
+      input.taxType === 'value' ? 'value' : 'percent',
+      Number(input.taxValue) || 0,
+      input.taxDineIn ? 1 : 0,
+      input.taxTakeaway ? 1 : 0,
+      input.taxDelivery ? 1 : 0,
+      input.autoNewOrderAfterKitchen ? 1 : 0,
+      ['all', 'sub_only', 'main_only', 'off'].includes(input.kitchenNotifyMode) ? input.kitchenNotifyMode : 'all'
     ]
   })
   return getRestaurantSettings()
 }
 
 export async function getCategoryPrinters(): Promise<CategoryPrinter[]> {
+  const capture = printCapture.getStore()
+  if (capture) return categoryPrinterList(capture.profile)
   const db = getDb()
   const rs = await db.execute(`
     SELECT c.id AS categoryId, c.name AS categoryName, cp.printer_name AS printerName
@@ -591,10 +626,7 @@ export async function deleteCaptain(id: number): Promise<void> {
   await db.execute({ sql: "UPDATE captains SET deleted_at = datetime('now') WHERE id = ?", args: [id] })
 }
 
-/**
- * في نسخة الويب مفيش "طابعات نظام" على السيرفر — الطباعة هتتم لاحقًا عبر QZ Tray
- * على جهاز كل فرع (مرحلة لاحقة من خطة التحويل). لسه غير مبني.
- */
+/** نسخة الويب: طابعات النظام على جهاز المتصفح (عبر QZ Tray) مش على السيرفر — الواجهة بتجيبها بنفسها. */
 export async function getSystemPrinters(): Promise<PrinterInfo[]> {
   return []
 }

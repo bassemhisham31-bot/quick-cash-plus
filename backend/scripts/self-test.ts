@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     if (existsSync(p)) rmSync(p)
   }
 
-  console.log('1) تهيئة قاعدة بيانات مؤقتة (46 migration + seed)...')
+  console.log('1) تهيئة قاعدة بيانات مؤقتة (68 migration + seed)...')
   await initDatabaseAtPath(TEST_DB_PATH)
   console.log('   تم.\n')
 
@@ -130,6 +130,52 @@ async function main(): Promise<void> {
       Array.isArray(activity.result) && activity.result.some((a: any) => a.action === 'catalog:createCategory'),
       'سجل النشاط فيه العملية اللي عملناها دلوقتي'
     )
+
+    const rpc = async (channel: string, args: unknown[] = [], extra: Record<string, unknown> = {}): Promise<any> =>
+      fetch(`${BASE}/api/rpc/${channel}`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ args, ...extra })
+      }).then(json)
+
+    console.log('\n12) الموديولات الجديدة (خزائن، محاسبة، حضور، مناسبات، معلّقة، الأرضية)...')
+    const treasuries = await rpc('treasury:list')
+    assert(treasuries.ok === true && Array.isArray(treasuries.result), 'treasury:list اشتغل')
+    const accReports = await rpc('accounting:listReports')
+    assert(accReports.ok === true && Array.isArray(accReports.result) && accReports.result.length > 0, 'accounting:listReports رجع تقارير')
+    const attSettings = await rpc('attendance:getSettings')
+    assert(attSettings.ok === true, 'attendance:getSettings اشتغل')
+    const packages = await rpc('events:listPackages')
+    assert(packages.ok === true && Array.isArray(packages.result), 'events:listPackages اشتغل')
+    const floor = await rpc('restaurant:getFloor')
+    assert(floor.ok === true, 'restaurant:getFloor اشتغل')
+    const lic = await rpc('license:getStatus')
+    assert(lic.ok === true && lic.result?.status === 'trial' && lic.result?.daysRemaining === 30, 'الترخيص تجربة 30 يوم')
+
+    console.log('\n13) الطباعة عبر printCapture: السيرفر يرجّع jobs بدل ما يطبع...')
+    const printProfile = {
+      printSettings: {
+        defaultPrinter: 'TestPrinter', paperSize: '80mm', printMode: 'auto', showLogo: false, autoPrintAfterSale: false, copies: 1,
+        thermalContentWidth80mm: 72, thermalContentWidth58mm: 48, thermalOffset80mm: 4, thermalOffset58mm: 2, thermalPageHeightMm: 1000
+      },
+      categoryPrinters: {}
+    }
+    const held = await rpc('held:hold', [{ payload: { lines: [{ productId: 1, name: 'صنف تجربة', qty: 2, unitPrice: 10, discount: 0 }], discountType: 'value', discountValue: 0, customerId: null, customerLabel: '', warehouseId: null }, total: 20 }, 1])
+    assert(held.ok === true, 'held:hold اشتغل')
+    const heldList = await rpc('held:list')
+    const heldId = heldList.result?.[0]?.id
+    assert(typeof heldId === 'number', 'الفاتورة المعلّقة اتسجلت')
+    const printed = await rpc('print:heldInvoice', [heldId, false], { printProfile })
+    assert(printed.ok === true && printed.result?.ok === true, 'print:heldInvoice نجح')
+    assert(Array.isArray(printed.printJobs) && printed.printJobs.length === 1 && printed.printJobs[0].kind === 'print', 'رجع job طباعة واحد')
+    assert(String(printed.printJobs?.[0]?.html).includes('صنف تجربة'), 'HTML الشيك فيه اسم الصنف')
+    const noProfile = await rpc('print:heldInvoice', [heldId, false])
+    assert(noProfile.ok === true && noProfile.result?.ok === false, 'بدون بروفايل طابعة السيرفر مش بيطبع (بيرجّع خطأ واضح)')
+    const preview = await rpc('print:heldInvoice', [heldId, true], { printProfile })
+    assert(preview.printJobs?.[0]?.kind === 'preview', 'المعاينة رجعت job من نوع preview')
+    const drawer = await rpc('print:openDrawer', [], { printProfile })
+    assert(drawer.printJobs?.[0]?.kind === 'drawer' && drawer.printJobs[0].printer === 'TestPrinter', 'فتح الدرج رجع job drawer')
+    await rpc('held:delete', [heldId])
   } finally {
     server.close()
   }

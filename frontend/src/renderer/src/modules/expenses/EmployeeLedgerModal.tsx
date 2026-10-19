@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/appStore'
 import { formatCurrency as currency } from '../../lib/currency'
 import { playSound } from '../../lib/sounds'
 import type { Employee, EmployeeLedger, EmployeeTransactionType } from '../../../../shared/types'
+import { confirmDialog } from '../../components/ConfirmDialogHost'
 
 interface Props {
   employee: Employee
@@ -70,7 +71,7 @@ export function EmployeeLedgerModal({ employee, onClose, onChanged }: Props): JS
   }
 
   async function handleStartNewPeriod(): Promise<void> {
-    if (!window.confirm(t('expenses.confirmNewPeriod') ?? '')) return
+    if (!await confirmDialog(t('expenses.confirmNewPeriod') ?? '')) return
     await window.api.employees.startNewPeriod(employee.id)
     await refresh()
   }
@@ -92,7 +93,7 @@ export function EmployeeLedgerModal({ employee, onClose, onChanged }: Props): JS
   }
 
   async function handleDelete(txId: number): Promise<void> {
-    if (!window.confirm(t('expenses.confirmDeleteTransaction') ?? '')) return
+    if (!await confirmDialog(t('expenses.confirmDeleteTransaction') ?? '')) return
     await window.api.employees.deleteTransaction(txId)
     playSound('delete')
     await refresh()

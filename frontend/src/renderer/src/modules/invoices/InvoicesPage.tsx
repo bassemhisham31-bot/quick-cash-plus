@@ -5,6 +5,7 @@ import { InvoiceDetailModal } from './InvoiceDetailModal'
 import { formatCurrency as currency } from '../../lib/currency'
 import { playSound } from '../../lib/sounds'
 import type { InvoiceListFilter, InvoiceListItem, InvoiceView, PaymentMethod } from '../../../../shared/types'
+import { confirmDialog } from '../../components/ConfirmDialogHost'
 
 const defaultFilter: InvoiceListFilter = {
   search: '',
@@ -57,7 +58,7 @@ export function InvoicesPage(): JSX.Element {
 
   async function handleDelete(id: number): Promise<void> {
     if (!user) return
-    if (!window.confirm(t('invoices.confirmDelete') ?? '')) return
+    if (!await confirmDialog(t('invoices.confirmDelete') ?? '')) return
     await window.api.invoices.delete(id, user.id)
     playSound('delete')
     refresh()
@@ -65,7 +66,7 @@ export function InvoicesPage(): JSX.Element {
 
   async function handleRestore(id: number): Promise<void> {
     if (!user) return
-    if (!window.confirm(t('invoices.confirmRestore') ?? '')) return
+    if (!await confirmDialog(t('invoices.confirmRestore') ?? '')) return
     await window.api.invoices.restore(id, user.id)
     refresh()
   }

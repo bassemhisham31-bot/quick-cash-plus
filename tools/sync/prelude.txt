@@ -1,0 +1,204 @@
+const TOKEN_STORAGE_KEY = 'qcp_web_token'
+let authToken: string | null = localStorage.getItem(TOKEN_STORAGE_KEY)
+
+function setToken(token: string | null): void {
+  authToken = token
+  if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token)
+  else localStorage.removeItem(TOKEN_STORAGE_KEY)
+}
+
+/** يُستخدم من App.tsx عند الإقلاع عشان يعرف لو فيه توكن محفوظ من زيارة سابقة قبل ما يعرض شاشة الدخول. */
+export function hasStoredToken(): boolean {
+  return !!authToken
+}
+
+/* ------------------------------ الطباعة: السيرفر يبني المستند، والمتصفح يطبعه على طابعات الجهاز ------------------------------ */
+
+/**
+ * زي الجهاز الفرعي في الأوفلاين: كل جهاز (متصفح) له إعدادات طباعة وطابعات تصنيفات خاصة بيه (بتتخزن محليًا هنا)،
+ * وبتتبعت للسيرفر مع قنوات الطباعة — السيرفر بيبني الـHTML ويرجّع "jobs"، والمتصفح بينفّذها عبر QZ Tray.
+ */
+const PRINT_CHANNELS = new Set([
+  'print:receipt',
+  'print:previewReceipt',
+  'print:labels',
+  'print:quotation',
+  'print:previewQuotation',
+  'print:shiftSummary',
+  'print:previewShiftSummary',
+  'print:stockPermit',
+  'print:previewStockPermit',
+  'print:kitchenTicket',
+  'print:heldInvoice',
+  'print:voucher',
+  'print:eventBooking',
+  'restaurant:printCheck',
+  'restaurant:sendToKitchen',
+  'restaurant:reprintKitchen'
+])
+
+type PrintJob =
+  | { kind: 'print'; html: string; printSettings: PrintSettings; thermalWidthMm?: number; pageSizeMm?: { width: number; height: number } }
+  | { kind: 'preview'; previewKind: string; title: string; html: string }
+  | { kind: 'drawer'; printer: string; pin: 'pin2' | 'pin5' }
+
+interface DevicePrintProfile {
+  printSettings: PrintSettings
+  categoryPrinters: Record<string, string>
+}
+
+const PROFILE_STORAGE_KEY = 'qcp_device_print_profile'
+
+async function rpc(channel: string, args: unknown[], printProfile?: DevicePrintProfile): Promise<{ result: any; printJobs?: PrintJob[] }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (authToken) headers.Authorization = `Bearer ${authToken}`
+
+  const res = await fetch(`/api/rpc/${channel}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ args, ...(printProfile ? { printProfile } : {}) })
+  })
+
+  if (res.status === 401) {
+    setToken(null)
+    window.location.reload()
+    throw new Error('انتهت صلاحية الجلسة — لازم تسجّل دخول تاني')
+  }
+
+  const payload = await res.json()
+  if (!payload.ok) throw new Error(payload.error ?? 'حدث خطأ غير متوقع')
+  return { result: payload.result, printJobs: payload.printJobs }
+}
+
+async function loadPrintProfile(): Promise<DevicePrintProfile> {
+  try {
+    const raw = localStorage.getItem(PROFILE_STORAGE_KEY)
+    if (raw) return JSON.parse(raw) as DevicePrintProfile
+  } catch {
+    // بروفايل تالف — نبدأ من جديد
+  }
+  // أول مرة: نبدأ من إعدادات السيرفر (المقاس والنسخ...) لكن من غير اسم طابعة — الطابعات هنا هي طابعات الجهاز ده
+  const main = (await rpc('settings:getPrint', [])).result as PrintSettings
+  const profile: DevicePrintProfile = { printSettings: { ...main, defaultPrinter: null }, categoryPrinters: {} }
+  savePrintProfile(profile)
+  return profile
+}
+
+function savePrintProfile(profile: DevicePrintProfile): void {
+  try {
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile))
+  } catch {
+    // التخزين المحلي مش متاح — الإعدادات هتفضل للجلسة الحالية بس
+  }
+}
+
+/** QZ Tray بيعلّق لو الـconfig من غير "size" — لازم عرض حقيقي دايمًا (تفصيل في qzPrint.ts). */
+function widthMmOf(printSettings: PrintSettings): number {
+  if (printSettings.paperSize === '80mm') return 80
+  if (printSettings.paperSize === '58mm') return 58
+  if (printSettings.paperSize === 'A5') return 148
+  return 210 // A4
+}
+
+/** معاينة في تاب جديد — رابط Blob + نقرة بدل window.open() لأن المتصفحات بتمنعه لما يتنادى من كود. */
+function openPreviewTab(html: string): void {
+  const blob = new Blob([html], { type: 'text/html' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.target = '_blank'
+  link.rel = 'noopener'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(url), 30000)
+}
+
+async function runPrintJob(job: PrintJob): Promise<void> {
+  if (job.kind === 'preview') {
+    openPreviewTab(job.html)
+    return
+  }
+  const { printHtmlViaQz, openCashDrawerViaQz } = await import('./qzPrint')
+  if (job.kind === 'drawer') {
+    await openCashDrawerViaQz(job.printer, job.pin)
+    return
+  }
+  const widthMm = job.pageSizeMm?.width ?? job.thermalWidthMm ?? widthMmOf(job.printSettings)
+  // نكرر النداء بعدد النسخ بدل نسخ الطابعة نفسها (تعريفات الطابعات الحرارية بتطبع نسخ فاضية مع copies > 1)
+  const copies = Math.max(1, job.printSettings.copies ?? 1)
+  for (let i = 0; i < copies; i++) {
+    await printHtmlViaQz(job.html, { printerName: job.printSettings.defaultPrinter, widthMm })
+  }
+}
+
+async function invoke(channel: string, ...args: unknown[]): Promise<any> {
+  // إعدادات الطباعة/طابعات التصنيفات خاصة بالجهاز ده — بتتخزن محليًا مش على السيرفر
+  switch (channel) {
+    case 'settings:getPrint':
+      return (await loadPrintProfile()).printSettings
+    case 'settings:updatePrint': {
+      const profile = await loadPrintProfile()
+      profile.printSettings = args[0] as PrintSettings
+      savePrintProfile(profile)
+      return profile.printSettings
+    }
+    case 'settings:getCategoryPrinters': {
+      const profile = await loadPrintProfile()
+      const categories = ((await rpc('catalog:listCategories', [])).result ?? []) as { id: number; name: string }[]
+      return Object.entries(profile.categoryPrinters).map(([id, printerName]) => ({
+        categoryId: Number(id),
+        categoryName: categories.find((c) => c.id === Number(id))?.name ?? '',
+        printerName
+      }))
+    }
+    case 'settings:setCategoryPrinter': {
+      const [categoryId, printerName] = args as [number, string | null]
+      const profile = await loadPrintProfile()
+      if (printerName) profile.categoryPrinters[String(categoryId)] = printerName
+      else delete profile.categoryPrinters[String(categoryId)]
+      savePrintProfile(profile)
+      return undefined
+    }
+    case 'settings:getPrinters': {
+      const { listPrintersViaQz } = await import('./qzPrint')
+      return listPrintersViaQz()
+    }
+    case 'print:openDrawer': {
+      const profile = await loadPrintProfile()
+      const printer = profile.printSettings.defaultPrinter
+      if (!printer) return { ok: false, error: 'حدد طابعة افتراضية لهذا الجهاز من إعدادات الطباعة أولًا' }
+      try {
+        const device = (await rpc('settings:getDevice', [])).result as { drawerPin?: string }
+        const { openCashDrawerViaQz } = await import('./qzPrint')
+        await openCashDrawerViaQz(printer, device.drawerPin === 'pin5' ? 'pin5' : 'pin2')
+        return { ok: true }
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? 'تعذر فتح الدرج' }
+      }
+    }
+  }
+
+  if (!PRINT_CHANNELS.has(channel)) return (await rpc(channel, args)).result
+
+  const profile = await loadPrintProfile()
+  const response = await rpc(channel, args, profile)
+  const errors: string[] = []
+  for (const job of response.printJobs ?? []) {
+    try {
+      await runPrintJob(job)
+    } catch (err: any) {
+      errors.push(err?.message ?? String(err))
+    }
+  }
+
+  const result = response.result
+  if (!errors.length) return result
+  const message = errors.join(' / ')
+  if (result && typeof result === 'object' && 'printedCount' in result) {
+    return { ...result, printWarning: `الطلب اتبعت بس تذكرة المطبخ ما اتطبعتش: ${message}` }
+  }
+  return { ...(result ?? {}), ok: false, error: message }
+}
+
+const NOT_ON_WEB = 'الميزة دي لسه مش متاحة في نسخة الويب'

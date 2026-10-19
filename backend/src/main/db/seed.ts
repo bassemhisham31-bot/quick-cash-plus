@@ -42,7 +42,7 @@ export async function seedDatabase(db: Client): Promise<void> {
 
   if ((await count(db, 'license')) === 0) {
     await db.execute({
-      sql: 'INSERT INTO license (id, device_fingerprint, status) VALUES (1, ?, ?)',
+      sql: 'INSERT INTO license (id, device_fingerprint, status, trial_days) VALUES (1, ?, ?, 30)',
       args: [computeDeviceFingerprint(), 'trial']
     })
   }

@@ -1,0 +1,303 @@
+/* شاشة البيع — بتعتمد على كلاسات rst-* المشتركة من موديول المطاعم + إضافات خاصة بالبيع */
+
+.pos-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.pos-title {
+  margin: 0;
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pos-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-inline-start: auto;
+}
+
+.pos-tools .qcp-select {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.pos-tool-btn {
+  border: 1px solid var(--qcp-border);
+  background: var(--qcp-bg-elevated);
+  color: var(--qcp-ink);
+  border-radius: 10px;
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pos-tool-btn:hover {
+  border-color: var(--qcp-accent);
+  color: var(--qcp-accent);
+}
+
+.pos-tool-btn.active {
+  border-color: var(--rst-deliv, #ea580c);
+  background: color-mix(in srgb, var(--rst-deliv, #ea580c) 12%, transparent);
+  color: var(--rst-deliv, #ea580c);
+}
+
+.pos-tool-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.pos-search {
+  position: relative;
+  margin-bottom: 10px;
+}
+
+.pos-search input {
+  width: 100%;
+  font-size: 15px;
+  padding: 12px 44px 12px 14px;
+  border-radius: 12px;
+  border: 2px solid var(--qcp-border);
+  background: var(--qcp-bg-elevated);
+  box-sizing: border-box;
+}
+
+.pos-search input:focus {
+  border-color: var(--qcp-accent);
+  outline: none;
+  box-shadow: 0 0 0 4px var(--qcp-accent-soft);
+}
+
+.pos-search .ic {
+  position: absolute;
+  top: 50%;
+  inset-inline-start: 14px;
+  transform: translateY(-50%);
+  font-size: 17px;
+  pointer-events: none;
+}
+
+.pos-search .hint {
+  position: absolute;
+  top: 50%;
+  inset-inline-end: 12px;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: var(--qcp-ink-faint);
+  background: var(--qcp-bg-sunken);
+  border: 1px solid var(--qcp-border);
+  border-radius: 6px;
+  padding: 2px 7px;
+  pointer-events: none;
+}
+
+.pos-search input {
+  padding-inline-start: 42px;
+  padding-inline-end: 130px;
+}
+
+.pos-stock {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-top: 4px;
+  background: var(--qcp-bg-sunken);
+  color: var(--qcp-ink-muted);
+}
+
+.pos-stock.low {
+  background: var(--qcp-warn-soft);
+  color: var(--qcp-warn);
+}
+
+.pos-stock.out {
+  background: var(--qcp-critical-soft);
+  color: var(--qcp-critical);
+}
+
+.rst-product.out {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+
+.rst-product.out:hover {
+  border-color: var(--qcp-border);
+  box-shadow: none;
+}
+
+.pos-customer-search {
+  position: relative;
+  display: flex;
+  gap: 6px;
+}
+
+.pos-customer-search input {
+  flex: 1;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.pos-dropdown {
+  position: absolute;
+  top: 100%;
+  inset-inline-start: 0;
+  inset-inline-end: 0;
+  z-index: 30;
+  background: var(--qcp-bg-elevated);
+  border: 1px solid var(--qcp-border);
+  border-radius: 10px;
+  margin-top: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 10px 24px -6px rgba(0, 0, 0, 0.25);
+}
+
+.pos-dropdown button {
+  display: block;
+  width: 100%;
+  text-align: start;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--qcp-border);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--qcp-ink);
+}
+
+.pos-dropdown button:hover {
+  background: var(--qcp-accent-soft);
+}
+
+.pos-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+}
+
+.pos-badge {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--qcp-bg-elevated);
+  border: 1px solid var(--qcp-border);
+  color: var(--qcp-ink-muted);
+}
+
+.pos-badge.due {
+  color: var(--qcp-critical);
+  border-color: color-mix(in srgb, var(--qcp-critical) 35%, transparent);
+}
+
+.pos-badge.gold {
+  color: #b45309;
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+[data-theme='dark'] .pos-badge.gold {
+  color: #fcd34d;
+  border-color: #78350f;
+  background: #2a1f0a;
+}
+
+.pos-price-edit {
+  width: 80px;
+  padding: 2px 6px !important;
+  font-size: 11.5px !important;
+  margin-top: 2px;
+}
+
+.pos-pay-btn {
+  width: 100%;
+  font-size: 17px;
+  padding: 15px 10px;
+  justify-content: space-between;
+}
+
+.pos-pay-btn kbd {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+
+/* ---------------------------------- نافذة النجاح ---------------------------------- */
+
+.pos-success-head {
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.pos-success-head .ok {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  margin: 0 auto 8px;
+  background: var(--qcp-success-soft);
+  color: var(--qcp-success);
+  font-size: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: pos-pop 0.35s ease;
+}
+
+@keyframes pos-pop {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.pos-paper {
+  background: var(--qcp-bg-sunken);
+  border: 1px dashed var(--qcp-border-strong);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-family: var(--qcp-mono);
+  font-size: 12.5px;
+  max-height: 38vh;
+  overflow-y: auto;
+}
+
+.pos-paper .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.pos-paper hr {
+  border: none;
+  border-top: 1px dashed var(--qcp-border-strong);
+  margin: 8px 0;
+}

@@ -122,6 +122,17 @@ export function ShiftsPage(): JSX.Element {
                       معاينة
                     </button>
                   )}
+                  {s.status === 'closed' && (
+                    <button
+                      type="button"
+                      className="qcp-btn qcp-btn-secondary"
+                      style={{ padding: '4px 10px', marginInlineStart: 6 }}
+                      title="ملخص الوردية + إجمالي كل صنف اتباع"
+                      onClick={() => window.api.print.previewShiftSummary(s.id, true)}
+                    >
+                      تفصيلي
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

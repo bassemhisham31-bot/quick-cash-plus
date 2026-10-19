@@ -70,7 +70,25 @@ export async function getLicenseStatus(): Promise<LicenseStatus> {
   const row = rs.rows[0] as any
 
   if (!row) {
-    return { deviceFingerprint: fingerprint, status: 'trial', plan: null, daysRemaining: 15, expiresAt: null, disabledFeatures: [] }
+    return { deviceFingerprint: fingerprint, status: 'trial', plan: null, daysRemaining: 30, expiresAt: null, disabledFeatures: [] }
+  }
+
+  // حماية من الرجوع بتاريخ الجهاز للخلف لإطالة التجربة/الاشتراك: بنفتكر آخر وقت شفناه، ولو الوقت الحالي أقدم منه بأكتر من يوم ونص البرنامج يتقفل
+  const now = Date.now()
+  const lastSeen = row.last_seen_at ? Date.parse(row.last_seen_at) : NaN
+  if (!Number.isNaN(lastSeen) && now < lastSeen - 36 * 3600 * 1000) {
+    return {
+      deviceFingerprint: fingerprint,
+      status: 'expired',
+      plan: row.plan ?? null,
+      daysRemaining: 0,
+      expiresAt: row.expires_at ?? null,
+      disabledFeatures: parseFeatures(row),
+      clockTampered: true
+    }
+  }
+  if (Number.isNaN(lastSeen) || now - lastSeen > 3600 * 1000) {
+    await db.execute({ sql: 'UPDATE license SET last_seen_at = ? WHERE id = 1', args: [new Date(Math.max(now, Number.isNaN(lastSeen) ? 0 : lastSeen)).toISOString()] })
   }
 
   const disabledFeatures = parseFeatures(row)
@@ -138,5 +156,30 @@ export async function activateLicense(key: string): Promise<ActivateLicenseResul
     args: [key.trim(), validation.plan, validation.expiresAt, (validation.disabledFeatures ?? []).join(',')]
   })
 
+  invalidateLicenseCache()
   return { ok: true, status: await getLicenseStatus() }
+}
+
+/* ------------------------------ قفل البرنامج عند انتهاء الترخيص ------------------------------ */
+
+let cache: { blocked: boolean; at: number } | null = null
+
+export function invalidateLicenseCache(): void {
+  cache = null
+}
+
+/** هل البرنامج مقفول (تجربة/اشتراك منتهي أو تاريخ الجهاز متلاعب فيه)؟ بيتخزّن دقيقة عشان ما نسألش القاعدة مع كل طلب */
+export async function isLicenseBlocked(): Promise<boolean> {
+  if (cache && Date.now() - cache.at < 60_000) return cache.blocked
+  const status = await getLicenseStatus()
+  cache = { blocked: status.status === 'expired', at: Date.now() }
+  return cache.blocked
+}
+
+const ALWAYS_ALLOWED_PREFIXES = ['license:']
+
+/** رسالة الخطأ لو القناة دي ممنوعة بسبب انتهاء الترخيص، أو null لو مسموحة */
+export async function licenseBlockReason(channel: string): Promise<string | null> {
+  if (ALWAYS_ALLOWED_PREFIXES.some((p) => channel.startsWith(p))) return null
+  return (await isLicenseBlocked()) ? 'انتهت فترة التجربة أو الترخيص — فعّل البرنامج بكود التفعيل للمتابعة' : null
 }

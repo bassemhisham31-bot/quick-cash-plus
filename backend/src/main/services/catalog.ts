@@ -63,6 +63,47 @@ async function nextAutoBarcode(): Promise<string> {
   return String(next)
 }
 
+/**
+ * تعديل سريع لرصيد صنف من شاشة الأصناف: 'add' يزوّد/ينقص الكمية، 'set' يخلّي الرصيد = الكمية (جرد).
+ * بيتسجل كحركة 'adjustment' عشان تبان في تقارير حركة الصنف. بيرجع الرصيد الجديد.
+ */
+export async function adjustProductStock(
+  productId: number,
+  warehouseId: number,
+  mode: 'add' | 'set',
+  qty: number,
+  userId: number
+): Promise<number> {
+  if (!Number.isFinite(qty)) throw new Error('الكمية غير صحيحة')
+  const db = getDb()
+  const tx = await db.transaction('write')
+  try {
+    const rs = await tx.execute({
+      sql: 'SELECT quantity FROM stock WHERE product_id = ? AND warehouse_id = ?',
+      args: [productId, warehouseId]
+    })
+    const current = rs.rows[0] ? Number((rs.rows[0] as any).quantity) : 0
+    const delta = mode === 'set' ? qty - current : qty
+    if (delta !== 0) {
+      await tx.execute({
+        sql: `INSERT INTO stock (product_id, warehouse_id, quantity) VALUES (?, ?, ?)
+              ON CONFLICT(product_id, warehouse_id) DO UPDATE SET quantity = quantity + ?`,
+        args: [productId, warehouseId, delta, delta]
+      })
+      await tx.execute({
+        sql: `INSERT INTO stock_movements (product_id, warehouse_id, type, qty, ref_type, user_id)
+              VALUES (?, ?, 'adjustment', ?, 'quick_adjust', ?)`,
+        args: [productId, warehouseId, delta, userId]
+      })
+    }
+    await tx.commit()
+    return current + delta
+  } catch (err) {
+    await tx.rollback()
+    throw err
+  }
+}
+
 export async function deleteProduct(id: number): Promise<void> {
   const db = getDb()
   const rs = await db.execute({ sql: 'SELECT id FROM products WHERE id = ? AND deleted_at IS NULL', args: [id] })
@@ -277,4 +318,15 @@ export async function bulkCreateProducts(inputs: ProductInput[]): Promise<Produc
   }
 
   return { ok: true, created, updated: 0, rowErrors }
+}
+
+/** رصيد الأصناف في كل المخازن (لاختيار مخزن البيع لكل صنف في شاشة البيع) */
+export async function getStockByWarehouse(productIds: number[]): Promise<{ productId: number; warehouseId: number; quantity: number }[]> {
+  if (!productIds.length) return []
+  const db = getDb()
+  const rs = await db.execute({
+    sql: `SELECT product_id AS productId, warehouse_id AS warehouseId, quantity FROM stock WHERE product_id IN (${productIds.map(() => '?').join(',')})`,
+    args: productIds
+  })
+  return (rs.rows as any[]).map((r) => ({ productId: Number(r.productId), warehouseId: Number(r.warehouseId), quantity: Number(r.quantity) }))
 }

@@ -22,6 +22,8 @@ export async function runReport(type: ReportType, filter: ReportFilter): Promise
   switch (type) {
     case 'inventory_status':
       return inventoryStatus(filter)
+    case 'stocktake':
+      return stocktake(filter)
     case 'sales_detailed':
       return salesDetailed(filter)
     case 'sales_summary':
@@ -32,6 +34,8 @@ export async function runReport(type: ReportType, filter: ReportFilter): Promise
       return customersAnalysis(filter)
     case 'stock_movement':
       return stockMovement(filter)
+    case 'stock_permits':
+      return stockPermitsReport(filter)
     case 'profit_loss':
       return profitLoss(filter)
     case 'monthly_expenses':
@@ -66,6 +70,8 @@ export async function runReport(type: ReportType, filter: ReportFilter): Promise
       return restaurantRecipeConsumption(filter)
     case 'restaurant_table_activity':
       return restaurantTableActivity(filter)
+    case 'category_sales_daily':
+      return categorySalesDaily(filter)
     default:
       throw new Error('نوع تقرير غير معروف')
   }
@@ -110,6 +116,43 @@ async function inventoryStatus(filter: ReportFilter): Promise<ReportResult> {
     ],
     rows,
     totals: { stockValue: rows.reduce((s, r) => s + r.stockValue, 0) }
+  }
+}
+
+// جرد الأصناف فقط: قائمة مبسّطة بالأصناف وأرصدتها بالنظام + عمود "الكمية الفعلية" فاضي يتملّى يدويًا وقت الجرد
+async function stocktake(filter: ReportFilter): Promise<ReportResult> {
+  const db = getDb()
+  const warehouseId = filter.warehouseId ?? (await getDefaultWarehouseId(db))
+  const rs = await db.execute({
+    sql: `SELECT p.name, p.barcode, COALESCE(c.name, '-') AS category,
+                 COALESCE(s.quantity, 0) AS qty
+          FROM products p
+          LEFT JOIN categories c ON c.id = p.category_id
+          LEFT JOIN stock s ON s.product_id = p.id AND s.warehouse_id = ?
+          WHERE p.deleted_at IS NULL
+          ORDER BY p.name`,
+    args: [warehouseId]
+  })
+  // الكمية تُعرض كنص عشان لوحة التقارير بتنسّق أي رقم كعملة؛ والكمية الفعلية فاضية للتعبئة اليدوية
+  const rows = rs.rows.map((r: any) => ({
+    barcode: r.barcode ?? '',
+    name: r.name,
+    category: r.category,
+    systemQty: String(Number(r.qty)),
+    actualQty: '',
+    difference: ''
+  }))
+  return {
+    title: 'جرد الأصناف',
+    columns: [
+      { key: 'barcode', label: 'الباركود' },
+      { key: 'name', label: 'الصنف' },
+      { key: 'category', label: 'التصنيف' },
+      { key: 'systemQty', label: 'الكمية بالنظام', align: 'end' },
+      { key: 'actualQty', label: 'الكمية الفعلية', align: 'end' },
+      { key: 'difference', label: 'الفرق', align: 'end', format: 'number' }
+    ],
+    rows
   }
 }
 
@@ -437,6 +480,60 @@ async function stockMovement(filter: ReportFilter): Promise<ReportResult> {
   }
 }
 
+async function stockPermitsReport(filter: ReportFilter): Promise<ReportResult> {
+  const db = getDb()
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'sp.created_at')
+  // فلتر المخزن اختياري: لو محدد نعرض مخزن واحد، وإلا كل المخازن (تقرير "جميع الأذون")
+  const warehouseSql = filter.warehouseId != null ? 'AND sp.warehouse_id = ?' : ''
+  const warehouseArgs = filter.warehouseId != null ? [filter.warehouseId] : []
+
+  const rs = await db.execute({
+    sql: `SELECT sp.created_at AS date, sp.number, sp.type, w.name AS warehouse,
+                 sp.reason, u.full_name AS userName,
+                 spi.product_name AS product, spi.qty, spi.unit_price AS unitPrice, spi.serial_number AS serialNumber
+          FROM stock_permit_items spi
+          JOIN stock_permits sp ON sp.id = spi.permit_id
+          JOIN warehouses w ON w.id = sp.warehouse_id
+          LEFT JOIN users u ON u.id = sp.user_id
+          WHERE sp.deleted_at IS NULL ${warehouseSql} ${dateSql}
+          ORDER BY sp.id DESC, spi.id ASC
+          LIMIT 5000`,
+    args: [...warehouseArgs, ...dateArgs]
+  })
+
+  const typeLabels: Record<string, string> = { addition: 'إضافة', deduction: 'خصم' }
+  // الكمية تُعرض كنص (عدد عادي) عشان لوحة التقارير بتنسّق أي رقم كعملة — والنوع بيوضّح الاتجاه
+  const rows = rs.rows.map((r: any) => ({
+    date: r.date,
+    number: r.number,
+    type: typeLabels[r.type] ?? r.type,
+    warehouse: r.warehouse,
+    product: r.product,
+    qty: String(Number(r.qty)),
+    unitPrice: r.unitPrice != null ? Number(r.unitPrice) : '—',
+    serialNumber: r.serialNumber ?? '—',
+    reason: r.reason ?? '—',
+    userName: r.userName ?? '—'
+  }))
+
+  return {
+    title: 'أذون الإضافة والخصم',
+    columns: [
+      { key: 'date', label: 'التاريخ' },
+      { key: 'number', label: 'رقم الإذن' },
+      { key: 'type', label: 'النوع' },
+      { key: 'warehouse', label: 'المخزن' },
+      { key: 'product', label: 'الصنف' },
+      { key: 'qty', label: 'الكمية', align: 'end' },
+      { key: 'unitPrice', label: 'السعر', align: 'end' },
+      { key: 'serialNumber', label: 'السيريال' },
+      { key: 'reason', label: 'السبب' },
+      { key: 'userName', label: 'بواسطة' }
+    ],
+    rows
+  }
+}
+
 async function profitLoss(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
   const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
@@ -524,6 +621,41 @@ async function monthlyExpenses(filter: ReportFilter): Promise<ReportResult> {
     ],
     rows,
     totals: { amount: rows.reduce((s, r) => s + r.amount, 0) }
+  }
+}
+
+/** مبيعات تصنيف (وتصنيفاته الفرعية) يوم بيوم — لو مفيش تصنيف مختار بتظهر كل التصنيفات */
+async function categorySalesDaily(filter: ReportFilter): Promise<ReportResult> {
+  const db = getDb()
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
+  const catSql = filter.categoryId
+    ? `AND p.category_id IN (WITH RECURSIVE sub(id) AS (SELECT ? UNION ALL SELECT c.id FROM categories c JOIN sub ON c.parent_id = sub.id) SELECT id FROM sub)`
+    : ''
+  const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : []), ...(filter.categoryId ? [filter.categoryId] : [])]
+  const rs = await db.execute({
+    sql: `SELECT date(i.created_at) AS day, COALESCE(c.name, 'بدون تصنيف') AS category,
+                 SUM(si.qty) AS qtySold, SUM(si.total) AS revenue
+          FROM sales_items si
+          JOIN sales_invoices i ON i.id = si.invoice_id
+          JOIN products p ON p.id = si.product_id
+          LEFT JOIN categories c ON c.id = p.category_id
+          WHERE i.deleted_at IS NULL ${dateSql} ${warehouseSql} ${catSql}
+          GROUP BY day, p.category_id
+          ORDER BY day DESC, revenue DESC`,
+    args
+  })
+  const rows = rs.rows.map((r: any) => ({ day: r.day, category: r.category, qtySold: Number(r.qtySold), revenue: Number(r.revenue) }))
+  return {
+    title: 'مبيعات التصنيف اليومية',
+    columns: [
+      { key: 'day', label: 'اليوم' },
+      { key: 'category', label: 'التصنيف' },
+      { key: 'qtySold', label: 'الكمية المباعة', align: 'end' },
+      { key: 'revenue', label: 'المبيعات', align: 'end' }
+    ],
+    rows,
+    totals: { qtySold: rows.reduce((s, r) => s + r.qtySold, 0), revenue: rows.reduce((s, r) => s + r.revenue, 0) }
   }
 }
 

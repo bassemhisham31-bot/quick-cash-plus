@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../store/appStore'
 import type { AssistantChatMessage, AssistantSettings } from '../../../shared/types'
+import { confirmDialog } from './ConfirmDialogHost'
 
 const BTN_SIZE = 54
 const POS_STORAGE_KEY = 'qcp_assistant_btn_pos'
@@ -75,7 +76,7 @@ export function AssistantFloatingButton(): JSX.Element | null {
   const userId = user.id
 
   async function handleClear(): Promise<void> {
-    if (!window.confirm(t('assistantChat.clearConfirm') ?? '')) return
+    if (!await confirmDialog(t('assistantChat.clearConfirm') ?? '')) return
     await window.api.assistant.clearHistory(userId)
     setMessages([])
     setError(null)

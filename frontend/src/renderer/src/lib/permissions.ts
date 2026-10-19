@@ -11,25 +11,29 @@ export const VIEW_PERMISSIONS: Record<ViewName, string> = {
   dashboard: 'dashboard.view',
   pos: 'pos.sell',
   inventory: 'inventory.manage',
-  priceEditing: 'inventory.manage',
+  priceEditing: 'priceEditing.manage',
   customers: 'customers.manage',
   vendors: 'vendors.manage',
   invoices: 'invoices.manage',
-  returns: 'invoices.manage',
+  returns: 'returns.manage',
   expenses: 'expenses.manage',
-  shifts: 'reports.view',
+  shifts: 'shifts.view',
+  treasury: 'treasury.manage',
+  accounting: 'accounting.view',
   reports: 'reports.view',
   salesReps: 'sales_reps.manage',
-  quotations: 'pos.sell',
-  stockPermits: 'inventory.manage',
+  quotations: 'quotations.manage',
+  stockPermits: 'stockPermits.manage',
   restaurant: 'restaurant.manage',
-  restaurantTables: 'restaurant.manage',
-  restaurantCaptains: 'restaurant.manage',
-  delivery: 'restaurant.manage',
+  restaurantTables: 'restaurant.tables',
+  restaurantCaptains: 'restaurant.captains',
+  delivery: 'delivery.manage',
+  events: 'events.manage',
+  attendance: 'attendance.manage',
   settings: 'settings.manage'
 }
 
-const VIEW_ORDER: ViewName[] = [
+export const VIEW_ORDER: ViewName[] = [
   'dashboard',
   'pos',
   'inventory',
@@ -40,6 +44,8 @@ const VIEW_ORDER: ViewName[] = [
   'returns',
   'expenses',
   'shifts',
+  'treasury',
+  'accounting',
   'reports',
   'salesReps',
   'quotations',
@@ -48,6 +54,8 @@ const VIEW_ORDER: ViewName[] = [
   'restaurantTables',
   'restaurantCaptains',
   'delivery',
+  'events',
+  'attendance',
   'settings'
 ]
 

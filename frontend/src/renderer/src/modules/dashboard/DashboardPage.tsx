@@ -223,6 +223,8 @@ function CloseDayModal({ onClose, onClosed }: { onClose: () => void; onClosed: (
   const [actualCash, setActualCash] = useState('')
   const [saving, setSaving] = useState(false)
   const [closedReport, setClosedReport] = useState<ShiftSummaryReport | null>(null)
+  // أوبشن زيادة: طباعة مبيعات الوردية تفصيلي (إجمالي كل صنف) مع ملخص الإقفال
+  const [printDetailed, setPrintDetailed] = useState(false)
   const [printing, setPrinting] = useState(false)
   const [closeError, setCloseError] = useState<string | null>(null)
 
@@ -255,8 +257,8 @@ function CloseDayModal({ onClose, onClosed }: { onClose: () => void; onClosed: (
     if (!closedReport) return
     setPrinting(true)
     try {
-      if (preview) await window.api.print.previewShiftSummary(closedReport.sessionId)
-      else await window.api.print.shiftSummary(closedReport.sessionId)
+      if (preview) await window.api.print.previewShiftSummary(closedReport.sessionId, printDetailed)
+      else await window.api.print.shiftSummary(closedReport.sessionId, printDetailed)
     } finally {
       setPrinting(false)
     }
@@ -281,6 +283,18 @@ function CloseDayModal({ onClose, onClosed }: { onClose: () => void; onClosed: (
               <span>{t('dashboard.totalSales')}</span>
               <span>{currency(closedReport.totalSales)}</span>
             </div>
+            {closedReport.totalTips > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>🎁 إكراميات (تيبس)</span>
+                <span>{currency(closedReport.totalTips)}</span>
+              </div>
+            )}
+            {closedReport.eventPaymentCount > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>🎂 تحصيلات الحجوزات ({closedReport.eventPaymentCount})</span>
+                <span>{currency(closedReport.totalEventPayments)}</span>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span>{t('dashboard.totalExpenses')}</span>
               <span>-{currency(closedReport.totalExpenses)}</span>
@@ -305,6 +319,11 @@ function CloseDayModal({ onClose, onClosed }: { onClose: () => void; onClosed: (
               {t('dashboard.difference')}: {currency(closedReport.cashDifference ?? 0)}
             </div>
           </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 14, cursor: 'pointer' }}>
+            <input type="checkbox" checked={printDetailed} onChange={(e) => setPrintDetailed(e.target.checked)} />
+            طباعة مبيعات الوردية تفصيلي (إجمالي الأصناف — {closedReport.itemsSold?.length ?? 0} صنف)
+          </label>
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button className="qcp-btn qcp-btn-primary" disabled={printing} onClick={() => handlePrint(false)}>
@@ -338,6 +357,18 @@ function CloseDayModal({ onClose, onClosed }: { onClose: () => void; onClosed: (
                 <span>{t('dashboard.cashSales')}</span>
                 <span>+{currency(summary.cashSales)}</span>
               </div>
+              {summary.tips > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>🎁 إكراميات (تيبس)</span>
+                  <span>+{currency(summary.tips)}</span>
+                </div>
+              )}
+              {summary.eventPayments !== 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>🎂 تحصيلات الحجوزات{summary.eventPayments !== summary.eventCashPayments ? ` (نقدي ${currency(summary.eventCashPayments)})` : ''}</span>
+                  <span>{summary.eventPayments > 0 ? '+' : ''}{currency(summary.eventPayments)}</span>
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>{t('dashboard.cashExpenses')}</span>
                 <span>-{currency(summary.cashExpenses)}</span>

@@ -12,8 +12,10 @@ import type {
 import { PurchaseInvoiceModal } from './PurchaseInvoiceModal'
 import { TransferModal } from './TransferModal'
 import { RecipeEditorModal } from '../restaurant/RecipeEditorModal'
+import { QuickStockModal } from './QuickStockModal'
 import { formatCurrency as currency } from '../../lib/currency'
 import { playSound } from '../../lib/sounds'
+import { confirmDialog } from '../../components/ConfirmDialogHost'
 
 const emptyForm = {
   id: null as number | null,
@@ -44,6 +46,7 @@ function daysUntil(dateStr: string): number {
 export function InventoryPage(): JSX.Element {
   const { t } = useTranslation()
   const [products, setProducts] = useState<Product[]>([])
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const [vendors, setVendors] = useState<VendorView[]>([])
@@ -61,6 +64,7 @@ export function InventoryPage(): JSX.Element {
   const [importing, setImporting] = useState(false)
   const [posUiSettings, setPosUiSettings] = useState<PosUiSettings | null>(null)
   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null)
+  const [stockProduct, setStockProduct] = useState<Product | null>(null)
 
   useEffect(() => {
     window.api.settings.getPosUi().then(setPosUiSettings)
@@ -168,10 +172,27 @@ export function InventoryPage(): JSX.Element {
 
   async function handleDeleteProduct(p: Product): Promise<void> {
     if (!warehouseId) return
-    if (!window.confirm(t('inventory.confirmDeleteProduct', { name: p.name }) ?? '')) return
+    if (!await confirmDialog(t('inventory.confirmDeleteProduct', { name: p.name }) ?? '')) return
     await window.api.catalog.deleteProduct(p.id)
     playSound('delete')
     await refreshProducts(warehouseId)
+  }
+
+  function toggleSelect(id: number): void {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+
+  const allSelected = products.length > 0 && selectedIds.length === products.length
+
+  function toggleSelectAll(): void {
+    setSelectedIds(allSelected ? [] : products.map((p) => p.id))
+  }
+
+  async function printSelectedLabels(): Promise<void> {
+    const items = products
+      .filter((p) => selectedIds.includes(p.id))
+      .map((p) => ({ barcode: p.barcode, name: p.name, price: p.retailPrice }))
+    if (items.length) await window.api.print.labels(items)
   }
 
   async function handleSubmit(e: FormEvent): Promise<void> {
@@ -251,6 +272,13 @@ export function InventoryPage(): JSX.Element {
             ⬆️ {t('inventory.importProducts')}
           </button>
           <button
+            className="qcp-btn qcp-btn-secondary"
+            disabled={selectedIds.length === 0}
+            onClick={printSelectedLabels}
+          >
+            🏷️ {t('inventory.printSelectedBarcodes')} {selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
+          </button>
+          <button
             className="qcp-btn qcp-btn-primary"
             onClick={() => {
               setForm(emptyForm)
@@ -289,6 +317,9 @@ export function InventoryPage(): JSX.Element {
         <table className="qcp-table">
           <thead>
             <tr>
+              <th style={{ width: 32 }}>
+                <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} title={t('inventory.selectAll') ?? ''} />
+              </th>
               <th>{t('inventory.name')}</th>
               <th>{t('inventory.barcodeColumn')}</th>
               <th>{t('inventory.costPrice')}</th>
@@ -302,6 +333,9 @@ export function InventoryPage(): JSX.Element {
           <tbody>
             {products.map((p) => (
               <tr key={p.id}>
+                <td style={{ textAlign: 'center' }}>
+                  <input type="checkbox" checked={selectedIds.includes(p.id)} onChange={() => toggleSelect(p.id)} />
+                </td>
                 <td>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <div
@@ -351,33 +385,43 @@ export function InventoryPage(): JSX.Element {
                     '—'
                   )}
                 </td>
-                <td style={{ display: 'flex', gap: 6 }}>
-                  <button className="qcp-btn qcp-btn-secondary" style={{ padding: '4px 10px' }} onClick={() => startEdit(p)}>
-                    ✏️ {t('inventory.editProduct')}
-                  </button>
-                  <button
-                    className="qcp-btn qcp-btn-secondary"
-                    style={{ padding: '4px 10px' }}
-                    onClick={() => window.api.print.labels([{ barcode: p.barcode, name: p.name, price: p.retailPrice }])}
-                  >
-                    🏷️ {t('inventory.printBarcode')}
-                  </button>
-                  <button className="qcp-btn qcp-btn-secondary" style={{ padding: '4px 10px' }} onClick={() => setRecipeProduct(p)}>
-                    🧾 الوصفة
-                  </button>
-                  <button
-                    className="qcp-btn qcp-btn-secondary"
-                    style={{ padding: '4px 10px', color: 'var(--qcp-critical)' }}
-                    onClick={() => handleDeleteProduct(p)}
-                  >
-                    🗑️ {t('inventory.deleteProduct')}
-                  </button>
+                <td>
+                  <div className="qcp-row-actions">
+                    <button
+                      className="qcp-btn qcp-btn-secondary"
+                      title={t('inventory.editProduct') ?? ''}
+                      onClick={() => startEdit(p)}
+                    >
+                      ✏️ <span className="qcp-btn-label">{t('inventory.editProduct')}</span>
+                    </button>
+                    <button
+                      className="qcp-btn qcp-btn-secondary"
+                      title={t('inventory.printBarcode') ?? ''}
+                      onClick={() => window.api.print.labels([{ barcode: p.barcode, name: p.name, price: p.retailPrice }])}
+                    >
+                      🏷️ <span className="qcp-btn-label">{t('inventory.printBarcode')}</span>
+                    </button>
+                    <button className="qcp-btn qcp-btn-secondary" title="الوصفة" onClick={() => setRecipeProduct(p)}>
+                      🧾 <span className="qcp-btn-label">الوصفة</span>
+                    </button>
+                    <button className="qcp-btn qcp-btn-secondary" title="الكمية" onClick={() => setStockProduct(p)}>
+                      🔢 <span className="qcp-btn-label">الكمية</span>
+                    </button>
+                    <button
+                      className="qcp-btn qcp-btn-secondary"
+                      style={{ color: 'var(--qcp-critical)' }}
+                      title={t('inventory.deleteProduct') ?? ''}
+                      onClick={() => handleDeleteProduct(p)}
+                    >
+                      🗑️ <span className="qcp-btn-label">{t('inventory.deleteProduct')}</span>
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
             {products.length === 0 && (
               <tr>
-                <td colSpan={8} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                <td colSpan={9} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                   —
                 </td>
               </tr>
@@ -703,6 +747,15 @@ export function InventoryPage(): JSX.Element {
       )}
 
       {recipeProduct && <RecipeEditorModal product={recipeProduct} onClose={() => setRecipeProduct(null)} />}
+
+      {stockProduct && warehouseId && (
+        <QuickStockModal
+          product={stockProduct}
+          warehouseId={warehouseId}
+          onClose={() => setStockProduct(null)}
+          onSaved={() => refreshProducts(warehouseId)}
+        />
+      )}
 
       {showPurchase && warehouseId && (
         <PurchaseInvoiceModal

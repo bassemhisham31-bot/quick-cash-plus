@@ -1,4 +1,6 @@
 import { getDb } from '../db'
+import { computeExpectedCash, recordCashDifference } from './treasuries'
+import { getSessionEventTotals } from './events'
 import type { CashSessionSummary, ExpenseMethod, PaymentMethod, ShiftListRow, ShiftSummaryReport } from '../../shared/types'
 
 export interface CashSessionView {
@@ -39,7 +41,9 @@ export async function openDay(userId: number, openingBalance: number): Promise<C
   return created
 }
 
-async function computeCashTotals(sessionId: number): Promise<{ cashSales: number; cashExpenses: number }> {
+async function computeCashTotals(
+  sessionId: number
+): Promise<{ cashSales: number; cashExpenses: number; tips: number; eventPayments: number; eventCashPayments: number }> {
   const db = getDb()
 
   const salesRs = await db.execute({
@@ -52,10 +56,21 @@ async function computeCashTotals(sessionId: number): Promise<{ cashSales: number
           FROM expenses WHERE session_id = ? AND method = 'cash' AND deleted_at IS NULL`,
     args: [sessionId]
   })
+  const tipsRs = await db.execute({
+    sql: 'SELECT COALESCE(SUM(tip_amount), 0) AS totalTips FROM sales_invoices WHERE session_id = ? AND deleted_at IS NULL',
+    args: [sessionId]
+  })
+  const eventCashRs = await db.execute({
+    sql: "SELECT COALESCE(SUM(amount), 0) AS total FROM event_booking_payments WHERE session_id = ? AND method = 'cash'",
+    args: [sessionId]
+  })
 
   return {
     cashSales: Number((salesRs.rows[0] as any).totalPaid),
-    cashExpenses: Number((expensesRs.rows[0] as any).totalAmount)
+    cashExpenses: Number((expensesRs.rows[0] as any).totalAmount),
+    tips: Number((tipsRs.rows[0] as any).totalTips),
+    eventPayments: (await getSessionEventTotals(sessionId)).total,
+    eventCashPayments: Number((eventCashRs.rows[0] as any).total)
   }
 }
 
@@ -63,7 +78,7 @@ export async function getCurrentSessionSummary(): Promise<CashSessionSummary | n
   const session = await getOpenSession()
   if (!session) return null
 
-  const { cashSales, cashExpenses } = await computeCashTotals(session.id)
+  const { cashSales, cashExpenses, tips, eventPayments, eventCashPayments } = await computeCashTotals(session.id)
 
   return {
     sessionId: session.id,
@@ -71,7 +86,10 @@ export async function getCurrentSessionSummary(): Promise<CashSessionSummary | n
     openingBalance: session.openingBalance,
     cashSales,
     cashExpenses,
-    expectedCash: session.openingBalance + cashSales - cashExpenses
+    tips,
+    eventPayments,
+    eventCashPayments,
+    expectedCash: await computeExpectedCash(session.openedAt, session.openingBalance)
   }
 }
 
@@ -80,8 +98,7 @@ export async function closeDay(userId: number, actualCash: number): Promise<Shif
   const session = await getOpenSession()
   if (!session) return null
 
-  const { cashSales, cashExpenses } = await computeCashTotals(session.id)
-  const expected = session.openingBalance + cashSales - cashExpenses
+  const expected = await computeExpectedCash(session.openedAt, session.openingBalance)
 
   await db.execute({
     sql: `UPDATE cash_sessions
@@ -89,6 +106,9 @@ export async function closeDay(userId: number, actualCash: number): Promise<Shif
           WHERE id = ?`,
     args: [userId, expected, actualCash, session.id]
   })
+
+  // فرق الجرد (عجز/زيادة) بيتسجّل على الخزينة الافتراضية وبيظهر في فروقات الخزينة
+  await recordCashDifference(session.id, expected, actualCash, userId).catch((err) => console.error('[cash difference]', err))
 
   return getShiftSummaryReport(session.id)
 }
@@ -159,6 +179,12 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
   const salesByMethod = salesRs.rows.map((r: any) => ({ method: r.method as PaymentMethod, total: Number(r.total) }))
   const invoiceCount = salesRs.rows.reduce((s, r: any) => s + Number(r.invoiceCount), 0)
   const totalSales = salesByMethod.reduce((s, r) => s + r.total, 0)
+  const tipsRs = await db.execute({
+    sql: 'SELECT COALESCE(SUM(tip_amount), 0) AS totalTips FROM sales_invoices WHERE session_id = ? AND deleted_at IS NULL',
+    args: [sessionId]
+  })
+  const totalTips = Number((tipsRs.rows[0] as any).totalTips)
+  const eventTotals = await getSessionEventTotals(sessionId)
 
   const itemsRs = await db.execute({
     sql: `SELECT COALESCE(SUM(si.qty), 0) AS totalQty
@@ -167,6 +193,16 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
     args: [sessionId]
   })
   const totalItemsSold = Number((itemsRs.rows[0] as any).totalQty)
+
+  const itemsSoldRs = await db.execute({
+    sql: `SELECT si.product_name AS name, COALESCE(SUM(si.qty), 0) AS qty, COALESCE(SUM(si.total), 0) AS total
+          FROM sales_items si JOIN sales_invoices i ON i.id = si.invoice_id
+          WHERE i.session_id = ? AND i.deleted_at IS NULL
+          GROUP BY si.product_id, si.product_name
+          ORDER BY qty DESC, si.product_name`,
+    args: [sessionId]
+  })
+  const itemsSold = itemsSoldRs.rows.map((r: any) => ({ name: String(r.name), qty: Number(r.qty), total: Number(r.total) }))
 
   const expensesRs = await db.execute({
     sql: `SELECT method, COALESCE(SUM(amount), 0) AS total
@@ -205,8 +241,12 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
     openingBalance: Number(session.openingBalance),
     invoiceCount,
     totalItemsSold,
+    itemsSold,
     totalSales,
     salesByMethod,
+    totalTips,
+    totalEventPayments: eventTotals.total,
+    eventPaymentCount: eventTotals.count,
     totalExpenses,
     expensesByMethod,
     totalPurchases,

@@ -182,7 +182,7 @@ export async function convertQuotationToInvoice(
     redeemPoints: 0
   }
 
-  const result = await checkout(checkoutInput, userId)
+  const result = await checkout(checkoutInput, userId, { skipDiscountCheck: true })
   if (!result.ok || !result.invoiceId) return { ok: false, error: result.error ?? 'تعذر إتمام البيع' }
 
   await db.execute({

@@ -7,6 +7,8 @@ import { CATALOG_SYNC_CHANNELS, MANUALLY_LOGGED_CHANNELS } from '../shared/mutat
 import { ACTOR_META_KEY, type ActorMeta } from '../shared/activityActor'
 import { login } from '../main/services/auth'
 import { logUserActivity } from '../main/services/users'
+import { licenseBlockReason } from '../main/services/license'
+import { printCapture, type DevicePrintProfile, type PrintJob } from '../main/services/printContext'
 import { triggerDebouncedSync } from '../main/services/priceCheckerSync'
 import { signToken, requireAuth, verifyToken, type AuthedRequest } from './auth'
 
@@ -37,7 +39,8 @@ async function afterMutation(channel: string, actor: ActorMeta): Promise<void> {
 export function createApp(): express.Express {
   const app = express()
   app.use(cors())
-  app.use(express.json({ limit: '25mb' }))
+  // الواجهة بتبعت undefined كعلامة {__undef:true} (JSON مابيفرّقش بين undefined وnull وقنوات كتير بتعتمد على الفرق، مثلاً LIMIT null بيفشل)
+  app.use(express.json({ limit: '25mb', reviver: (_k, v) => (v && typeof v === 'object' && (v as any).__undef === true ? undefined : v) }))
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, service: 'qcp-web-backend', time: new Date().toISOString() })
@@ -69,8 +72,10 @@ export function createApp(): express.Express {
    * يعني كل قنوات settings:* كانت بتتنفذ من غير مصادقة بالغلط. اتصلح بفحص req.path يدويًا هنا بدل ده.
    */
   app.use('/api', (req: AuthedRequest, res, next) => {
-    if (req.path === '/rpc/settings:getStore') {
-      handlers['settings:getStore']()
+    // قنوات قراءة فقط محتاجها شاشة الدخول/قفل الترخيص قبل ما يبقى فيه توكن (مش بيانات حساسة)
+    const publicChannel = req.path === '/rpc/settings:getStore' ? 'settings:getStore' : req.path === '/rpc/license:getStatus' ? 'license:getStatus' : null
+    if (publicChannel) {
+      handlers[publicChannel]()
         .then((result: unknown) => res.json({ ok: true, result }))
         .catch((err: any) => res.status(500).json({ ok: false, error: err?.message ?? 'حدث خطأ غير متوقع' }))
       return
@@ -105,9 +110,17 @@ export function createApp(): express.Express {
     const callArgs = isMutating ? [...args, actor] : args
 
     try {
-      const result = await handler(...callArgs)
+      const blocked = await licenseBlockReason(channel)
+      if (blocked) {
+        res.status(403).json({ ok: false, error: blocked })
+        return
+      }
+      // الطباعة بتتم على جهاز المتصفح (QZ Tray): لو الطلب فيه printProfile بنشغّل القناة جوه capture ونرجّع الـjobs في الرد
+      const printProfile = req.body?.printProfile as DevicePrintProfile | undefined
+      const capture = printProfile ? { profile: printProfile, jobs: [] as PrintJob[] } : null
+      const result = capture ? await printCapture.run(capture, () => handler(...callArgs)) : await handler(...callArgs)
       if (isMutating) await afterMutation(channel, actor)
-      res.json({ ok: true, result })
+      res.json({ ok: true, result, ...(capture ? { printJobs: capture.jobs } : {}) })
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message ?? 'حدث خطأ غير متوقع' })
     }

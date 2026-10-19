@@ -8,9 +8,11 @@ interface Props {
   invoice: InvoiceView
   onClose: () => void
   onChanged: () => void
+  /** false = من غير زرار تعديل الفاتورة (مثلاً المرتجع من شاشة البيع لكاشير مالوش صلاحية الفواتير) */
+  allowEdit?: boolean
 }
 
-export function InvoiceDetailModal({ invoice, onClose, onChanged }: Props): JSX.Element {
+export function InvoiceDetailModal({ invoice, onClose, onChanged, allowEdit = true }: Props): JSX.Element {
   const { t } = useTranslation()
   const user = useAppStore((s) => s.user)
 
@@ -163,12 +165,14 @@ export function InvoiceDetailModal({ invoice, onClose, onChanged }: Props): JSX.
           <button className="qcp-btn qcp-btn-secondary" onClick={() => window.api.print.previewReceipt(invoice.id)}>
             {t('common.preview')}
           </button>
-          <button className="qcp-btn qcp-btn-secondary" onClick={() => setEditing((v) => !v)}>
-            {t('invoices.edit')}
-          </button>
+          {allowEdit && (
+            <button className="qcp-btn qcp-btn-secondary" onClick={() => setEditing((v) => !v)}>
+              {t('invoices.edit')}
+            </button>
+          )}
         </div>
 
-        {editing && (
+        {allowEdit && editing && (
           <div className="qcp-card" style={{ marginBottom: 10 }}>
             <h3 style={{ marginTop: 0, fontSize: 14 }}>{t('invoices.editTitle')}</h3>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>

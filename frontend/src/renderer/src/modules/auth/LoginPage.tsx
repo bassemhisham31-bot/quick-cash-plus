@@ -1,7 +1,8 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
-import type { StoreSettings } from '../../../../shared/types'
+import type { NetworkStatus, StoreSettings } from '../../../../shared/types'
+import { NetworkSection } from '../settings/SettingsPage'
 
 const FEATURE_ICONS: Record<string, string> = {
   customersVendors: '👥',
@@ -25,11 +26,44 @@ export function LoginPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [store, setStore] = useState<StoreSettings | null>(null)
+  // قايمة المستخدمين للاختيار بدل الكتابة — لو ماجاتش (مثلاً الجهاز الفرعي مش شايف الرئيسي) بترجع خانة الكتابة
+  const [loginUsers, setLoginUsers] = useState<{ username: string; fullName: string }[]>([])
+  const passwordRef = useRef<HTMLInputElement>(null)
+  // الجهاز الفرعي: حالة الاتصال بالرئيسي تظهر هنا، وزرار يفتح إعدادات الشبكة من غير تسجيل دخول
+  // (لو الـ IP أو الكود غلط مكانش فيه أي طريقة توصل للإعدادات)
+  const [netStatus, setNetStatus] = useState<NetworkStatus | null>(null)
+  const [showNetwork, setShowNetwork] = useState(false)
+
+  function loadLoginData(): void {
+    window.api.settings.getStore().then(setStore).catch(() => undefined)
+    window.api.auth
+      .listLoginUsers()
+      .then((list) => {
+        setLoginUsers(list)
+        if (!list.length) return
+        // المحفوظ لو لسه موجود، وإلا أول مستخدم (الأدمن)
+        setUsername((current) => (list.some((u) => u.username === current) ? current : list[0].username))
+        setTimeout(() => passwordRef.current?.focus(), 0)
+      })
+      .catch(() => undefined)
+  }
 
   useEffect(() => {
-    window.api.settings.getStore().then(setStore).catch(() => undefined)
     const saved = localStorage.getItem('qcp_saved_username')
     if (saved) setUsername(saved)
+    loadLoginData()
+    // الجهاز الفرعي بيبعت data:changed لما الاتصال بالرئيسي يفتح — نعيد تحميل قايمة المستخدمين ساعتها
+    const unsubscribe = window.api.onDataChanged(() => loadLoginData())
+    const refreshStatus = (): void => {
+      window.api.network.getStatus().then(setNetStatus).catch(() => undefined)
+    }
+    refreshStatus()
+    const id = setInterval(refreshStatus, 3000)
+    return () => {
+      unsubscribe()
+      clearInterval(id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function handleSubmit(e: FormEvent): Promise<void> {
@@ -45,6 +79,8 @@ export function LoginPage(): JSX.Element {
       } else {
         setError(result.error ?? t('auth.invalid'))
       }
+    } catch (err: any) {
+      setError(err?.message ?? t('auth.invalid'))
     } finally {
       setLoading(false)
     }
@@ -94,13 +130,33 @@ export function LoginPage(): JSX.Element {
 
           <div className="qcp-field">
             <label>👤 {t('auth.username')}</label>
-            <input className="qcp-input" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
+            {loginUsers.length > 0 ? (
+              <select
+                className="qcp-select"
+                value={username}
+                onChange={(e) => {
+                  setUsername(e.target.value)
+                  setPassword('')
+                  passwordRef.current?.focus()
+                }}
+                style={{ fontSize: 15 }}
+              >
+                {loginUsers.map((u) => (
+                  <option key={u.username} value={u.username}>
+                    {u.fullName !== u.username ? `${u.fullName} (${u.username})` : u.username}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input className="qcp-input" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
+            )}
           </div>
 
           <div className="qcp-field">
             <label>🛡️ {t('auth.password')}</label>
             <div style={{ display: 'flex', gap: 6 }}>
               <input
+                ref={passwordRef}
                 className="qcp-input"
                 style={{ flex: 1 }}
                 type={showPassword ? 'text' : 'password'}
@@ -142,6 +198,39 @@ export function LoginPage(): JSX.Element {
             {loading ? t('common.loading') : `${t('auth.submit')} ←`}
           </button>
         </form>
+
+        {netStatus?.role === 'sub' && (
+          <div
+            className={`qcp-pill ${netStatus.connectedToMain ? 'success' : 'critical'}`}
+            style={{ marginTop: 14, display: 'block', whiteSpace: 'normal', lineHeight: 1.6 }}
+          >
+            🖧 {netStatus.connectedToMain ? 'متصل بالجهاز الرئيسي' : 'غير متصل بالجهاز الرئيسي'}
+            {!netStatus.connectedToMain && netStatus.lastConnectionError && (
+              <div style={{ fontSize: 12 }}>{netStatus.lastConnectionError}</div>
+            )}
+          </div>
+        )}
+        {netStatus && netStatus.role !== 'standalone' && (
+          <button
+            type="button"
+            className="qcp-btn qcp-btn-secondary"
+            style={{ marginTop: 8 }}
+            onClick={() => setShowNetwork(true)}
+          >
+            ⚙️ إعدادات الشبكة
+          </button>
+        )}
+
+        {showNetwork && (
+          <div className="qcp-modal-backdrop" onClick={() => setShowNetwork(false)}>
+            <div className="qcp-modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+              <NetworkSection />
+              <button type="button" className="qcp-btn qcp-btn-secondary" style={{ marginTop: 10, width: '100%' }} onClick={() => setShowNetwork(false)}>
+                إغلاق
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="qcp-card" style={{ marginTop: 22, textAlign: 'center' }}>
           <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)', marginBottom: 4 }}>

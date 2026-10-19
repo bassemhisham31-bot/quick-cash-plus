@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Captain } from '../../../../shared/types'
+import { confirmDialog } from '../../components/ConfirmDialogHost'
 
 export function CaptainsPage(): JSX.Element {
   const [captains, setCaptains] = useState<Captain[]>([])
@@ -24,7 +25,7 @@ export function CaptainsPage(): JSX.Element {
   }
 
   async function remove(captain: Captain): Promise<void> {
-    if (!window.confirm(`حذف الكابتن "${captain.name}"؟`)) return
+    if (!await confirmDialog(`حذف الكابتن "${captain.name}"؟`)) return
     await window.api.settings.deleteCaptain(captain.id)
     refresh()
   }

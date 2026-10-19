@@ -78,3 +78,16 @@ export async function openCashDrawerViaQz(printerName: string, pin: 'pin2' | 'pi
   const config = qz.configs.create(printerName)
   await qz.print(config, [{ type: 'raw', format: 'command', data: [0x1b, 0x70, m, 0x19, 0xfa] }])
 }
+
+/** طابعات الجهاز ده (اللي QZ Tray شايفها) — بديل getPrintersAsync بتاع Electron. */
+export async function listPrintersViaQz(): Promise<{ name: string; displayName: string; isDefault: boolean }[]> {
+  await ensureConnected()
+  const names: string[] = await qz.printers.find()
+  let def: string | null = null
+  try {
+    def = await qz.printers.getDefault()
+  } catch {
+    def = null
+  }
+  return (Array.isArray(names) ? names : [names]).map((n) => ({ name: n, displayName: n, isDefault: n === def }))
+}

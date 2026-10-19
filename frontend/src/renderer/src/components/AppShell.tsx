@@ -11,6 +11,8 @@ import { VendorsPage } from '../modules/vendors/VendorsPage'
 import { InvoicesPage } from '../modules/invoices/InvoicesPage'
 import { ExpensesPage } from '../modules/expenses/ExpensesPage'
 import { ShiftsPage } from '../modules/shifts/ShiftsPage'
+import { TreasuryPage } from '../modules/treasury/TreasuryPage'
+import { AccountingPage } from '../modules/accounting/AccountingPage'
 import { ReturnsPage } from '../modules/returns/ReturnsPage'
 import { ReportsPage } from '../modules/reports/ReportsPage'
 import { SalesRepsPage } from '../modules/salesReps/SalesRepsPage'
@@ -20,15 +22,20 @@ import { RestaurantPage } from '../modules/restaurant/RestaurantPage'
 import { RestaurantTablesPage } from '../modules/restaurant/RestaurantTablesPage'
 import { CaptainsPage } from '../modules/restaurant/CaptainsPage'
 import { DeliveryPage } from '../modules/delivery/DeliveryPage'
+import { EventsPage } from '../modules/events/EventsPage'
+import { AttendancePage } from '../modules/attendance/AttendancePage'
 import { SettingsPage } from '../modules/settings/SettingsPage'
 import { isViewAllowed, firstPermittedView } from '../lib/permissions'
 import { useKeyboardShortcuts } from '../lib/useKeyboardShortcuts'
 import { AssistantFloatingButton } from './AssistantFloatingButton'
+import { ConfirmDialogHost } from './ConfirmDialogHost'
 
 // شاشات بترفض تعمل remount كامل عند وصول إشعار "data changed" من أي عملية بيانات
 // (MUTATING_CHANNELS) — لأنها بتعمل refresh() لنفسها يدويًا، وremount كان بيمسح
 // state محلي مهم فيها (سلة بيع جارية، تاب إعدادات مختار، فلتر، نافذة نتيجة عملية لسه ظاهرة).
 const SELF_REFRESHING_VIEWS: ViewName[] = [
+  'treasury',
+  'accounting',
   'pos',
   'settings',
   'stockPermits',
@@ -38,7 +45,9 @@ const SELF_REFRESHING_VIEWS: ViewName[] = [
   'restaurant',
   'restaurantTables',
   'restaurantCaptains',
-  'delivery'
+  'delivery',
+  'events',
+  'attendance'
 ]
 
 export function AppShell(): JSX.Element {
@@ -68,10 +77,13 @@ export function AppShell(): JSX.Element {
 
   const refreshKey = SELF_REFRESHING_VIEWS.includes(view) ? view : `${view}-${dataVersion}`
   const viewAllowed = isViewAllowed(user, view, disabledFeatures)
+  // القايمة الجانبية بتظهر في الشاشة الرئيسية (لوحة التحكم) بس — أي شاشة تانية بتفتح بالعرض الكامل
+  // وفيها زرار 🏠 في الشريط العلوي يرجّع للرئيسية
+  const isHome = view === firstPermittedView(user, disabledFeatures)
 
   return (
-    <div className="qcp-app-shell">
-      <Sidebar />
+    <div className={`qcp-app-shell${isHome ? '' : ' qcp-no-sidebar'}`}>
+      {isHome && <Sidebar />}
       <div className="qcp-main">
         <Topbar />
         <main className="qcp-content" key={refreshKey}>
@@ -85,6 +97,8 @@ export function AppShell(): JSX.Element {
           {viewAllowed && view === 'returns' && <ReturnsPage />}
           {viewAllowed && view === 'expenses' && <ExpensesPage />}
           {viewAllowed && view === 'shifts' && <ShiftsPage />}
+          {viewAllowed && view === 'treasury' && <TreasuryPage />}
+          {viewAllowed && view === 'accounting' && <AccountingPage />}
           {viewAllowed && view === 'reports' && <ReportsPage />}
           {viewAllowed && view === 'salesReps' && <SalesRepsPage />}
           {viewAllowed && view === 'quotations' && <QuotationsPage />}
@@ -93,10 +107,13 @@ export function AppShell(): JSX.Element {
           {viewAllowed && view === 'restaurantTables' && <RestaurantTablesPage />}
           {viewAllowed && view === 'restaurantCaptains' && <CaptainsPage />}
           {viewAllowed && view === 'delivery' && <DeliveryPage />}
+          {viewAllowed && view === 'events' && <EventsPage />}
+          {viewAllowed && view === 'attendance' && <AttendancePage />}
           {viewAllowed && view === 'settings' && <SettingsPage />}
         </main>
       </div>
       <AssistantFloatingButton />
+      <ConfirmDialogHost />
     </div>
   )
 }

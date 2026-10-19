@@ -1,5 +1,21 @@
 import type {
+  SessionUser,
+  EventBooking,
+  EventBookingInput,
+  EventBookingStatus,
+  EventPackage,
+  EventPackageInput,
+  CashDifferenceRow,
+  Treasury,
+  TreasuryInput,
+  TreasuryTransferInput,
+  TreasuryTransferView,
+  VoucherInput,
+  VoucherView,
+  HeldInvoice,
+  HeldInvoiceInput,
   ActivateLicenseResult,
+  KitchenNotification,
   AssistantChatMessage,
   AssistantConnectionTestResult,
   AssistantSendMessageResult,
@@ -16,6 +32,15 @@ import type {
   ShiftListRow,
   ShiftSummaryReport,
   Captain,
+  AttendancePayrollApproval,
+  AttendancePayrollRow,
+  AttendancePayrollRules,
+  AttendanceSettingsInput,
+  AttendanceDayRow,
+  AttendanceDeviceUser,
+  AttendanceEmployeeLink,
+  AttendanceSettings,
+  AttendanceSyncResult,
   CategoryPrinter,
   CategorySalesItem,
   CheckoutInput,
@@ -91,6 +116,11 @@ import type {
   RestaurantOrderView,
   RestaurantSettings,
   RestaurantTable,
+  RestaurantFloor,
+  RestaurantFloorLine,
+  RestaurantFloorLineInput,
+  RestaurantFloorSettings,
+  RestaurantTableInput,
   StockPermitInput,
   StockPermitListItem,
   StockPermitResult,
@@ -143,10 +173,26 @@ interface CashSessionView {
 const TOKEN_STORAGE_KEY = 'qcp_web_token'
 let authToken: string | null = localStorage.getItem(TOKEN_STORAGE_KEY)
 
+const USER_STORAGE_KEY = 'qcp_web_user'
+
 function setToken(token: string | null): void {
   authToken = token
   if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token)
-  else localStorage.removeItem(TOKEN_STORAGE_KEY)
+  else {
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
+    localStorage.removeItem(USER_STORAGE_KEY)
+  }
+}
+
+/** المستخدم المسجّل من زيارة سابقة (لو التوكن لسه محفوظ) — بيرجّع الجلسة بعد إعادة تحميل الصفحة بدل ما نطلب الدخول تاني. */
+export function getStoredUser(): SessionUser | null {
+  if (!authToken) return null
+  try {
+    const raw = localStorage.getItem(USER_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as SessionUser) : null
+  } catch {
+    return null
+  }
 }
 
 /** يُستخدم من App.tsx عند الإقلاع عشان يعرف لو فيه توكن محفوظ من زيارة سابقة قبل ما يعرض شاشة الدخول. */
@@ -154,38 +200,90 @@ export function hasStoredToken(): boolean {
   return !!authToken
 }
 
+/* ------------------------------ الطباعة: السيرفر يبني المستند، والمتصفح يطبعه على طابعات الجهاز ------------------------------ */
+
 /**
- * بديل ipcRenderer.invoke: بينادي نفس اسم القناة بالظبط عبر /api/rpc/:channel على الباك إند.
- * "مين نفّذ العملية" (لتسجيل نشاط المستخدمين) بقى بيتحدد من السيرفر نفسه من التوكن الموثّق،
- * مش من الواجهة زي قديم — مفيش داعي لمنطق ACTOR_META_KEY هنا خالص.
+ * زي الجهاز الفرعي في الأوفلاين: كل جهاز (متصفح) له إعدادات طباعة وطابعات تصنيفات خاصة بيه (بتتخزن محليًا هنا)،
+ * وبتتبعت للسيرفر مع قنوات الطباعة — السيرفر بيبني الـHTML ويرجّع "jobs"، والمتصفح بينفّذها عبر QZ Tray.
  */
-async function invoke(channel: string, ...args: unknown[]): Promise<any> {
+const PRINT_CHANNELS = new Set([
+  'print:receipt',
+  'print:previewReceipt',
+  'print:labels',
+  'print:quotation',
+  'print:previewQuotation',
+  'print:shiftSummary',
+  'print:previewShiftSummary',
+  'print:stockPermit',
+  'print:previewStockPermit',
+  'print:kitchenTicket',
+  'print:heldInvoice',
+  'print:voucher',
+  'print:eventBooking',
+  'restaurant:printCheck',
+  'restaurant:sendToKitchen',
+  'restaurant:reprintKitchen'
+])
+
+type PrintJob =
+  | { kind: 'print'; html: string; printSettings: PrintSettings; thermalWidthMm?: number; pageSizeMm?: { width: number; height: number } }
+  | { kind: 'preview'; previewKind: string; title: string; html: string }
+  | { kind: 'drawer'; printer: string; pin: 'pin2' | 'pin5' }
+
+interface DevicePrintProfile {
+  printSettings: PrintSettings
+  categoryPrinters: Record<string, string>
+}
+
+const PROFILE_STORAGE_KEY = 'qcp_device_print_profile'
+
+async function rpc(channel: string, args: unknown[], printProfile?: DevicePrintProfile): Promise<{ result: any; printJobs?: PrintJob[] }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (authToken) headers.Authorization = `Bearer ${authToken}`
 
   const res = await fetch(`/api/rpc/${channel}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ args })
+    body: JSON.stringify({ args, ...(printProfile ? { printProfile } : {}) }, (_k, v) => (v === undefined ? { __undef: true } : v))
   })
 
   if (res.status === 401) {
-    setToken(null)
-    window.location.reload()
+    // لو كان فيه توكن واتّرفض = الجلسة انتهت (نرجع لشاشة الدخول). لو مفيش توكن أصلاً (قبل الدخول) مفيش داعي لإعادة التحميل.
+    if (authToken) {
+      setToken(null)
+      window.location.reload()
+    }
     throw new Error('انتهت صلاحية الجلسة — لازم تسجّل دخول تاني')
   }
 
   const payload = await res.json()
   if (!payload.ok) throw new Error(payload.error ?? 'حدث خطأ غير متوقع')
-  return payload.result
+  return { result: payload.result, printJobs: payload.printJobs }
 }
 
-type BuiltHtml = { html: string; printSettings: PrintSettings }
+async function loadPrintProfile(): Promise<DevicePrintProfile> {
+  try {
+    const raw = localStorage.getItem(PROFILE_STORAGE_KEY)
+    if (raw) return JSON.parse(raw) as DevicePrintProfile
+  } catch {
+    // بروفايل تالف — نبدأ من جديد
+  }
+  // أول مرة: نبدأ من إعدادات السيرفر (المقاس والنسخ...) لكن من غير اسم طابعة — الطابعات هنا هي طابعات الجهاز ده
+  const main = (await rpc('settings:getPrint', [])).result as PrintSettings
+  const profile: DevicePrintProfile = { printSettings: { ...main, defaultPrinter: null }, categoryPrinters: {} }
+  savePrintProfile(profile)
+  return profile
+}
 
-/**
- * QZ Tray بيعلّق (hang) لو الـconfig من غير "size" خالص — لازم عرض حقيقي دايمًا (تفصيل في qzPrint.ts).
- * الحراري بياخد عرضه الفعلي، والرسمي (A4/A5) بياخد عرض الورقة القياسي بالمليمتر (بورتريه).
- */
+function savePrintProfile(profile: DevicePrintProfile): void {
+  try {
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile))
+  } catch {
+    // التخزين المحلي مش متاح — الإعدادات هتفضل للجلسة الحالية بس
+  }
+}
+
+/** QZ Tray بيعلّق لو الـconfig من غير "size" — لازم عرض حقيقي دايمًا (تفصيل في qzPrint.ts). */
 function widthMmOf(printSettings: PrintSettings): number {
   if (printSettings.paperSize === '80mm') return 80
   if (printSettings.paperSize === '58mm') return 58
@@ -193,122 +291,192 @@ function widthMmOf(printSettings: PrintSettings): number {
   return 210 // A4
 }
 
-/** طباعة فعلية على الطابعة عبر QZ Tray — نفس النمط لكل أنواع الطباعة (إيصال/عرض سعر/إذن/وردية). */
-async function fetchAndPrint(
-  fetcher: () => Promise<BuiltHtml | null>,
-  notFoundError: string,
-  options: { printerOverride?: string | null; widthMmOverride?: number } = {}
-): Promise<PrintResult> {
-  try {
-    const built = await fetcher()
-    if (!built) return { ok: false, error: notFoundError }
-    const { printHtmlViaQz } = await import('./qzPrint')
-    await printHtmlViaQz(built.html, {
-      printerName: options.printerOverride || built.printSettings.defaultPrinter,
-      widthMm: options.widthMmOverride ?? widthMmOf(built.printSettings)
-    })
-    return { ok: true }
-  } catch (err: any) {
-    return { ok: false, error: err?.message ?? 'تعذرت الطباعة' }
+/** معاينة في تاب جديد — رابط Blob + نقرة بدل window.open() لأن المتصفحات بتمنعه لما يتنادى من كود. */
+function openPreviewTab(html: string): void {
+  const blob = new Blob([html], { type: 'text/html' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.target = '_blank'
+  link.rel = 'noopener'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(url), 30000)
+}
+
+async function runPrintJob(job: PrintJob): Promise<void> {
+  if (job.kind === 'preview') {
+    openPreviewTab(job.html)
+    return
+  }
+  const { printHtmlViaQz, openCashDrawerViaQz } = await import('./qzPrint')
+  if (job.kind === 'drawer') {
+    await openCashDrawerViaQz(job.printer, job.pin)
+    return
+  }
+  const widthMm = job.pageSizeMm?.width ?? job.thermalWidthMm ?? widthMmOf(job.printSettings)
+  // نكرر النداء بعدد النسخ بدل نسخ الطابعة نفسها (تعريفات الطابعات الحرارية بتطبع نسخ فاضية مع copies > 1)
+  const copies = Math.max(1, job.printSettings.copies ?? 1)
+  for (let i = 0; i < copies; i++) {
+    await printHtmlViaQz(job.html, { printerName: job.printSettings.defaultPrinter, widthMm })
   }
 }
 
-/**
- * معاينة بس (بدون طباعة فعلية) — بتفتح النتيجة في تاب جديد بالمتصفح.
- * بنستخدم رابط Blob + نقرة على <a> بدل window.open() المباشر لأن متصفحات كتير (ومتصفحات
- * الاختبار الآلي) بتمنع window.open() المُستدعى من كود، لكن نقرة فعلية على رابط بتتفادى المنع ده.
- */
-async function fetchAndPreview(fetcher: () => Promise<BuiltHtml | null>, notFoundError: string): Promise<PrintResult> {
-  try {
-    const built = await fetcher()
-    if (!built) return { ok: false, error: notFoundError }
-    const blob = new Blob([built.html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.target = '_blank'
-    link.rel = 'noopener'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    setTimeout(() => URL.revokeObjectURL(url), 30000)
-    return { ok: true }
-  } catch (err: any) {
-    return { ok: false, error: err?.message ?? 'تعذرت المعاينة' }
-  }
-}
-
-function printApi() {
-  return {
-    receipt: (invoiceId: number): Promise<PrintResult> =>
-      fetchAndPrint(() => invoke('print:getReceiptHtml', invoiceId), 'الفاتورة غير موجودة'),
-    previewReceipt: (invoiceId: number): Promise<PrintResult> =>
-      fetchAndPreview(() => invoke('print:getReceiptHtml', invoiceId), 'الفاتورة غير موجودة'),
-
-    quotation: (quotationId: number): Promise<PrintResult> =>
-      fetchAndPrint(() => invoke('print:getQuotationHtml', quotationId), 'عرض السعر غير موجود'),
-    previewQuotation: (quotationId: number): Promise<PrintResult> =>
-      fetchAndPreview(() => invoke('print:getQuotationHtml', quotationId), 'عرض السعر غير موجود'),
-
-    stockPermit: (permitId: number): Promise<PrintResult> =>
-      fetchAndPrint(() => invoke('print:getStockPermitHtml', permitId), 'الإذن غير موجود'),
-    previewStockPermit: (permitId: number): Promise<PrintResult> =>
-      fetchAndPreview(() => invoke('print:getStockPermitHtml', permitId), 'الإذن غير موجود'),
-
-    shiftSummary: (sessionId: number): Promise<PrintResult> =>
-      fetchAndPrint(() => invoke('print:getShiftSummaryHtml', sessionId), 'الوردية غير موجودة'),
-    previewShiftSummary: (sessionId: number): Promise<PrintResult> =>
-      fetchAndPreview(() => invoke('print:getShiftSummaryHtml', sessionId), 'الوردية غير موجودة'),
-
-    /** الليبل مقاسه بيتحدد من إعدادات الليبل نفسها (labelWidthMm/labelHeightMm) مش من عرض الورق الحراري. */
-    labels: async (items: { barcode: string; name: string; price: number }[]): Promise<PrintResult> => {
+async function invoke(channel: string, ...args: unknown[]): Promise<any> {
+  // إعدادات الطباعة/طابعات التصنيفات خاصة بالجهاز ده — بتتخزن محليًا مش على السيرفر
+  switch (channel) {
+    case 'settings:getPrint':
+      return (await loadPrintProfile()).printSettings
+    case 'settings:updatePrint': {
+      const profile = await loadPrintProfile()
+      profile.printSettings = args[0] as PrintSettings
+      savePrintProfile(profile)
+      return profile.printSettings
+    }
+    case 'settings:getCategoryPrinters': {
+      const profile = await loadPrintProfile()
+      const categories = ((await rpc('catalog:listCategories', [])).result ?? []) as { id: number; name: string }[]
+      return Object.entries(profile.categoryPrinters).map(([id, printerName]) => ({
+        categoryId: Number(id),
+        categoryName: categories.find((c) => c.id === Number(id))?.name ?? '',
+        printerName
+      }))
+    }
+    case 'settings:setCategoryPrinter': {
+      const [categoryId, printerName] = args as [number, string | null]
+      const profile = await loadPrintProfile()
+      if (printerName) profile.categoryPrinters[String(categoryId)] = printerName
+      else delete profile.categoryPrinters[String(categoryId)]
+      savePrintProfile(profile)
+      return undefined
+    }
+    case 'settings:getPrinters': {
+      const { listPrintersViaQz } = await import('./qzPrint')
+      return listPrintersViaQz()
+    }
+    case 'print:openDrawer': {
+      const profile = await loadPrintProfile()
+      const printer = profile.printSettings.defaultPrinter
+      if (!printer) return { ok: false, error: 'حدد طابعة افتراضية لهذا الجهاز من إعدادات الطباعة أولًا' }
       try {
-        const built = await invoke('print:getLabelsHtml', items)
-        if (!built) return { ok: false, error: 'اختر صنف واحد على الأقل' }
-        const { labelSettings } = built
-        const widthMm = labelSettings.orientation === 'vertical' ? labelSettings.labelWidthMm : labelSettings.labelHeightMm
-        const { printHtmlViaQz } = await import('./qzPrint')
-        await printHtmlViaQz(built.html, { printerName: built.printSettings.defaultPrinter, widthMm })
-        return { ok: true }
-      } catch (err: any) {
-        return { ok: false, error: err?.message ?? 'تعذرت الطباعة' }
-      }
-    },
-
-    kitchenTicket: (
-      meta: KitchenTicketMeta,
-      printerName: string | null,
-      items: { name: string; qty: number; note: string | null }[]
-    ): Promise<PrintResult> =>
-      fetchAndPrint(() => invoke('print:getKitchenTicketHtml', meta, items), 'تعذر تجهيز بون المطبخ', {
-        printerOverride: printerName
-      }),
-
-    /** فتح درج الكاشير — أمر ESC/POS خام بيتبعت مباشرة عبر QZ Tray، مش HTML. */
-    openDrawer: async (): Promise<PrintResult> => {
-      try {
-        const [printSettings, deviceSettings] = await Promise.all([
-          invoke('settings:getPrint'),
-          invoke('settings:getDevice')
-        ])
-        if (!printSettings.defaultPrinter) {
-          return { ok: false, error: 'حدد طابعة افتراضية من إعدادات الطباعة أولًا' }
-        }
+        const device = (await rpc('settings:getDevice', [])).result as { drawerPin?: string }
         const { openCashDrawerViaQz } = await import('./qzPrint')
-        await openCashDrawerViaQz(printSettings.defaultPrinter, deviceSettings.drawerPin === 'pin5' ? 'pin5' : 'pin2')
+        await openCashDrawerViaQz(printer, device.drawerPin === 'pin5' ? 'pin5' : 'pin2')
         return { ok: true }
       } catch (err: any) {
         return { ok: false, error: err?.message ?? 'تعذر فتح الدرج' }
       }
     }
   }
+
+  if (!PRINT_CHANNELS.has(channel)) return (await rpc(channel, args)).result
+
+  const profile = await loadPrintProfile()
+  const response = await rpc(channel, args, profile)
+  const errors: string[] = []
+  for (const job of response.printJobs ?? []) {
+    try {
+      await runPrintJob(job)
+    } catch (err: any) {
+      errors.push(err?.message ?? String(err))
+    }
+  }
+
+  const result = response.result
+  if (!errors.length) return result
+  const message = errors.join(' / ')
+  if (result && typeof result === 'object' && 'printedCount' in result) {
+    return { ...result, printWarning: `الطلب اتبعت بس تذكرة المطبخ ما اتطبعتش: ${message}` }
+  }
+  return { ...(result ?? {}), ok: false, error: message }
 }
 
+const NOT_ON_WEB = 'الميزة دي لسه مش متاحة في نسخة الويب'
+
 const api = {
+  ledger: {
+    listAccounts: (): Promise<{ code: string; name: string; type: string; isSystem: boolean; active: boolean }[]> => invoke('ledger:listAccounts'),
+    createAccount: (input: { code: string; name: string; type: string }): Promise<void> => invoke('ledger:createAccount', input),
+    setAccountActive: (code: string, active: boolean): Promise<void> => invoke('ledger:setAccountActive', code, active),
+    listEntries: (): Promise<{ id: number; date: string; description: string; debit: number }[]> => invoke('ledger:listEntries'),
+    createEntry: (
+      input: { date: string; description: string; lines: { code: string; debit: number; credit: number; memo?: string }[] },
+      userId: number
+    ): Promise<number> => invoke('ledger:createEntry', input, userId),
+    deleteEntry: (id: number): Promise<void> => invoke('ledger:deleteEntry', id)
+  },
+  accounting: {
+    listReports: (): Promise<{ type: string; icon: string; label: string; needsWarehouse?: boolean; noDates?: boolean; needsAccount?: boolean }[]> =>
+      invoke('accounting:listReports'),
+    run: (type: string, filter: { from?: string; to?: string; warehouseId?: number | null; accountCode?: string }): Promise<ReportResult> =>
+      invoke('accounting:run', type, filter)
+  },
+  treasury: {
+    list: (): Promise<Treasury[]> => invoke('treasury:list'),
+    create: (input: TreasuryInput): Promise<void> => invoke('treasury:create', input),
+    update: (id: number, input: TreasuryInput): Promise<void> => invoke('treasury:update', id, input),
+    setDefault: (id: number): Promise<void> => invoke('treasury:setDefault', id),
+    delete: (id: number): Promise<void> => invoke('treasury:delete', id),
+    listVouchers: (filter?: { type?: 'receipt' | 'payment'; from?: string; to?: string }): Promise<VoucherView[]> =>
+      invoke('treasury:listVouchers', filter),
+    createVoucher: (input: VoucherInput, userId: number): Promise<VoucherView> => invoke('treasury:createVoucher', input, userId),
+    deleteVoucher: (id: number): Promise<void> => invoke('treasury:deleteVoucher', id),
+    printVoucher: (id: number, preview = false): Promise<{ ok: boolean; error?: string }> => invoke('print:voucher', id, preview),
+    listTransfers: (): Promise<TreasuryTransferView[]> => invoke('treasury:listTransfers'),
+    createTransfer: (input: TreasuryTransferInput, userId: number): Promise<void> => invoke('treasury:createTransfer', input, userId),
+    deleteTransfer: (id: number): Promise<void> => invoke('treasury:deleteTransfer', id),
+    listDifferences: (filter?: { from?: string; to?: string }): Promise<CashDifferenceRow[]> => invoke('treasury:listDifferences', filter),
+    statement: (treasuryId: number | null, from?: string, to?: string): Promise<ReportResult> =>
+      invoke('treasury:statement', treasuryId, from, to)
+  },
+  attendance: {
+    getSettings: (): Promise<AttendanceSettings> => invoke('attendance:getSettings'),
+    saveSettings: (input: AttendanceSettingsInput): Promise<void> =>
+      invoke('attendance:saveSettings', input),
+    test: (): Promise<{ ok: boolean; error?: string; info?: string }> => invoke('attendance:test'),
+    deviceUsers: (): Promise<AttendanceDeviceUser[]> => invoke('attendance:deviceUsers'),
+    sync: (): Promise<AttendanceSyncResult> => invoke('attendance:sync'),
+    employees: (): Promise<AttendanceEmployeeLink[]> => invoke('attendance:employees'),
+    linkEmployee: (employeeId: number, deviceUserId: string | null): Promise<void> =>
+      invoke('attendance:linkEmployee', employeeId, deviceUserId),
+    report: (from: string, to: string): Promise<AttendanceDayRow[]> => invoke('attendance:report', from, to),
+    getPayrollRules: (): Promise<AttendancePayrollRules> => invoke('attendance:getPayrollRules'),
+    savePayrollRules: (input: AttendancePayrollRules): Promise<void> => invoke('attendance:savePayrollRules', input),
+    saveEmployeeShift: (employeeId: number, shiftStart: string | null, shiftEnd: string | null, weeklyOff: string): Promise<void> =>
+      invoke('attendance:saveEmployeeShift', employeeId, shiftStart, shiftEnd, weeklyOff),
+    calculatePayroll: (from: string, to: string): Promise<AttendancePayrollRow[]> => invoke('attendance:calculatePayroll', from, to),
+    approvePayroll: (
+      from: string,
+      to: string,
+      items: AttendancePayrollApproval[],
+      userId: number
+    ): Promise<{ approved: number; skipped: string[] }> => invoke('attendance:approvePayroll', from, to, items, userId)
+  },
+  events: {
+    listPackages: (includeInactive = true): Promise<EventPackage[]> => invoke('events:listPackages', includeInactive),
+    upsertPackage: (input: EventPackageInput): Promise<void> => invoke('events:upsertPackage', input),
+    deletePackage: (id: number): Promise<void> => invoke('events:deletePackage', id),
+    listBookings: (filter?: { status?: EventBookingStatus; from?: string; to?: string }): Promise<EventBooking[]> =>
+      invoke('events:listBookings', filter),
+    getBooking: (id: number): Promise<EventBooking | null> => invoke('events:getBooking', id),
+    saveBooking: (input: EventBookingInput, userId: number): Promise<EventBooking> => invoke('events:saveBooking', input, userId),
+    addPayment: (bookingId: number, amount: number, method: PaymentMethod, note: string | null, userId: number): Promise<EventBooking> =>
+      invoke('events:addPayment', bookingId, amount, method, note, userId),
+    setStatus: (bookingId: number, status: EventBookingStatus): Promise<EventBooking> => invoke('events:setStatus', bookingId, status),
+    print: (id: number, preview = false): Promise<{ ok: boolean; error?: string }> => invoke('print:eventBooking', id, preview)
+  },
+  held: {
+    hold: (input: HeldInvoiceInput, userId: number | null): Promise<number> => invoke('held:hold', input, userId),
+    list: (): Promise<HeldInvoice[]> => invoke('held:list'),
+    get: (id: number): Promise<HeldInvoice | null> => invoke('held:get', id),
+    delete: (id: number): Promise<void> => invoke('held:delete', id),
+    print: (id: number, preview = false): Promise<{ ok: boolean; error?: string }> => invoke('print:heldInvoice', id, preview)
+  },
   session: {
-    setActiveUser: (): void => {
+    setActiveUser: (_id?: number, _username?: string): void => {
       // التتبع بقى عبر التوكن نفسه (setToken) مش user id/username منفصلين — موجودة هنا بس عشان
-      // appStore.ts القديم بينادي الدالة دي، فمحتاجينها تفضل موجودة بدون ما تعمل حاجة إضافية.
+      // appStore.ts بينادي الدالة دي، فمحتاجينها تفضل موجودة بدون ما تعمل حاجة إضافية.
     },
     clearActiveUser: (): void => {
       setToken(null)
@@ -324,8 +492,22 @@ const api = {
       const payload = await res.json()
       if (!payload.ok) return { ok: false, error: payload.error }
       setToken(payload.token)
+      try {
+        localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(payload.user))
+      } catch {
+        // التخزين المحلي مش متاح — الجلسة هتنتهي بإعادة التحميل
+      }
       return { ok: true, user: payload.user }
-    }
+    },
+    /** قبل تسجيل الدخول مفيش توكن — على الإنترنت مش هنكشف قايمة المستخدمين، فالشاشة بتكتب الاسم يدويًا. */
+    listLoginUsers: (): Promise<{ username: string; fullName: string }[]> =>
+      authToken ? invoke('auth:listLoginUsers') : Promise.resolve([]),
+    approveWithSupervisorPassword: (
+      password: string,
+      detail: string,
+      requestedBy: string | null
+    ): Promise<{ ok: boolean; approverName?: string; error?: string }> =>
+      invoke('auth:approveWithSupervisorPassword', password, detail, requestedBy)
   },
   catalog: {
     listCategories: (): Promise<Category[]> => invoke('catalog:listCategories'),
@@ -341,11 +523,15 @@ const api = {
     updateProduct: (id: number, input: ProductUpdateInput): Promise<Product> =>
       invoke('catalog:updateProduct', id, input),
     deleteProduct: (id: number): Promise<void> => invoke('catalog:deleteProduct', id),
+    adjustStock: (productId: number, warehouseId: number, mode: 'add' | 'set', qty: number, userId: number): Promise<number> =>
+      invoke('catalog:adjustStock', productId, warehouseId, mode, qty, userId),
     listWarehouses: (): Promise<Warehouse[]> => invoke('catalog:listWarehouses'),
+    stockByWarehouse: (productIds: number[]): Promise<{ productId: number; warehouseId: number; quantity: number }[]> =>
+      invoke('catalog:stockByWarehouse', productIds),
     createWarehouse: (name: string): Promise<Warehouse> => invoke('catalog:createWarehouse', name),
-    exportProducts: (): Promise<ExportResult> => invoke('catalog:exportProducts'),
-    exportProductsTemplate: (): Promise<ExportResult> => invoke('catalog:exportProductsTemplate'),
-    importProducts: (): Promise<ProductImportResult> => invoke('catalog:importProducts'),
+    exportProducts: (): Promise<ExportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ExportResult),
+    exportProductsTemplate: (): Promise<ExportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ExportResult),
+    importProducts: (): Promise<ProductImportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ProductImportResult),
     bulkUpdatePricesAndImages: (items: BulkPriceUpdateItem[]): Promise<BulkPriceUpdateResult> =>
       invoke('catalog:bulkUpdatePricesAndImages', items),
     bulkCreateProducts: (inputs: ProductInput[]): Promise<ProductImportResult> =>
@@ -498,8 +684,8 @@ const api = {
     getSummary: (): Promise<EmployeesSummary> => invoke('employees:getSummary')
   },
   attachments: {
-    pick: (): Promise<AttachFileResult> => invoke('attachments:pick'),
-    open: (path: string): Promise<{ ok: boolean; error?: string }> => invoke('attachments:open', path)
+    pick: (): Promise<AttachFileResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as AttachFileResult),
+    open: (_path: string): Promise<{ ok: boolean; error?: string }> => Promise.resolve({ ok: false, error: NOT_ON_WEB })
   },
   salesReps: {
     list: (includeInactive = true): Promise<SalesRep[]> => invoke('salesReps:list', includeInactive),
@@ -526,9 +712,14 @@ const api = {
   },
   restaurant: {
     listTables: (): Promise<RestaurantTable[]> => invoke('restaurant:listTables'),
-    upsertTable: (input: { id?: number; name: string; zone: string; seats: number; posX: number; posY: number }): Promise<RestaurantTable> =>
-      invoke('restaurant:upsertTable', input),
+    upsertTable: (input: RestaurantTableInput): Promise<RestaurantTable> => invoke('restaurant:upsertTable', input),
     deleteTable: (id: number): Promise<{ ok: boolean; error?: string }> => invoke('restaurant:deleteTable', id),
+    getFloor: (): Promise<RestaurantFloor> => invoke('restaurant:getFloor'),
+    saveFloorSettings: (input: RestaurantFloorSettings): Promise<RestaurantFloor> => invoke('restaurant:saveFloorSettings', input),
+    upsertFloorLine: (input: RestaurantFloorLineInput): Promise<RestaurantFloorLine> => invoke('restaurant:upsertFloorLine', input),
+    deleteFloorLine: (id: number): Promise<void> => invoke('restaurant:deleteFloorLine', id),
+    setTablePositions: (positions: { id: number; posX: number; posY: number }[]): Promise<void> =>
+      invoke('restaurant:setTablePositions', positions),
     mergeTables: (orderId: number, tableIds: number[]): Promise<RestaurantOrderResult> =>
       invoke('restaurant:mergeTables', orderId, tableIds),
     transferTable: (orderId: number, newTableId: number): Promise<RestaurantOrderResult> =>
@@ -537,7 +728,7 @@ const api = {
       invoke('restaurant:openOrder', input, userId),
     addItems: (orderId: number, items: RestaurantOrderItemInput[]): Promise<RestaurantOrderResult> =>
       invoke('restaurant:addItems', orderId, items),
-    updateItem: (itemId: number, patch: { qty?: number; note?: string; splitGroup?: number }): Promise<void> =>
+    updateItem: (itemId: number, patch: { qty?: number; note?: string; splitGroup?: number; discountType?: 'percent' | 'value'; discountValue?: number }): Promise<void> =>
       invoke('restaurant:updateItem', itemId, patch),
     updateOrderMeta: (
       orderId: number,
@@ -550,11 +741,20 @@ const api = {
         guestCount?: number | null
         orderNote?: string
         captainId?: number | null
+        discountType?: 'percent' | 'value'
+        discountValue?: number
+        customerLabel?: string
       }
     ): Promise<void> => invoke('restaurant:updateOrderMeta', orderId, patch),
     removeItem: (itemId: number): Promise<void> => invoke('restaurant:removeItem', itemId),
-    sendToKitchen: (orderId: number): Promise<{ ok: boolean; printedCount: number; error?: string }> =>
+    sendToKitchen: (orderId: number): Promise<{ ok: boolean; printedCount: number; error?: string; printWarning?: string }> =>
       invoke('restaurant:sendToKitchen', orderId),
+    reprintKitchen: (orderId: number): Promise<{ ok: boolean; printedCount: number; error?: string; printWarning?: string }> =>
+      invoke('restaurant:reprintKitchen', orderId),
+    printCheck: (orderId: number, preview = false, splitGroup?: number): Promise<{ ok: boolean; error?: string }> =>
+      invoke('restaurant:printCheck', orderId, preview, splitGroup),
+    listKitchenNotifications: (limit = 30): Promise<KitchenNotification[]> =>
+      invoke('restaurant:listKitchenNotifications', limit),
     setKitchenStatus: (orderId: number, status: string): Promise<void> =>
       invoke('restaurant:setKitchenStatus', orderId, status),
     listOpenOrders: (): Promise<RestaurantOrderListItem[]> => invoke('restaurant:listOpenOrders'),
@@ -570,8 +770,8 @@ const api = {
   reports: {
     run: (type: ReportType, filter: ReportFilter): Promise<ReportResult> =>
       invoke('reports:run', type, filter),
-    exportExcel: (report: ReportResult): Promise<ExportResult> => invoke('reports:exportExcel', report),
-    exportPdf: (report: ReportResult): Promise<ExportResult> => invoke('reports:exportPdf', report),
+    exportExcel: (_report: ReportResult): Promise<ExportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ExportResult),
+    exportPdf: (_report: ReportResult): Promise<ExportResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as ExportResult),
     overview: (filter: ReportFilter): Promise<OverviewSummary> => invoke('reports:overview', filter)
   },
   settings: {
@@ -653,7 +853,28 @@ const api = {
     decodeWeight: (barcode: string): Promise<WeightBarcodeResult> =>
       invoke('barcode:decodeWeight', barcode)
   },
-  print: printApi(),
+  print: {
+    receipt: (invoiceId: number): Promise<PrintResult> => invoke('print:receipt', invoiceId),
+    previewReceipt: (invoiceId: number): Promise<PrintResult> =>
+      invoke('print:previewReceipt', invoiceId),
+    labels: (items: { barcode: string; name: string; price: number }[]): Promise<PrintResult> =>
+      invoke('print:labels', items),
+    quotation: (quotationId: number): Promise<PrintResult> => invoke('print:quotation', quotationId),
+    previewQuotation: (quotationId: number): Promise<PrintResult> =>
+      invoke('print:previewQuotation', quotationId),
+    shiftSummary: (sessionId: number, detailed = false): Promise<PrintResult> => invoke('print:shiftSummary', sessionId, detailed),
+    previewShiftSummary: (sessionId: number, detailed = false): Promise<PrintResult> =>
+      invoke('print:previewShiftSummary', sessionId, detailed),
+    stockPermit: (permitId: number): Promise<PrintResult> => invoke('print:stockPermit', permitId),
+    previewStockPermit: (permitId: number): Promise<PrintResult> =>
+      invoke('print:previewStockPermit', permitId),
+    openDrawer: (): Promise<PrintResult> => invoke('print:openDrawer'),
+    kitchenTicket: (
+      meta: KitchenTicketMeta,
+      printerName: string | null,
+      items: { name: string; qty: number; note: string | null }[]
+    ): Promise<PrintResult> => invoke('print:kitchenTicket', meta, printerName, items)
+  },
   license: {
     getStatus: (): Promise<LicenseStatus> => invoke('license:getStatus'),
     activate: (key: string): Promise<ActivateLicenseResult> => invoke('license:activate', key)
@@ -691,9 +912,9 @@ const api = {
     factoryReset: (userId: number): Promise<DataResetResult> => invoke('dataReset:factoryReset', userId)
   },
   googleDrive: {
-    connect: (clientId: string): Promise<GoogleAuthUrlResult> => invoke('googleDrive:connect', clientId),
-    disconnect: (): Promise<void> => invoke('googleDrive:disconnect'),
-    upload: (): Promise<BackupResult> => invoke('googleDrive:upload')
+    connect: (_clientId: string): Promise<GoogleAuthUrlResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as GoogleAuthUrlResult),
+    disconnect: (): Promise<void> => Promise.resolve(),
+    upload: (): Promise<BackupResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as BackupResult)
   },
   /**
    * مزامنة الأجهزة عبر الشبكة المحلية (جهاز رئيسي/فرعي) كانت مفهوم خاص بنسخة الأوفلاين —
@@ -704,7 +925,7 @@ const api = {
   network: {
     getConfig: (): Promise<NetworkConfig> =>
       Promise.resolve({
-        role: 'local',
+        role: 'standalone',
         deviceName: 'ويب',
         port: 0,
         connectionCode: '',
@@ -715,11 +936,13 @@ const api = {
     updateConfig: (config: NetworkConfig): Promise<NetworkConfig> => Promise.resolve(config),
     getStatus: (): Promise<NetworkStatus> =>
       Promise.resolve({
-        role: 'local',
+        role: 'standalone',
         serverRunning: false,
         connectedDeviceCount: 0,
         connectedToMain: false,
-        localIpAddresses: []
+        localIpAddresses: [],
+        lastConnectionError: null,
+        serverError: null
       }),
     regenerateCode: (): Promise<string> => Promise.resolve(''),
     getLocalIps: (): Promise<string[]> => Promise.resolve([])

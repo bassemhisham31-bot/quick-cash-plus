@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react'
 import { formatCurrency as currency } from '../../lib/currency'
-import type { DeliveryDriver, DeliveryOrderListRow, DeliveryStatus, DeliveryZone } from '../../../../shared/types'
+import { useAppStore } from '../../store/appStore'
+import { KITCHEN_STATUS_LABELS, formatElapsed, minutesSince } from '../restaurant/restaurantUi'
+import '../restaurant/restaurant.css'
+import { OrderScreen } from '../restaurant/OrderScreen'
+import type {
+  DeliveryDriver,
+  DeliveryOrderListRow,
+  DeliveryStatus,
+  DeliveryZone,
+  RestaurantOrderListItem
+} from '../../../../shared/types'
 
 type Tab = 'requests' | 'drivers' | 'zones'
 
@@ -27,6 +37,13 @@ function todayIso(): string {
 
 export function DeliveryPage(): JSX.Element {
   const [tab, setTab] = useState<Tab>('requests')
+  const activeOrderId = useAppStore((s) => s.activeRestaurantOrderId)
+  const setActiveOrderId = useAppStore((s) => s.setActiveRestaurantOrderId)
+
+  // طلب الديلفري بيتفتح هنا في نفس الصفحة — مش في لوحة طلبات المطعم اللي ممكن الكاشير مالوش صلاحيتها
+  if (activeOrderId) {
+    return <OrderScreen key={activeOrderId} orderId={activeOrderId} onClose={() => setActiveOrderId(null)} />
+  }
 
   return (
     <div>
@@ -66,6 +83,8 @@ export function DeliveryPage(): JSX.Element {
 }
 
 function RequestsTab(): JSX.Element {
+  const setActiveOrderId = useAppStore((s) => s.setActiveRestaurantOrderId)
+  const [openOrders, setOpenOrders] = useState<RestaurantOrderListItem[]>([])
   const [orders, setOrders] = useState<DeliveryOrderListRow[]>([])
   const [drivers, setDrivers] = useState<DeliveryDriver[]>([])
   const [from, setFrom] = useState(daysAgoIso(7))
@@ -74,6 +93,18 @@ function RequestsTab(): JSX.Element {
   function refresh(): void {
     window.api.delivery.listOrders({ from: from ? `${from} 00:00:00` : undefined, to: to ? `${to} 23:59:59` : undefined }).then(setOrders)
     window.api.settings.listDeliveryDrivers().then(setDrivers)
+    window.api.restaurant
+      .listOpenOrders()
+      .then((list) => setOpenOrders(list.filter((o) => o.orderType === 'delivery' && o.itemsCount > 0)))
+  }
+
+  function openOrder(orderId: number): void {
+    setActiveOrderId(orderId)
+  }
+
+  async function setOpenOrderDriver(orderId: number, value: string): Promise<void> {
+    await window.api.restaurant.updateOrderMeta(orderId, { deliveryDriverId: value ? Number(value) : null })
+    refresh()
   }
 
   useEffect(() => {
@@ -93,7 +124,7 @@ function RequestsTab(): JSX.Element {
     refresh()
   }
 
-  const activeCount = orders.filter((o) => o.deliveryStatus !== 'delivered').length
+  const activeCount = openOrders.length + orders.filter((o) => o.deliveryStatus !== 'delivered').length
   const deliveredCount = orders.filter((o) => o.deliveryStatus === 'delivered').length
   const totalFees = orders.filter((o) => o.deliveryStatus === 'delivered').reduce((s, o) => s + o.deliveryFee, 0)
 
@@ -119,6 +150,68 @@ function RequestsTab(): JSX.Element {
         </div>
       </div>
 
+      <div className="rst-root" style={{ marginBottom: 22 }}>
+        <h3 style={{ margin: '0 0 10px' }}>
+          🍳 طلبات ديلفري جارية — لسه ما اتحصّلتش <span className="rst-count">{openOrders.length}</span>
+        </h3>
+        {openOrders.length ? (
+          <div className="rst-board">
+            {openOrders.map((o) => (
+              <div key={o.id} className="rst-ocard delivery">
+                <div className="rst-ocard-head">
+                  <span className="rst-ocard-num">🛵 {o.number}</span>
+                  <span className="rst-ocard-time">⏱ {formatElapsed(minutesSince(o.createdAt))}</span>
+                </div>
+                <div className="rst-ocard-meta">
+                  <span>
+                    👤 {o.customerName ?? 'عميل عابر'}
+                    {o.customerPhone ? ` — ${o.customerPhone}` : ''}
+                  </span>
+                  <span>📍 {o.deliveryAddress ?? '— بدون عنوان —'}</span>
+                </div>
+                <div className="rst-ocard-items">
+                  {(o.itemsPreview ?? []).slice(0, 5).map((it, idx) => (
+                    <div key={idx}>
+                      <b>{it.qty}×</b>
+                      <span>{it.name}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ padding: '0 12px 8px' }}>
+                  <select
+                    className="qcp-select"
+                    style={{ fontSize: 12, padding: '4px 8px', width: '100%' }}
+                    value={drivers.find((d) => d.name === o.driverName)?.id ?? ''}
+                    onChange={(e) => setOpenOrderDriver(o.id, e.target.value)}
+                  >
+                    <option value="">🧑‍✈️ — بدون طيار —</option>
+                    {drivers.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        🧑‍✈️ {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="rst-ocard-foot">
+                  <div>
+                    <div className="rst-ocard-total">{currency(o.total + (o.deliveryFee ?? 0))}</div>
+                    <span className={`rst-kstatus ${o.kitchenStatus}`}>{KITCHEN_STATUS_LABELS[o.kitchenStatus]}</span>
+                  </div>
+                  <button type="button" className="qcp-btn qcp-btn-primary" style={{ padding: '5px 14px' }} onClick={() => openOrder(o.id)}>
+                    فتح / تحصيل
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rst-empty qcp-card" style={{ padding: 18 }}>
+            مفيش طلبات ديلفري جارية دلوقتي
+          </div>
+        )}
+      </div>
+
+      <h3 style={{ margin: '0 0 10px' }}>🧾 طلبات ديلفري محصّلة — متابعة التسليم والتسوية</h3>
       <div style={{ display: 'flex', gap: 10, marginBottom: 16, alignItems: 'center' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
           من
@@ -136,6 +229,7 @@ function RequestsTab(): JSX.Element {
             <tr>
               <th>الفاتورة</th>
               <th>المستلم</th>
+              <th>الأصناف</th>
               <th>العنوان</th>
               <th>الهاتف</th>
               <th>رسوم التوصيل</th>
@@ -149,7 +243,11 @@ function RequestsTab(): JSX.Element {
               <tr key={o.invoiceId}>
                 <td>{o.invoiceNumber}</td>
                 <td>{o.customerName}</td>
-                <td>{o.deliveryAddress ?? '—'}</td>
+                <td style={{ maxWidth: 220, fontSize: 12 }}>{o.itemsSummary || '—'}</td>
+                <td>
+                  {o.deliveryAddress ?? '—'}
+                  {o.specialMark && <div style={{ fontSize: 11, color: 'var(--qcp-ink-faint)' }}>📌 {o.specialMark}</div>}
+                </td>
                 <td>{o.customerPhone ?? '—'}</td>
                 <td>{currency(o.deliveryFee)}</td>
                 <td>{currency(o.total)}</td>
@@ -186,7 +284,7 @@ function RequestsTab(): JSX.Element {
             ))}
             {!orders.length && (
               <tr>
-                <td colSpan={8} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                <td colSpan={9} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                   مفيش طلبات ديلفري في المدى المحدد
                 </td>
               </tr>

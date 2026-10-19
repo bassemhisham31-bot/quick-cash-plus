@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
 import { playSound } from '../../lib/sounds'
 import type { Product, StockPermitListItem, StockPermitLineInput, StockPermitType, StockPermitView, Warehouse } from '../../../../shared/types'
+import { confirmDialog } from '../../components/ConfirmDialogHost'
 
 const TYPE_ICON: Record<StockPermitType, string> = { addition: '➕', deduction: '➖' }
 
@@ -168,7 +169,7 @@ function StockPermitModal({
   function addLine(product: Product): void {
     setLines((prev) => {
       if (prev.some((l) => l.productId === product.id)) return prev
-      return [...prev, { productId: product.id, name: product.name, barcode: product.barcode, qty: 1, note: '' }]
+      return [...prev, { productId: product.id, name: product.name, barcode: product.barcode, qty: 1, note: '', unitPrice: null, serialNumber: '' }]
     })
     setSearch('')
     setResults([])
@@ -182,13 +183,22 @@ function StockPermitModal({
     setLines((prev) => prev.map((l) => (l.productId === productId ? { ...l, note } : l)))
   }
 
+  function updateLinePrice(productId: number, value: string): void {
+    const unitPrice = value.trim() === '' ? null : Number(value)
+    setLines((prev) => prev.map((l) => (l.productId === productId ? { ...l, unitPrice } : l)))
+  }
+
+  function updateLineSerial(productId: number, serialNumber: string): void {
+    setLines((prev) => prev.map((l) => (l.productId === productId ? { ...l, serialNumber } : l)))
+  }
+
   function removeLine(productId: number): void {
     setLines((prev) => prev.filter((l) => l.productId !== productId))
   }
 
   const totalQty = lines.reduce((sum, l) => sum + l.qty, 0)
 
-  async function handleSave(): Promise<void> {
+  async function handleSave(print = false): Promise<void> {
     if (!user || !lines.length) return
     setSaving(true)
     setError(null)
@@ -197,6 +207,9 @@ function StockPermitModal({
       if (!result.ok) {
         setError(result.error ?? 'حدث خطأ')
         return
+      }
+      if (print && result.permitId != null) {
+        await window.api.print.stockPermit(result.permitId)
       }
       onSaved()
       onClose()
@@ -255,6 +268,8 @@ function StockPermitModal({
               <tr>
                 <th>{t('stockPermits.product')}</th>
                 <th>{t('stockPermits.qty')}</th>
+                <th>{t('stockPermits.priceOptional')}</th>
+                <th>{t('stockPermits.serialOptional')}</th>
                 <th>{t('stockPermits.lineNote')}</th>
                 <th></th>
               </tr>
@@ -275,7 +290,28 @@ function StockPermitModal({
                   <td>
                     <input
                       className="qcp-input"
-                      style={{ width: 140, padding: '4px 6px' }}
+                      type="number"
+                      min={0}
+                      step="any"
+                      placeholder="—"
+                      style={{ width: 90, padding: '4px 6px' }}
+                      value={l.unitPrice ?? ''}
+                      onChange={(e) => updateLinePrice(l.productId, e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="qcp-input"
+                      placeholder="—"
+                      style={{ width: 130, padding: '4px 6px' }}
+                      value={l.serialNumber ?? ''}
+                      onChange={(e) => updateLineSerial(l.productId, e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      className="qcp-input"
+                      style={{ width: 120, padding: '4px 6px' }}
                       value={l.note}
                       onChange={(e) => updateLineNote(l.productId, e.target.value)}
                     />
@@ -289,7 +325,7 @@ function StockPermitModal({
               ))}
               {lines.length === 0 && (
                 <tr>
-                  <td colSpan={4} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                  <td colSpan={6} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                     {t('stockPermits.noLinesYet')}
                   </td>
                 </tr>
@@ -315,8 +351,11 @@ function StockPermitModal({
         )}
 
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="qcp-btn qcp-btn-primary" disabled={saving || lines.length === 0} onClick={handleSave}>
+          <button className="qcp-btn qcp-btn-primary" disabled={saving || lines.length === 0} onClick={() => handleSave(false)}>
             {t('stockPermits.saveAndUpdateStock')}
+          </button>
+          <button className="qcp-btn qcp-btn-secondary" disabled={saving || lines.length === 0} onClick={() => handleSave(true)}>
+            🖨️ {t('stockPermits.saveAndPrint')}
           </button>
           <button className="qcp-btn qcp-btn-secondary" onClick={onClose}>
             {t('parties.cancel')}
@@ -359,7 +398,7 @@ function StockPermitViewModal({
 
   async function handleDelete(): Promise<void> {
     if (!user) return
-    if (!window.confirm(t('stockPermits.confirmDelete') ?? '')) return
+    if (!await confirmDialog(t('stockPermits.confirmDelete') ?? '')) return
     setDeleting(true)
     setError(null)
     try {
@@ -408,6 +447,8 @@ function StockPermitViewModal({
               <tr>
                 <th>{t('stockPermits.product')}</th>
                 <th>{t('stockPermits.qty')}</th>
+                <th>{t('stockPermits.price')}</th>
+                <th>{t('stockPermits.serial')}</th>
                 <th>{t('stockPermits.lineNote')}</th>
               </tr>
             </thead>
@@ -416,6 +457,8 @@ function StockPermitViewModal({
                 <tr key={idx}>
                   <td>{l.productName}</td>
                   <td>{l.qty}</td>
+                  <td>{l.unitPrice != null ? new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(l.unitPrice) : '—'}</td>
+                  <td style={{ fontFamily: 'var(--qcp-mono)' }}>{l.serialNumber || '—'}</td>
                   <td>{l.note || '—'}</td>
                 </tr>
               ))}

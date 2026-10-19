@@ -1,4 +1,20 @@
-import { login } from './services/auth'
+import type { AttendancePayrollApproval, AttendancePayrollRules, AttendanceSettingsInput } from '../shared/types'
+import {
+  approveAttendancePayroll,
+  attendanceReport,
+  calculateAttendancePayroll,
+  getAttendanceSettings,
+  getPayrollRules,
+  saveEmployeeShift,
+  savePayrollRules,
+  linkEmployee,
+  listDeviceUsers,
+  listEmployeeLinks,
+  saveAttendanceSettings,
+  syncAttendance,
+  testAttendanceDevice
+} from './services/attendance'
+import { approveWithSupervisorPassword, listLoginUsers, login } from './services/auth'
 import {
   bulkCreateProducts,
   bulkUpdatePricesAndImages,
@@ -7,10 +23,12 @@ import {
   createUnit,
   createWarehouse,
   deleteProduct,
+  adjustProductStock,
   listCategories,
   listProducts,
   listUnits,
   listWarehouses,
+  getStockByWarehouse,
   updateProduct
 } from './services/catalog'
 import { checkout } from './services/pos'
@@ -88,7 +106,20 @@ import {
   getWhatsAppSettings,
   updateWhatsAppSettings
 } from './services/settings'
+import { getWhatsAppStatus, logoutWhatsApp, sendWhatsAppMessage, startWhatsAppPairing } from './services/whatsapp'
 import { generateBarcodeDataUrl, decodeWeightBarcode } from './services/barcode'
+import {
+  openCashDrawer,
+  previewQuotation,
+  previewReceipt,
+  previewShiftSummary,
+  previewStockPermit,
+  printBarcodeLabels,
+  printQuotation,
+  printReceipt,
+  printShiftSummary,
+  printStockPermit
+} from './services/print'
 import { activateLicense, getLicenseStatus } from './services/license'
 import { listBackups, restoreBackup, runLocalBackup, scheduleAutoBackup } from './services/backup'
 import {
@@ -161,13 +192,20 @@ import {
   cancelOrder,
   closeOrder,
   deleteTable,
+  deleteFloorLine,
+  getFloor,
   getOrderView,
+  saveFloorSettings,
+  setTablePositions,
+  upsertFloorLine,
   listOpenOrders,
   listTables,
   mergeTables,
   openOrder,
   removeOrderItem,
   sendToKitchen,
+  printCheck,
+  listKitchenNotifications,
   setKitchenStatus,
   transferTable,
   updateOrderItem,
@@ -175,14 +213,37 @@ import {
   upsertTable
 } from './services/restaurant'
 import { getRecipe, setRecipe } from './services/recipes'
+import { printKitchenTicket, printHeldInvoice, printVoucher, printEventBooking } from './services/print'
 import {
-  buildBarcodeLabelsHtml,
-  buildInvoiceHtml,
-  buildKitchenTicketHtml,
-  buildQuotationHtml,
-  buildShiftSummaryHtml,
-  buildStockPermitHtml
-} from './services/print'
+  addBookingPayment,
+  deletePackage,
+  getBooking,
+  listBookings,
+  listPackages,
+  saveBooking,
+  setBookingStatus,
+  upsertPackage
+} from './services/events'
+import {
+  createTransfer,
+  createTreasury,
+  createVoucher,
+  deleteTransfer,
+  deleteTreasury,
+  deleteVoucher,
+  getTreasuryStatement,
+  listCashDifferences,
+  listTransfers,
+  listTreasuries,
+  listVouchers,
+  setDefaultTreasury,
+  updateTreasury
+} from './services/treasuries'
+import type { TreasuryInput, TreasuryTransferInput, VoucherInput, EventPackageInput, EventBookingInput, EventBookingStatus } from '../shared/types'
+import { createAccount, createManualEntry, deleteManualEntry, listAccounts, listManualEntries, setAccountActive, type AccountType, type ManualEntryInput } from './services/ledger'
+import { ACCOUNTING_REPORTS, runAccountingReport, type AccountingReportFilter, type AccountingReportType } from './services/accountingReports'
+import { deleteHeldInvoice, getHeldInvoice, holdInvoice, listHeldInvoices } from './services/heldInvoices'
+import type { HeldInvoiceInput } from '../shared/types'
 import type {
   AssistantSettings,
   BackupSettings,
@@ -232,7 +293,10 @@ import type {
   UserInput,
   UserUpdateInput,
   VendorInput,
-  WhatsAppSettings
+  WhatsAppSettings,
+  RestaurantFloorLineInput,
+  RestaurantFloorSettings,
+  RestaurantTableInput
 } from '../shared/types'
 
 export type ChannelHandler = (...args: any[]) => Promise<any> | any
@@ -245,6 +309,9 @@ export type ChannelHandler = (...args: any[]) => Promise<any> | any
 export function buildHandlerMap(): Record<string, ChannelHandler> {
   return {
     'auth:login': (username: string, password: string) => login(username, password),
+    'auth:listLoginUsers': () => listLoginUsers(),
+    'auth:approveWithSupervisorPassword': (password: string, detail: string, requestedBy: string | null) =>
+      approveWithSupervisorPassword(password, detail, requestedBy),
 
     'catalog:listCategories': () => listCategories(),
     'catalog:createCategory': (name: string, parentId: number | null) => createCategory(name, parentId),
@@ -254,7 +321,10 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'catalog:createProduct': (input: ProductInput) => createProduct(input),
     'catalog:updateProduct': (id: number, input: ProductUpdateInput) => updateProduct(id, input),
     'catalog:deleteProduct': (id: number) => deleteProduct(id),
+    'catalog:adjustStock': (productId: number, warehouseId: number, mode: 'add' | 'set', qty: number, userId: number) =>
+      adjustProductStock(productId, warehouseId, mode, qty, userId),
     'catalog:listWarehouses': () => listWarehouses(),
+    'catalog:stockByWarehouse': (productIds: number[]) => getStockByWarehouse(productIds),
     'catalog:createWarehouse': (name: string) => createWarehouse(name),
     'catalog:bulkUpdatePricesAndImages': (items: BulkPriceUpdateItem[]) => bulkUpdatePricesAndImages(items),
     'catalog:bulkCreateProducts': (inputs: ProductInput[]) => bulkCreateProducts(inputs),
@@ -370,14 +440,18 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     ) => convertQuotationToInvoice(quotationId, options, userId),
 
     'restaurant:listTables': () => listTables(),
-    'restaurant:upsertTable': (input: { id?: number; name: string; zone: string; seats: number; posX: number; posY: number }) =>
-      upsertTable(input),
+    'restaurant:upsertTable': (input: RestaurantTableInput) => upsertTable(input),
     'restaurant:deleteTable': (id: number) => deleteTable(id),
+    'restaurant:getFloor': () => getFloor(),
+    'restaurant:saveFloorSettings': (input: RestaurantFloorSettings) => saveFloorSettings(input),
+    'restaurant:upsertFloorLine': (input: RestaurantFloorLineInput) => upsertFloorLine(input),
+    'restaurant:deleteFloorLine': (id: number) => deleteFloorLine(id),
+    'restaurant:setTablePositions': (positions: { id: number; posX: number; posY: number }[]) => setTablePositions(positions),
     'restaurant:mergeTables': (orderId: number, tableIds: number[]) => mergeTables(orderId, tableIds),
     'restaurant:transferTable': (orderId: number, newTableId: number) => transferTable(orderId, newTableId),
     'restaurant:openOrder': (input: OpenRestaurantOrderInput, userId: number) => openOrder(input, userId),
     'restaurant:addItems': (orderId: number, items: RestaurantOrderItemInput[]) => addItemsToOrder(orderId, items),
-    'restaurant:updateItem': (itemId: number, patch: { qty?: number; note?: string; splitGroup?: number }) =>
+    'restaurant:updateItem': (itemId: number, patch: { qty?: number; note?: string; splitGroup?: number; discountType?: 'percent' | 'value'; discountValue?: number }) =>
       updateOrderItem(itemId, patch),
     'restaurant:updateOrderMeta': (
       orderId: number,
@@ -390,10 +464,17 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
         guestCount?: number | null
         orderNote?: string
         captainId?: number | null
+        discountType?: 'percent' | 'value'
+        discountValue?: number
+        customerLabel?: string
       }
     ) => updateOrderMeta(orderId, patch),
     'restaurant:removeItem': (itemId: number) => removeOrderItem(itemId),
-    'restaurant:sendToKitchen': (orderId: number) => sendToKitchen(orderId),
+    'restaurant:sendToKitchen': (orderId: number, actor?: unknown) => sendToKitchen(orderId, actor),
+    'restaurant:reprintKitchen': (orderId: number) => sendToKitchen(orderId, undefined, true),
+    'restaurant:printCheck': (orderId: number, preview?: boolean, splitGroup?: number) =>
+      printCheck(orderId, preview === true, splitGroup),
+    'restaurant:listKitchenNotifications': (limit?: number) => listKitchenNotifications(typeof limit === 'number' ? limit : 30),
     'restaurant:setKitchenStatus': (orderId: number, status: string) => setKitchenStatus(orderId, status),
     'restaurant:listOpenOrders': () => listOpenOrders(),
     'restaurant:getOrderView': (orderId: number) => getOrderView(orderId),
@@ -415,6 +496,7 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'settings:getDevice': () => getDeviceSettings(),
     'settings:updateDevice': (input: DeviceSettings) => updateDeviceSettings(input),
     'settings:getPrinters': () => getSystemPrinters(),
+    // الجهاز الفرعي بيسجّل طابعاته عند الرئيسي ويجيب منه قائمة الطابعات البعيدة
     'settings:getStore': () => getStoreSettings(),
     'settings:updateStore': (input: StoreSettings) => updateStoreSettings(input),
     'settings:getLoyalty': () => getLoyaltySettings(),
@@ -454,21 +536,81 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
 
     'settings:getWhatsApp': () => getWhatsAppSettings(),
     'settings:updateWhatsApp': (input: WhatsAppSettings) => updateWhatsAppSettings(input),
+    'whatsapp:getStatus': () => getWhatsAppStatus(),
+    'whatsapp:startPairing': () => startWhatsAppPairing(),
+    'whatsapp:logout': () => logoutWhatsApp(),
+    'whatsapp:sendTest': (phone: string, message: string) => sendWhatsAppMessage(phone, message),
 
     'barcode:generate': (value: string, type?: BarcodeLabelType) => generateBarcodeDataUrl(value, type),
     'barcode:decodeWeight': async (barcode: string) => decodeWeightBarcode(barcode, await getDeviceSettings()),
 
-    /** كل قنوات print:get*Html بترجع HTML جاهز بس — الطباعة الفعلية بتتم من المتصفح عبر QZ Tray (مرحلة 4). */
-    'print:getReceiptHtml': (invoiceId: number) => buildInvoiceHtml(invoiceId),
-    'print:getKitchenTicketHtml': (
+    'ledger:listAccounts': () => listAccounts(),
+    'ledger:createAccount': (input: { code: string; name: string; type: AccountType }) => createAccount(input),
+    'ledger:setAccountActive': (code: string, active: boolean) => setAccountActive(code, active),
+    'ledger:listEntries': () => listManualEntries(),
+    'ledger:createEntry': (input: ManualEntryInput, userId: number) => createManualEntry(input, userId),
+    'ledger:deleteEntry': (id: number) => deleteManualEntry(id),
+    'accounting:listReports': () => ACCOUNTING_REPORTS,
+    'accounting:run': (type: AccountingReportType, filter: AccountingReportFilter) => runAccountingReport(type, filter ?? {}),
+    'treasury:list': () => listTreasuries(),
+    'treasury:create': (input: TreasuryInput) => createTreasury(input),
+    'treasury:update': (id: number, input: TreasuryInput) => updateTreasury(id, input),
+    'treasury:setDefault': (id: number) => setDefaultTreasury(id),
+    'treasury:delete': (id: number) => deleteTreasury(id),
+    'treasury:listVouchers': (filter?: { type?: 'receipt' | 'payment'; from?: string; to?: string }) => listVouchers(filter ?? {}),
+    'treasury:createVoucher': (input: VoucherInput, userId: number) => createVoucher(input, userId),
+    'treasury:deleteVoucher': (id: number) => deleteVoucher(id),
+    'treasury:listTransfers': () => listTransfers(),
+    'treasury:createTransfer': (input: TreasuryTransferInput, userId: number) => createTransfer(input, userId),
+    'treasury:deleteTransfer': (id: number) => deleteTransfer(id),
+    'treasury:listDifferences': (filter?: { from?: string; to?: string }) => listCashDifferences(filter ?? {}),
+    'treasury:statement': (treasuryId: number | null, from?: string, to?: string) => getTreasuryStatement(treasuryId, from, to),
+    'attendance:getSettings': () => getAttendanceSettings(),
+    'attendance:saveSettings': (input: AttendanceSettingsInput) => saveAttendanceSettings(input),
+    'attendance:test': () => testAttendanceDevice(),
+    'attendance:deviceUsers': () => listDeviceUsers(),
+    'attendance:sync': () => syncAttendance(),
+    'attendance:employees': () => listEmployeeLinks(),
+    'attendance:linkEmployee': (employeeId: number, deviceUserId: string | null) => linkEmployee(employeeId, deviceUserId),
+    'attendance:report': (from: string, to: string) => attendanceReport(from, to),
+    'attendance:getPayrollRules': () => getPayrollRules(),
+    'attendance:savePayrollRules': (input: AttendancePayrollRules) => savePayrollRules(input),
+    'attendance:saveEmployeeShift': (employeeId: number, shiftStart: string | null, shiftEnd: string | null, weeklyOff: string) =>
+      saveEmployeeShift(employeeId, shiftStart, shiftEnd, weeklyOff),
+    'attendance:calculatePayroll': (from: string, to: string) => calculateAttendancePayroll(from, to),
+    'attendance:approvePayroll': (from: string, to: string, items: AttendancePayrollApproval[], userId: number) =>
+      approveAttendancePayroll(from, to, items, userId),
+    'events:listPackages': (includeInactive?: boolean) => listPackages(includeInactive !== false),
+    'events:upsertPackage': (input: EventPackageInput) => upsertPackage(input),
+    'events:deletePackage': (id: number) => deletePackage(id),
+    'events:listBookings': (filter?: { status?: EventBookingStatus; from?: string; to?: string }) => listBookings(filter ?? {}),
+    'events:getBooking': (id: number) => getBooking(id),
+    'events:saveBooking': (input: EventBookingInput, userId: number) => saveBooking(input, userId),
+    'events:addPayment': (bookingId: number, amount: number, method: PaymentMethod, note: string | null, userId: number) =>
+      addBookingPayment(bookingId, amount, method, note, userId),
+    'events:setStatus': (bookingId: number, status: EventBookingStatus) => setBookingStatus(bookingId, status),
+    'print:eventBooking': (id: number, preview?: boolean) => printEventBooking(id, preview === true),
+    'held:hold': (input: HeldInvoiceInput, userId: number | null) => holdInvoice(input, userId),
+    'held:list': () => listHeldInvoices(),
+    'held:get': (id: number) => getHeldInvoice(id),
+    'held:delete': (id: number) => deleteHeldInvoice(id),
+    'print:voucher': (id: number, preview?: boolean) => printVoucher(id, preview === true),
+    'print:heldInvoice': (id: number, preview?: boolean) => printHeldInvoice(id, preview === true),
+    'print:receipt': (invoiceId: number) => printReceipt(invoiceId),
+    'print:previewReceipt': (invoiceId: number) => previewReceipt(invoiceId),
+    'print:labels': (items: { barcode: string; name: string; price: number }[]) => printBarcodeLabels(items),
+    'print:quotation': (quotationId: number) => printQuotation(quotationId),
+    'print:previewQuotation': (quotationId: number) => previewQuotation(quotationId),
+    'print:shiftSummary': (sessionId: number, detailed?: boolean) => printShiftSummary(sessionId, detailed === true),
+    'print:previewShiftSummary': (sessionId: number, detailed?: boolean) => previewShiftSummary(sessionId, detailed === true),
+    'print:stockPermit': (permitId: number) => printStockPermit(permitId),
+    'print:previewStockPermit': (permitId: number) => previewStockPermit(permitId),
+    'print:openDrawer': () => openCashDrawer(),
+    'print:kitchenTicket': (
       meta: KitchenTicketMeta,
+      printerName: string | null,
       items: { name: string; qty: number; note: string | null }[]
-    ) => buildKitchenTicketHtml(meta, items),
-    'print:getQuotationHtml': (quotationId: number) => buildQuotationHtml(quotationId),
-    'print:getStockPermitHtml': (permitId: number) => buildStockPermitHtml(permitId),
-    'print:getShiftSummaryHtml': (sessionId: number) => buildShiftSummaryHtml(sessionId),
-    'print:getLabelsHtml': (items: { barcode: string; name: string; price: number }[]) =>
-      buildBarcodeLabelsHtml(items),
+    ) => printKitchenTicket(meta, printerName, items),
 
     'license:getStatus': () => getLicenseStatus(),
     'license:activate': (key: string) => activateLicense(key),
@@ -501,9 +643,10 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'dataReset:categories': (userId: number) => resetCategories(userId),
     'dataReset:expenses': (userId: number) => resetExpenses(userId),
     'dataReset:assistantChat': (userId: number) => resetAssistantChat(userId),
-    'dataReset:factoryReset': (userId: number) => factoryReset(userId)
+    'dataReset:factoryReset': (userId: number) => factoryReset(userId),
+
   }
 }
 
-/** القنوات اللي بتغيّر بيانات فعليًا — مشتركة مع طبقة الـHTTP/WebSocket لتسجيل نشاط المستخدمين. */
+/** القنوات اللي بتغيّر بيانات فعليًا — منقولة لملف مشترك عشان preload يقدر يستخدمها كمان (بدون استيراد كود main). */
 export { MUTATING_CHANNELS } from '../shared/mutatingChannels'

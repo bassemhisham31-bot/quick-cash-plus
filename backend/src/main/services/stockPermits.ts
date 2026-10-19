@@ -40,9 +40,17 @@ export async function createStockPermit(input: StockPermitInput, userId: number)
 
     for (const line of input.lines) {
       await tx.execute({
-        sql: `INSERT INTO stock_permit_items (permit_id, product_id, product_name, qty, note)
-              VALUES (?, ?, ?, ?, ?)`,
-        args: [permitId, line.productId, line.name, line.qty, line.note]
+        sql: `INSERT INTO stock_permit_items (permit_id, product_id, product_name, qty, note, unit_price, serial_number)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          permitId,
+          line.productId,
+          line.name,
+          line.qty,
+          line.note,
+          line.unitPrice ?? null,
+          line.serialNumber?.trim() ? line.serialNumber.trim() : null
+        ]
       })
 
       await tx.execute({
@@ -164,7 +172,8 @@ export async function getStockPermitView(permitId: number): Promise<StockPermitV
   if (!head) return null
 
   const linesRs = await db.execute({
-    sql: `SELECT spi.product_name AS productName, p.barcode AS barcode, spi.qty, spi.note
+    sql: `SELECT spi.product_name AS productName, p.barcode AS barcode, spi.qty, spi.note,
+                 spi.unit_price AS unitPrice, spi.serial_number AS serialNumber
           FROM stock_permit_items spi
           LEFT JOIN products p ON p.id = spi.product_id
           WHERE spi.permit_id = ?`,
@@ -185,7 +194,9 @@ export async function getStockPermitView(permitId: number): Promise<StockPermitV
       productName: r.productName,
       barcode: r.barcode ?? '',
       qty: Number(r.qty),
-      note: r.note ?? null
+      note: r.note ?? null,
+      unitPrice: r.unitPrice != null ? Number(r.unitPrice) : null,
+      serialNumber: r.serialNumber ?? null
     }))
   }
 }

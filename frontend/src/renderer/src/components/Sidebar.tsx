@@ -2,7 +2,8 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore, type ViewName } from '../store/appStore'
 import { isViewAllowed } from '../lib/permissions'
 
-const items: { key: ViewName; icon: string }[] = [
+/** شاشات البرنامج بالترتيب — نفس الترتيب والأيقونات بتستخدمها شبكة صلاحيات المستخدمين في الإعدادات */
+export const NAV_ITEMS: { key: ViewName; icon: string }[] = [
   { key: 'dashboard', icon: '🏠' },
   { key: 'pos', icon: '🛒' },
   { key: 'inventory', icon: '📦' },
@@ -13,6 +14,8 @@ const items: { key: ViewName; icon: string }[] = [
   { key: 'returns', icon: '↩️' },
   { key: 'expenses', icon: '💸' },
   { key: 'shifts', icon: '⏱️' },
+  { key: 'treasury', icon: '🏦' },
+  { key: 'accounting', icon: '📚' },
   { key: 'reports', icon: '📊' },
   { key: 'salesReps', icon: '🧑‍💼' },
   { key: 'quotations', icon: '📝' },
@@ -21,6 +24,8 @@ const items: { key: ViewName; icon: string }[] = [
   { key: 'restaurantTables', icon: '🪑' },
   { key: 'restaurantCaptains', icon: '🎩' },
   { key: 'delivery', icon: '🛵' },
+  { key: 'events', icon: '🎂' },
+  { key: 'attendance', icon: '🕒' },
   { key: 'settings', icon: '⚙️' }
 ]
 
@@ -31,7 +36,7 @@ export function Sidebar(): JSX.Element {
   const logout = useAppStore((s) => s.logout)
   const user = useAppStore((s) => s.user)
   const disabledFeatures = useAppStore((s) => s.disabledFeatures)
-  const visibleItems = items.filter((item) => isViewAllowed(user, item.key, disabledFeatures))
+  const visibleItems = NAV_ITEMS.filter((item) => isViewAllowed(user, item.key, disabledFeatures))
 
   return (
     <aside className="qcp-sidebar">

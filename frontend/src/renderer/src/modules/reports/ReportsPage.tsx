@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatCurrency as currency } from '../../lib/currency'
-import type { CustomerView, OverviewSummary, ReportResult, ReportType, VendorView, Warehouse } from '../../../../shared/types'
+import { useAppStore } from '../../store/appStore'
+import type { Category, CustomerView, OverviewSummary, ReportColumn, ReportResult, ReportType, VendorView, Warehouse } from '../../../../shared/types'
+import { isCountColumn } from '../../../../shared/types'
 
 const REPORT_OPTIONS: { type: ReportType; icon: string; label: string }[] = [
   { type: 'inventory_status', icon: '📦', label: 'حالة المخزون' },
+  { type: 'stocktake', icon: '📋', label: 'جرد الأصناف فقط' },
   { type: 'sales_detailed', icon: '📄', label: 'المبيعات التفصيلي' },
   { type: 'sales_summary', icon: '📈', label: 'ملخص المبيعات' },
   { type: 'vendors_report', icon: '🚚', label: 'تقرير الموردين' },
   { type: 'customers_analysis', icon: '👥', label: 'تحليل العملاء' },
   { type: 'stock_movement', icon: '📊', label: 'حركة المخزون' },
+  { type: 'stock_permits', icon: '📋', label: 'أذون الإضافة والخصم' },
   { type: 'profit_loss', icon: '💰', label: 'الأرباح والخسائر' },
   { type: 'monthly_expenses', icon: '🧾', label: 'المصروفات الشهرية' },
   { type: 'product_performance', icon: '⭐', label: 'أداء المنتجات' },
@@ -26,11 +30,14 @@ const REPORT_OPTIONS: { type: ReportType; icon: string; label: string }[] = [
   { type: 'account_statement', icon: '📒', label: 'كشف حساب عميل/مورد' },
   { type: 'restaurant_sales_by_order_type', icon: '🍽️', label: 'مبيعات المطاعم حسب نوع الطلب' },
   { type: 'restaurant_recipe_consumption', icon: '🧂', label: 'استهلاك الخامات (الوصفات)' },
-  { type: 'restaurant_table_activity', icon: '🪑', label: 'نشاط الترابيزات' }
+  { type: 'restaurant_table_activity', icon: '🪑', label: 'نشاط الترابيزات' },
+  { type: 'category_sales_daily', icon: '🗂️', label: 'مبيعات التصنيف اليومية' }
 ]
 
-function formatCell(value: string | number): string {
-  if (typeof value === 'number') return currency(value)
+const plainNumber = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 3 })
+
+function formatCell(value: string | number, col: ReportColumn): string {
+  if (typeof value === 'number') return isCountColumn(col) ? plainNumber.format(value) : currency(value)
   return value
 }
 
@@ -88,6 +95,9 @@ export function ReportsPage(): JSX.Element {
 
 function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Element {
   const { t } = useTranslation()
+  // التقارير المتاحة حسب الترخيص: أي تقرير مفتاحه "report:<النوع>" في الميزات الموقوفة يتخفي
+  const disabledFeatures = useAppStore((s) => s.disabledFeatures)
+  const availableOptions = REPORT_OPTIONS.filter((opt) => !disabledFeatures.includes(`report:${opt.type}`))
   const [warehouseId, setWarehouseId] = useState<number | null>(null)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -101,8 +111,11 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
   const [customers, setCustomers] = useState<CustomerView[]>([])
   const [vendors, setVendors] = useState<VendorView[]>([])
   const [resultSearch, setResultSearch] = useState('')
+  const [categories, setCategories] = useState<Category[]>([])
+  const [categoryId, setCategoryId] = useState<number | null>(null)
 
   useEffect(() => {
+    window.api.catalog.listCategories().then(setCategories)
     window.api.customers.list().then(setCustomers)
     window.api.vendors.list().then(setVendors)
   }, [])
@@ -123,7 +136,8 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
         warehouseId,
         serial: type === 'sales_detailed' ? serial : undefined,
         partyType: type === 'account_statement' ? partyType : undefined,
-        partyId: type === 'account_statement' ? (partyId ?? undefined) : undefined
+        partyId: type === 'account_statement' ? (partyId ?? undefined) : undefined,
+        categoryId: type === 'category_sales_daily' ? (categoryId ?? undefined) : undefined
       })
       setResult(r)
     } finally {
@@ -132,7 +146,9 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
   }
 
   useEffect(() => {
-    runReport(selectedType)
+    // لو التقرير الافتراضي موقوف بالترخيص، ابدأ بأول تقرير متاح
+    const initial = availableOptions.some((o) => o.type === selectedType) ? selectedType : availableOptions[0]?.type
+    if (initial) runReport(initial)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -150,7 +166,7 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
   return (
     <div>
       <div className="qcp-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: 18 }}>
-        {REPORT_OPTIONS.map((opt) => (
+        {availableOptions.map((opt) => (
           <button
             key={opt.type}
             className="qcp-card"
@@ -205,6 +221,21 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
               ))}
             </select>
           </>
+        )}
+        {selectedType === 'category_sales_daily' && (
+          <select
+            className="qcp-select"
+            style={{ minWidth: 180 }}
+            value={categoryId ?? ''}
+            onChange={(e) => setCategoryId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">كل التصنيفات</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
         )}
         {selectedType === 'sales_detailed' && (
           <input
@@ -262,7 +293,7 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
                 <tr key={idx}>
                   {result.columns.map((c) => (
                     <td key={c.key} style={{ textAlign: c.align === 'end' ? 'end' : 'start' }}>
-                      {formatCell(row[c.key])}
+                      {formatCell(row[c.key], c)}
                     </td>
                   ))}
                 </tr>
@@ -278,7 +309,7 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
                 <tr style={{ fontWeight: 800, background: 'var(--qcp-bg-sunken)' }}>
                   {result.columns.map((c, idx) => (
                     <td key={c.key} style={{ textAlign: c.align === 'end' ? 'end' : 'start' }}>
-                      {idx === 0 ? t('reports.total') : result.totals?.[c.key] != null ? currency(result.totals[c.key]) : ''}
+                      {idx === 0 ? t('reports.total') : result.totals?.[c.key] != null ? formatCell(result.totals[c.key], c) : ''}
                     </td>
                   ))}
                 </tr>
@@ -473,7 +504,7 @@ function JardTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Element {
                       <tr key={idx}>
                         {salesSummary.columns.map((c) => (
                           <td key={c.key} style={{ textAlign: c.align === 'end' ? 'end' : 'start' }}>
-                            {formatCell(row[c.key])}
+                            {formatCell(row[c.key], c)}
                           </td>
                         ))}
                       </tr>

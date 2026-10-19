@@ -47,6 +47,28 @@ import { migration043SalesItemNote } from './migrations/043_sales_item_note'
 import { migration044OrderGuestCountNote } from './migrations/044_order_guest_count_note'
 import { migration045TableReservations } from './migrations/045_table_reservations'
 import { migration046WhatsAppInvoicePdf } from './migrations/046_whatsapp_invoice_pdf'
+import { migration047StockPermitPriceSerial } from './migrations/047_stock_permit_price_serial'
+import { migration048TableShape } from './migrations/048_table_shape'
+import { migration049RestaurantTaxKitchenNotifications } from './migrations/049_restaurant_tax_kitchen_notifications'
+import { migration050KitchenNotifyMode } from './migrations/050_kitchen_notify_mode'
+import { migration051FloorLayout } from './migrations/051_floor_layout'
+import { migration052InvoiceDeliveryAddress } from './migrations/052_invoice_delivery_address'
+import { migration053PerViewPermissions } from './migrations/053_per_view_permissions'
+import { migration054OrderItemDiscount } from './migrations/054_order_item_discount'
+import { migration055DiscountPermission } from './migrations/055_discount_permission'
+import { migration056InvoiceCustomerLabel } from './migrations/056_invoice_customer_label'
+import { migration057OrderCustomerLabel } from './migrations/057_order_customer_label'
+import { migration058HeldInvoices } from './migrations/058_held_invoices'
+import { migration059SalesItemWarehouse } from './migrations/059_sales_item_warehouse'
+import { migration060TreasuriesVouchers } from './migrations/060_treasuries_vouchers'
+import { migration061Ledger } from './migrations/061_ledger'
+import { migration062AllowNegativeStock } from './migrations/062_allow_negative_stock'
+import { migration063LicenseTrial30 } from './migrations/063_license_trial_30'
+import { migration064Tips } from './migrations/064_tips'
+import { migration065EventBookings } from './migrations/065_event_bookings'
+import { migration066Attendance } from './migrations/066_attendance'
+import { migration067AttendanceHikvision } from './migrations/067_attendance_hikvision'
+import { migration068AttendancePayroll } from './migrations/068_attendance_payroll'
 import { seedDatabase } from './seed'
 
 let db: Client | null = null
@@ -151,7 +173,29 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
   { name: '043_sales_item_note', sql: migration043SalesItemNote },
   { name: '044_order_guest_count_note', sql: migration044OrderGuestCountNote },
   { name: '045_table_reservations', sql: migration045TableReservations },
-  { name: '046_whatsapp_invoice_pdf', sql: migration046WhatsAppInvoicePdf }
+  { name: '046_whatsapp_invoice_pdf', sql: migration046WhatsAppInvoicePdf },
+  { name: '047_stock_permit_price_serial', sql: migration047StockPermitPriceSerial },
+  { name: '048_table_shape', sql: migration048TableShape },
+  { name: '049_restaurant_tax_kitchen_notifications', sql: migration049RestaurantTaxKitchenNotifications },
+  { name: '050_kitchen_notify_mode', sql: migration050KitchenNotifyMode },
+  { name: '051_floor_layout', sql: migration051FloorLayout },
+  { name: '052_invoice_delivery_address', sql: migration052InvoiceDeliveryAddress },
+  { name: '053_per_view_permissions', sql: migration053PerViewPermissions },
+  { name: '054_order_item_discount', sql: migration054OrderItemDiscount },
+  { name: '055_discount_permission', sql: migration055DiscountPermission },
+  { name: '056_invoice_customer_label', sql: migration056InvoiceCustomerLabel },
+  { name: '057_order_customer_label', sql: migration057OrderCustomerLabel },
+  { name: '058_held_invoices', sql: migration058HeldInvoices },
+  { name: '059_sales_item_warehouse', sql: migration059SalesItemWarehouse },
+  { name: '060_treasuries_vouchers', sql: migration060TreasuriesVouchers },
+  { name: '061_ledger', sql: migration061Ledger },
+  { name: '062_allow_negative_stock', sql: migration062AllowNegativeStock },
+  { name: '063_license_trial_30', sql: migration063LicenseTrial30 },
+  { name: '064_tips', sql: migration064Tips },
+  { name: '065_event_bookings', sql: migration065EventBookings },
+  { name: '066_attendance', sql: migration066Attendance },
+  { name: '067_attendance_hikvision', sql: migration067AttendanceHikvision },
+  { name: '068_attendance_payroll', sql: migration068AttendancePayroll }
 ]
 
 async function runMigrations(client: Client): Promise<void> {

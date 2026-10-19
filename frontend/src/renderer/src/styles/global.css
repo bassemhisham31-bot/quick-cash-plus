@@ -37,6 +37,18 @@ button {
   height: 100vh;
 }
 
+.qcp-app-shell.qcp-no-sidebar {
+  grid-template-columns: 1fr;
+}
+
+.qcp-topbar-home {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 15px;
+}
+
 .qcp-sidebar {
   background: var(--qcp-sidebar-bg);
   display: flex;
@@ -336,6 +348,42 @@ table.qcp-table {
 
 .qcp-table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.qcp-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.qcp-row-actions .qcp-btn {
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+/* شاشات صغيرة: أزرار الصف بالأيقونة بس (الاسم بيظهر لما الماوس يقف عليها) وخلايا الجدول أضيق، عشان الجدول ميتقصش */
+@media (max-width: 1280px) {
+  .qcp-table thead th,
+  .qcp-table tbody td {
+    padding-inline: 8px;
+  }
+
+  .qcp-table thead th {
+    white-space: normal;
+  }
+
+  .qcp-row-actions {
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .qcp-row-actions .qcp-btn {
+    padding: 4px 7px;
+  }
+
+  .qcp-row-actions .qcp-btn-label {
+    display: none;
+  }
 }
 
 .qcp-pill {

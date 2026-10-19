@@ -18,9 +18,10 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
                  i.tax_total AS taxTotal, i.total, i.paid, i.payment_method AS paymentMethod, i.status, i.note,
                  i.created_at AS createdAt, c.name AS customerName, c.phone AS customerPhone, u.full_name AS cashierName,
                  i.loyalty_points_earned AS loyaltyPointsEarned, i.loyalty_points_redeemed AS loyaltyPointsRedeemed,
-                 c.loyalty_points AS customerLoyaltyBalance, c.balance AS customerBalance, c.is_walk_in AS isWalkIn,
+                 c.loyalty_points AS customerLoyaltyBalance, c.balance AS customerBalance, c.is_walk_in AS isWalkIn, i.customer_label AS customerLabel,
                  i.order_type AS orderType, t.name AS tableName, d.name AS deliveryDriverName,
-                 ro.delivery_address AS deliveryAddress, i.delivery_fee AS deliveryFee, cap.name AS captainName
+                 COALESCE(ro.delivery_address, i.delivery_address) AS deliveryAddress,
+                 COALESCE(ro.special_mark, i.delivery_mark) AS deliveryMark, i.delivery_fee AS deliveryFee, i.service_charge_total AS serviceChargeTotal, cap.name AS captainName
           FROM sales_invoices i
           JOIN customers c ON c.id = i.customer_id
           JOIN users u ON u.id = i.cashier_id
@@ -46,7 +47,7 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
     id: Number(header.id),
     number: header.number,
     customerId: Number(header.customerId),
-    customerName: header.customerName,
+    customerName: header.isWalkIn && header.customerLabel ? header.customerLabel : header.customerName,
     customerPhone: header.customerPhone ?? null,
     subtotal: Number(header.subtotal),
     discountTotal: Number(header.discountTotal),
@@ -72,7 +73,9 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
     tableName: header.tableName ?? null,
     deliveryDriverName: header.deliveryDriverName ?? null,
     deliveryAddress: header.deliveryAddress ?? null,
+    deliveryMark: header.deliveryMark ?? null,
     deliveryFee: Number(header.deliveryFee ?? 0),
+    serviceChargeTotal: Number(header.serviceChargeTotal ?? 0),
     captainName: header.captainName ?? null,
     lines: linesRs.rows.map((r: any) => ({
       salesItemId: Number(r.salesItemId),
@@ -151,7 +154,7 @@ export async function deleteInvoice(invoiceId: number, userId: number): Promise<
   const warehouseId = Number(invoice.warehouse_id)
 
   const linesRs = await db.execute({
-    sql: `SELECT si.id, si.product_id, si.qty,
+    sql: `SELECT si.id, si.product_id, si.qty, si.warehouse_id,
                  COALESCE((SELECT SUM(ri.qty) FROM sales_return_items ri WHERE ri.sales_item_id = si.id), 0) AS returnedQty
           FROM sales_items si WHERE si.invoice_id = ?`,
     args: [invoiceId]
@@ -164,12 +167,12 @@ export async function deleteInvoice(invoiceId: number, userId: number): Promise<
       if (remaining > 0) {
         await tx.execute({
           sql: 'UPDATE stock SET quantity = quantity + ? WHERE product_id = ? AND warehouse_id = ?',
-          args: [remaining, line.product_id, warehouseId]
+          args: [remaining, line.product_id, line.warehouse_id != null ? Number(line.warehouse_id) : warehouseId]
         })
         await tx.execute({
           sql: `INSERT INTO stock_movements (product_id, warehouse_id, type, qty, ref_type, ref_id, user_id)
                 VALUES (?, ?, 'sale_return', ?, 'invoice_delete', ?, ?)`,
-          args: [line.product_id, warehouseId, remaining, invoiceId, userId]
+          args: [line.product_id, line.warehouse_id != null ? Number(line.warehouse_id) : warehouseId, remaining, invoiceId, userId]
         })
       }
     }
@@ -206,7 +209,7 @@ export async function restoreInvoice(invoiceId: number, userId: number): Promise
   const warehouseId = Number(invoice.warehouse_id)
 
   const linesRs = await db.execute({
-    sql: `SELECT si.id, si.product_id, si.product_name, si.qty,
+    sql: `SELECT si.id, si.product_id, si.product_name, si.qty, si.warehouse_id,
                  COALESCE((SELECT SUM(ri.qty) FROM sales_return_items ri WHERE ri.sales_item_id = si.id), 0) AS returnedQty
           FROM sales_items si WHERE si.invoice_id = ?`,
     args: [invoiceId]
@@ -217,9 +220,10 @@ export async function restoreInvoice(invoiceId: number, userId: number): Promise
     for (const line of linesRs.rows as any[]) {
       const remaining = Number(line.qty) - Number(line.returnedQty)
       if (remaining > 0) {
+        const lineWh = line.warehouse_id != null ? Number(line.warehouse_id) : warehouseId
         const stockRs = await tx.execute({
           sql: 'SELECT quantity FROM stock WHERE product_id = ? AND warehouse_id = ?',
-          args: [line.product_id, warehouseId]
+          args: [line.product_id, lineWh]
         })
         const available = stockRs.rows[0] ? Number((stockRs.rows[0] as any).quantity) : 0
         if (available < remaining) {
@@ -227,12 +231,12 @@ export async function restoreInvoice(invoiceId: number, userId: number): Promise
         }
         await tx.execute({
           sql: 'UPDATE stock SET quantity = quantity - ? WHERE product_id = ? AND warehouse_id = ?',
-          args: [remaining, line.product_id, warehouseId]
+          args: [remaining, line.product_id, lineWh]
         })
         await tx.execute({
           sql: `INSERT INTO stock_movements (product_id, warehouse_id, type, qty, ref_type, ref_id, user_id)
                 VALUES (?, ?, 'sale', ?, 'invoice_restore', ?, ?)`,
-          args: [line.product_id, warehouseId, -remaining, invoiceId, userId]
+          args: [line.product_id, lineWh, -remaining, invoiceId, userId]
         })
       }
     }
@@ -354,12 +358,12 @@ export async function returnInvoiceLines(
 
       await tx.execute({
         sql: 'UPDATE stock SET quantity = quantity + ? WHERE product_id = ? AND warehouse_id = ?',
-        args: [line.qty, item.product_id, warehouseId]
+        args: [line.qty, item.product_id, item.warehouse_id != null ? Number(item.warehouse_id) : warehouseId]
       })
       await tx.execute({
         sql: `INSERT INTO stock_movements (product_id, warehouse_id, type, qty, ref_type, ref_id, user_id)
               VALUES (?, ?, 'sale_return', ?, 'sales_return', ?, ?)`,
-        args: [item.product_id, warehouseId, line.qty, returnId, userId]
+        args: [item.product_id, item.warehouse_id != null ? Number(item.warehouse_id) : warehouseId, line.qty, returnId, userId]
       })
     }
 

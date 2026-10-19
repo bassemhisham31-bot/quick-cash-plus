@@ -12,6 +12,8 @@ export type ViewName =
   | 'returns'
   | 'expenses'
   | 'shifts'
+  | 'treasury'
+  | 'accounting'
   | 'reports'
   | 'salesReps'
   | 'quotations'
@@ -20,6 +22,8 @@ export type ViewName =
   | 'restaurantTables'
   | 'restaurantCaptains'
   | 'delivery'
+  | 'events'
+  | 'attendance'
   | 'settings'
 export type ThemeMode = 'light' | 'dark'
 
@@ -35,8 +39,14 @@ interface AppState {
   disabledFeatures: string[]
   activeRestaurantOrderId: number | null
   setActiveRestaurantOrderId: (id: number | null) => void
+  /** رسالة بتظهر في صفحة الترابيزات بعد الرجوع لها تلقائيًا (مثلاً بعد الإرسال للمطبخ) */
+  restaurantFlash: string | null
+  setRestaurantFlash: (message: string | null) => void
   setUser: (user: SessionUser | null) => void
   setView: (view: ViewName) => void
+  /** زرار "فواتير معلّقة" في الشريط العلوي بيفتح شاشة البيع على قايمة المعلّقة */
+  posOpenHeld: boolean
+  setPosOpenHeld: (v: boolean) => void
   setLocale: (locale: 'ar' | 'en') => void
   setTheme: (theme: ThemeMode) => void
   bumpDataVersion: () => void
@@ -58,12 +68,16 @@ export const useAppStore = create<AppState>((set) => ({
   disabledFeatures: [],
   activeRestaurantOrderId: null,
   setActiveRestaurantOrderId: (activeRestaurantOrderId) => set({ activeRestaurantOrderId }),
+  restaurantFlash: null,
+  setRestaurantFlash: (restaurantFlash) => set({ restaurantFlash }),
   setUser: (user) => {
     if (user) window.api.session.setActiveUser(user.id, user.username)
     else window.api.session.clearActiveUser()
     set({ user })
   },
   setView: (view) => set({ view }),
+  posOpenHeld: false,
+  setPosOpenHeld: (posOpenHeld) => set({ posOpenHeld }),
   setLocale: (locale) => set({ locale }),
   setTheme: (theme) => set({ theme }),
   bumpDataVersion: () => set((s) => ({ dataVersion: s.dataVersion + 1 })),

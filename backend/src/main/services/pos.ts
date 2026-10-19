@@ -1,12 +1,50 @@
 import { getDb } from '../db'
 import { getTempItemProductId, getWalkInCustomerId } from '../db/seed'
 import { getOpenSession } from './cashSession'
-import { getLoyaltySettings, getTaxSettings } from './settings'
+import { getLoyaltySettings, getPosUiSettings, getTaxSettings } from './settings'
 import { notifySaleByWhatsApp } from './whatsapp'
 import { checkRecipeStock, deductRecipeIfAny } from './recipes'
 import type { CheckoutInput, CheckoutResult } from '../../shared/types'
 
-export async function checkout(input: CheckoutInput, cashierId: number): Promise<CheckoutResult> {
+/**
+ * بيرفض الخصم لو الكاشير مالوش صلاحية "pos.discount" أو الخصم عدّى أقصى نسبة في الإعدادات — نفس قواعد الشاشة بس هنا
+ * مفيش طريقة للتحايل عليها (الأدمن مالوش حد). بيرجع رسالة الخطأ أو null لو كله تمام.
+ */
+async function validateDiscounts(input: CheckoutInput, cashierId: number, subtotal: number, discountTotal: number): Promise<string | null> {
+  const lineDiscounts = input.lines.reduce((s, l) => s + (l.discount > 0 ? l.discount : 0), 0)
+  if (lineDiscounts <= 0 && discountTotal <= 0) return null
+
+  const db = getDb()
+  const userRs = await db.execute({ sql: 'SELECT role FROM users WHERE id = ?', args: [cashierId] })
+  const role = (userRs.rows[0] as any)?.role
+  if (role === 'admin') return null
+
+  const permRs = await db.execute({
+    sql: "SELECT 1 FROM user_permissions WHERE user_id = ? AND permission_code = 'pos.discount'",
+    args: [cashierId]
+  })
+  if (!permRs.rows.length) return 'مفيش عندك صلاحية عمل خصم'
+
+  const { maxDiscountPercent } = await getPosUiSettings()
+  if (maxDiscountPercent >= 100) return null
+  const eps = 0.01
+  for (const l of input.lines) {
+    const gross = l.qty * l.unitPrice
+    if (l.discount > gross * (maxDiscountPercent / 100) + eps) {
+      return `خصم "${l.name}" أكبر من أقصى نسبة مسموحة (${maxDiscountPercent}%)`
+    }
+  }
+  if (discountTotal > subtotal * (maxDiscountPercent / 100) + eps) {
+    return `خصم الفاتورة أكبر من أقصى نسبة مسموحة (${maxDiscountPercent}%)`
+  }
+  return null
+}
+
+export async function checkout(
+  input: CheckoutInput,
+  cashierId: number,
+  opts: { skipDiscountCheck?: boolean } = {}
+): Promise<CheckoutResult> {
   const db = getDb()
 
   if (!input.lines.length) return { ok: false, error: 'السلة فارغة' }
@@ -23,8 +61,20 @@ export async function checkout(input: CheckoutInput, cashierId: number): Promise
     input.discountType === 'percent' ? subtotal * (input.discountValue / 100) : input.discountValue
   const preTaxTotal = Math.max(0, subtotal - discountTotal)
 
+  if (!opts.skipDiscountCheck) {
+    const discountError = await validateDiscounts(input, cashierId, subtotal, discountTotal)
+    if (discountError) return { ok: false, error: discountError }
+  }
+
   const taxSettings = await getTaxSettings()
-  const taxTotal = taxSettings.enabled ? preTaxTotal * (taxSettings.rate / 100) : 0
+  const taxTotal =
+    input.taxValue !== undefined
+      ? input.taxType === 'value'
+        ? input.taxValue
+        : preTaxTotal * (input.taxValue / 100)
+      : taxSettings.enabled
+        ? preTaxTotal * (taxSettings.rate / 100)
+        : 0
 
   const serviceChargeTotal = input.serviceChargeValue
     ? input.serviceChargeType === 'percent'
@@ -75,9 +125,12 @@ export async function checkout(input: CheckoutInput, cashierId: number): Promise
   try {
     // تأكيد كفاية المخزون قبل أي تعديل — الأصناف المؤقتة (خارج المخزون) مستثناة تمامًا.
     // الصنف اللي ليه وصفة (BOM) بيتفحص من كفاية خاماته، مش من مخزونه هو نفسه (غالبًا مالوش مخزون فعلي).
+    // المطعم بيبعت allowNegativeStock بنفسه؛ البيع العادي بيسمح بالسالب بس لو الخيار مفعّل في الإعدادات (بيتفحص هنا مش في الواجهة)
+    const allowNegative = input.allowNegativeStock === true || (await getPosUiSettings()).allowNegativeStock
     for (const line of input.lines) {
-      if (line.isTemp) continue
-      const recipeCheck = await checkRecipeStock(tx, line.productId, line.qty, warehouseId)
+      if (line.isTemp || allowNegative) continue
+      const lineWarehouseId = line.warehouseId ?? warehouseId
+      const recipeCheck = await checkRecipeStock(tx, line.productId, line.qty, lineWarehouseId)
       if (recipeCheck.hasRecipe) {
         if (recipeCheck.insufficientMaterial) {
           throw new Error(`الكمية غير كافية في المخزون للخامة: ${recipeCheck.insufficientMaterial}`)
@@ -86,7 +139,7 @@ export async function checkout(input: CheckoutInput, cashierId: number): Promise
       }
       const stockRs = await tx.execute({
         sql: 'SELECT quantity FROM stock WHERE product_id = ? AND warehouse_id = ?',
-        args: [line.productId, warehouseId]
+        args: [line.productId, lineWarehouseId]
       })
       const available = stockRs.rows[0] ? Number((stockRs.rows[0] as any).quantity) : 0
       if (available < line.qty) {
@@ -112,8 +165,9 @@ export async function checkout(input: CheckoutInput, cashierId: number): Promise
       sql: `INSERT INTO sales_invoices
               (number, customer_id, session_id, cashier_id, warehouse_id, subtotal, discount_type, discount_value,
                discount_total, tax_total, total, paid, payment_method, status, loyalty_points_earned, loyalty_points_redeemed,
-               sales_rep_id, commission_amount, order_type, table_id, delivery_fee, delivery_driver_id, service_charge_total, captain_id)
-            VALUES ('PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               sales_rep_id, commission_amount, order_type, table_id, delivery_fee, delivery_driver_id, service_charge_total, captain_id,
+               delivery_address, delivery_mark, customer_label, tip_amount)
+            VALUES ('PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         customerId,
         session.id,
@@ -136,7 +190,11 @@ export async function checkout(input: CheckoutInput, cashierId: number): Promise
         deliveryFee,
         input.deliveryDriverId ?? null,
         serviceChargeTotal,
-        input.captainId ?? null
+        input.captainId ?? null,
+        orderType === 'delivery' ? input.deliveryAddress?.trim() || null : null,
+        orderType === 'delivery' ? input.deliveryMark?.trim() || null : null,
+        isWalkInSelection ? input.customerLabel?.trim().slice(0, 80) || null : null,
+        input.paymentMethod !== 'credit' ? Math.max(0, Math.round((Number(input.tipAmount) || 0) * 100) / 100) : 0
       ]
     })
     const invoiceId = Number(info.lastInsertRowid)
@@ -146,9 +204,12 @@ export async function checkout(input: CheckoutInput, cashierId: number): Promise
     for (const line of input.lines) {
       const lineTotal = line.qty * line.unitPrice - line.discount
       const lineProductId = line.isTemp ? tempItemProductId : line.productId
+      // تكلفة الوحدة وقت البيع — بتتسجّل عشان تكلفة البضاعة المباعة في القيود متتغيّرش لو التكلفة اتعدّلت بعد كده
+      const costRs = line.isTemp ? null : await tx.execute({ sql: 'SELECT cost_price FROM products WHERE id = ?', args: [line.productId] })
+      const lineCost = costRs?.rows[0] ? Number((costRs.rows[0] as any).cost_price) : 0
       await tx.execute({
-        sql: `INSERT INTO sales_items (invoice_id, product_id, product_name, barcode, qty, unit_price, discount, total, serial_number, note)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO sales_items (invoice_id, product_id, product_name, barcode, qty, unit_price, discount, total, serial_number, note, warehouse_id, cost_price)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           invoiceId,
           lineProductId,
@@ -159,20 +220,25 @@ export async function checkout(input: CheckoutInput, cashierId: number): Promise
           line.discount,
           lineTotal,
           line.serialNumber?.trim() || null,
-          line.note?.trim() || null
+          line.note?.trim() || null,
+          line.isTemp ? null : (line.warehouseId ?? null),
+          lineCost
         ]
       })
       if (line.isTemp) continue
-      const deductedByRecipe = await deductRecipeIfAny(tx, line.productId, line.qty, warehouseId, invoiceId, cashierId)
+      const lineWarehouseId = line.warehouseId ?? warehouseId
+      const deductedByRecipe = await deductRecipeIfAny(tx, line.productId, line.qty, lineWarehouseId, invoiceId, cashierId)
       if (deductedByRecipe) continue
       await tx.execute({
-        sql: 'UPDATE stock SET quantity = quantity - ? WHERE product_id = ? AND warehouse_id = ?',
-        args: [line.qty, line.productId, warehouseId]
+        // upsert بدل UPDATE: صنف مالوش صف مخزون في المخزن ده (ممكن في المطعم مع البيع بالسالب) لازم يتخصم برضه
+        sql: `INSERT INTO stock (product_id, warehouse_id, quantity) VALUES (?, ?, ?)
+              ON CONFLICT(product_id, warehouse_id) DO UPDATE SET quantity = quantity - ?`,
+        args: [line.productId, lineWarehouseId, -line.qty, line.qty]
       })
       await tx.execute({
         sql: `INSERT INTO stock_movements (product_id, warehouse_id, type, qty, ref_type, ref_id, user_id)
               VALUES (?, ?, 'sale', ?, 'sales_invoice', ?, ?)`,
-        args: [line.productId, warehouseId, -line.qty, invoiceId, cashierId]
+        args: [line.productId, lineWarehouseId, -line.qty, invoiceId, cashierId]
       })
     }
 

@@ -1,7 +1,8 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
-import { hasPermission } from '../../lib/permissions'
+import { hasPermission, isViewLicensed, VIEW_PERMISSIONS } from '../../lib/permissions'
+import { NAV_ITEMS } from '../../components/Sidebar'
 import { playSound } from '../../lib/sounds'
 import type {
   AssistantProvider,
@@ -33,6 +34,7 @@ import type {
   WhatsAppStatus
 } from '../../../../shared/types'
 import { PERMISSIONS } from '../../../../shared/types'
+import { confirmDialog } from '../../components/ConfirmDialogHost'
 
 type Section =
   | 'store'
@@ -54,10 +56,18 @@ type Section =
   | 'dataReset'
   | 'about'
 
+// الأقسام التي لا يجوز إخفاؤها بالترخيص إطلاقًا (العميل يحتاجها دائمًا)
+const ALWAYS_ON_SECTIONS: Section[] = ['license', 'about']
+
 export function SettingsPage(): JSX.Element {
   const { t } = useTranslation()
   const user = useAppStore((s) => s.user)
+  const disabledFeatures = useAppStore((s) => s.disabledFeatures)
   const [section, setSection] = useState<Section>('store')
+
+  // إخفاء قسم إعدادات مفتاحه "settings:<القسم>" موقوف بالترخيص — عدا الأقسام الأساسية دائمة الإتاحة
+  const isSectionLicensed = (key: Section): boolean =>
+    ALWAYS_ON_SECTIONS.includes(key) || !disabledFeatures.includes(`settings:${key}`)
 
   const sections: { key: Section; icon: string; label: string }[] = [
     { key: 'store', icon: '🏬', label: t('settings.storeSection') },
@@ -81,7 +91,15 @@ export function SettingsPage(): JSX.Element {
     ...(user?.role === 'admin'
       ? [{ key: 'dataReset' as Section, icon: '⚠️', label: t('settings.dataResetSection') }]
       : [])
-  ]
+  ].filter((s) => isSectionLicensed(s.key))
+
+  // لو القسم الحالي اتخفى بالترخيص، انتقل لأول قسم متاح
+  useEffect(() => {
+    if (section !== 'about' && !sections.some((s) => s.key === section)) {
+      setSection(sections[0]?.key ?? 'about')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disabledFeatures])
 
   return (
     <div>
@@ -89,7 +107,7 @@ export function SettingsPage(): JSX.Element {
         <h1>{t('settings.title')}</h1>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '220px minmax(0, 1fr)', gap: 18 }}>
         <div className="qcp-card" style={{ height: 'fit-content' }}>
           {sections.map((s) => (
             <button
@@ -113,7 +131,8 @@ export function SettingsPage(): JSX.Element {
           </button>
         </div>
 
-        <div className="qcp-card">
+        {/* minWidth 0 + overflowX: لو المحتوى أعرض من الشاشة يظهر شريط تمرير أفقي تحت بدل ما يتقص من الجنب */}
+        <div className="qcp-card" style={{ minWidth: 0, overflowX: 'auto' }}>
           {section === 'store' && <StoreSection />}
           {section === 'license' && <LicenseSection />}
           {section === 'tax' && <TaxSection />}
@@ -138,35 +157,14 @@ export function SettingsPage(): JSX.Element {
   )
 }
 
-const PERMISSION_LABELS: Record<string, string> = {
-  'dashboard.view': 'لوحة التحكم',
-  'pos.sell': 'البيع',
-  'customers.manage': 'العملاء',
-  'invoices.manage': 'الفواتير',
-  'vendors.manage': 'الموردين',
-  'inventory.manage': 'المخزون',
-  'settings.manage': 'الإعدادات',
-  'reports.view': 'التقارير',
-  'expenses.manage': 'المصروفات',
-  'users.manage': 'المستخدمون',
-  'sales_reps.manage': 'المناديب',
-  'pos.editPrice': 'تعديل السعر أثناء البيع'
-}
-
-// نفس ترتيب المجموعات في الصورة المرجعية: صف لكل 3 صلاحيات
-const PERMISSION_GRID_ORDER: string[] = [
-  'dashboard.view',
-  'pos.sell',
-  'customers.manage',
-  'invoices.manage',
-  'vendors.manage',
-  'inventory.manage',
-  'settings.manage',
-  'reports.view',
-  'expenses.manage',
-  'users.manage',
-  'sales_reps.manage',
-  'pos.editPrice'
+/** صلاحيات مش شاشات — تفاصيل جوه الشاشات (الشاشات نفسها بتتبني من NAV_ITEMS + VIEW_PERMISSIONS) */
+const EXTRA_PERMISSIONS: { code: string; label: string; icon: string }[] = [
+  { code: 'users.manage', label: 'المستخدمون والصلاحيات', icon: '👤' },
+  { code: 'pos.editPrice', label: 'تعديل السعر أثناء البيع', icon: '✏️' },
+  { code: 'pos.return', label: 'مرتجع من شاشة البيع', icon: '↩️' },
+  { code: 'pos.deleteItem', label: 'حذف/تقليل صنف من الفاتورة أو الطلب', icon: '🗑' },
+  { code: 'pos.discount', label: 'عمل خصم على الصنف أو الفاتورة', icon: '🏷' },
+  { code: 'accounting.manage', label: 'إضافة قيود يدوية وحسابات في دفتر القيود', icon: '📚' }
 ]
 
 const emptyUserForm = {
@@ -182,6 +180,7 @@ const emptyUserForm = {
 function UsersSection(): JSX.Element {
   const { t } = useTranslation()
   const currentUser = useAppStore((s) => s.user)
+  const disabledFeatures = useAppStore((s) => s.disabledFeatures)
   const [tab, setTab] = useState<'users' | 'log'>('users')
   const [users, setUsers] = useState<UserListItem[]>([])
   const [activity, setActivity] = useState<UserActivityEntry[]>([])
@@ -264,7 +263,7 @@ function UsersSection(): JSX.Element {
 
   async function handleDelete(u: UserListItem): Promise<void> {
     if (!currentUser) return
-    if (!window.confirm(`${t('settings.confirmDeleteUser')} (${u.username})؟`)) return
+    if (!await confirmDialog(`${t('settings.confirmDeleteUser')} (${u.username})؟`)) return
     const result = await window.api.users.delete(u.id, currentUser.id)
     if (!result.ok) {
       setError(result.error ?? 'حدث خطأ')
@@ -296,8 +295,9 @@ function UsersSection(): JSX.Element {
       </div>
 
       {tab === 'users' ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 16 }}>
-          <div>
+        // flex-wrap: على الشاشات الصغيرة فورم المستخدم بينزل تحت القايمة بدل ما يتقص
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
+          <div style={{ flex: '1 1 240px', maxWidth: 360, minWidth: 0 }}>
             <div className="qcp-card" style={{ marginBottom: 10, display: 'flex', justifyContent: 'space-between' }}>
               <span className="qcp-pill accent">
                 {t('settings.admins')}: {adminCount}
@@ -335,10 +335,10 @@ function UsersSection(): JSX.Element {
             ))}
           </div>
 
-          <div>
+          <div style={{ flex: '3 1 380px', minWidth: 0 }}>
             <h4 style={{ marginTop: 0 }}>{form.id === null ? t('settings.addUser') : t('settings.editUser')}</h4>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <div className="qcp-field" style={{ flex: 1 }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div className="qcp-field" style={{ flex: '1 1 180px' }}>
                 <label>{t('settings.username')}</label>
                 <input
                   className="qcp-input"
@@ -347,7 +347,7 @@ function UsersSection(): JSX.Element {
                   onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
                 />
               </div>
-              <div className="qcp-field" style={{ flex: 1 }}>
+              <div className="qcp-field" style={{ flex: '1 1 180px' }}>
                 <label>{form.id === null ? t('settings.password') : t('settings.newPasswordOptional')}</label>
                 <input
                   className="qcp-input"
@@ -358,8 +358,8 @@ function UsersSection(): JSX.Element {
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 10 }}>
-              <div className="qcp-field" style={{ flex: 1 }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div className="qcp-field" style={{ flex: '1 1 180px' }}>
                 <label>{t('settings.fullName')}</label>
                 <input
                   className="qcp-input"
@@ -367,7 +367,7 @@ function UsersSection(): JSX.Element {
                   onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))}
                 />
               </div>
-              <div className="qcp-field" style={{ flex: 1 }}>
+              <div className="qcp-field" style={{ flex: '1 1 180px' }}>
                 <label>{t('settings.role')}</label>
                 <select
                   className="qcp-select"
@@ -391,6 +391,12 @@ function UsersSection(): JSX.Element {
               </label>
             )}
 
+            {form.role === 'admin' && (
+              <div className="qcp-card" style={{ fontSize: 13 }}>
+                🔑 المدير (أدمن) عنده كل الصلاحيات تلقائيًا ومش بيتحدد له صلاحيات. عشان تتحكم في الصلاحيات اعمل مستخدم بدور "كاشير" وحدد له الشاشات والصلاحيات اللي تناسبه.
+              </div>
+            )}
+
             {form.role !== 'admin' && (
               <div className="qcp-field">
                 <label>{t('settings.permissions')}</label>
@@ -412,31 +418,48 @@ function UsersSection(): JSX.Element {
                     {t('settings.clearPermissions')}
                   </button>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-                  {PERMISSION_GRID_ORDER.map((code) => {
-                    const active = form.permissions.includes(code)
-                    return (
-                      <button
-                        key={code}
-                        type="button"
-                        style={{
-                          cursor: 'pointer',
-                          padding: '10px 8px',
-                          borderRadius: 9,
-                          fontSize: 13,
-                          fontWeight: 700,
-                          textAlign: 'center',
-                          border: active ? '1.5px solid var(--qcp-accent)' : '1px solid var(--qcp-border)',
-                          background: active ? 'var(--qcp-accent-soft)' : 'var(--qcp-bg-sunken)',
-                          color: active ? 'var(--qcp-accent-strong)' : 'var(--qcp-ink)'
-                        }}
-                        onClick={() => togglePermission(code)}
-                      >
-                        {PERMISSION_LABELS[code] ?? code}
-                      </button>
-                    )
-                  })}
-                </div>
+                {[
+                  {
+                    title: '🖥️ الشاشات اللي يقدر يفتحها',
+                    // الشاشات الموقوفة في كود التفعيل مش بتظهر هنا أصلًا
+                    items: NAV_ITEMS.filter((n) => isViewLicensed(n.key, disabledFeatures)).map((n) => ({
+                      code: VIEW_PERMISSIONS[n.key],
+                      label: t(`nav.${n.key}`),
+                      icon: n.icon
+                    }))
+                  },
+                  { title: '🔐 صلاحيات إضافية جوه الشاشات', items: EXTRA_PERMISSIONS }
+                ].map((group) => (
+                  <div key={group.title} style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: 'var(--qcp-ink-muted)', margin: '6px 0 8px' }}>{group.title}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
+                      {group.items.map(({ code, label, icon }) => {
+                        const active = form.permissions.includes(code)
+                        return (
+                          <button
+                            key={code}
+                            type="button"
+                            style={{
+                              cursor: 'pointer',
+                              padding: '10px 8px',
+                              borderRadius: 9,
+                              fontSize: 13,
+                              fontWeight: 700,
+                              textAlign: 'center',
+                              border: active ? '1.5px solid var(--qcp-accent)' : '1px solid var(--qcp-border)',
+                              background: active ? 'var(--qcp-accent-soft)' : 'var(--qcp-bg-sunken)',
+                              color: active ? 'var(--qcp-accent-strong)' : 'var(--qcp-ink)'
+                            }}
+                            onClick={() => togglePermission(code)}
+                          >
+                            {active ? '✓ ' : ''}
+                            {icon} {label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -1110,6 +1133,84 @@ function RestaurantSection(): JSX.Element {
         </div>
       </div>
 
+      <h3>ضريبة المطعم</h3>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <input type="checkbox" checked={settings.taxEnabled} onChange={(e) => setSettings({ ...settings, taxEnabled: e.target.checked })} />
+        تفعيل ضريبة على فواتير المطعم (بتحل محل الضريبة العامة لفواتير المطعم بس — البيع العادي مش بيتأثر)
+      </label>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+        <div className="qcp-field" style={{ flex: '1 1 160px' }}>
+          <label>اسم الضريبة (بيظهر في الفاتورة والشيك)</label>
+          <input
+            className="qcp-input"
+            value={settings.taxName}
+            onChange={(e) => setSettings({ ...settings, taxName: e.target.value })}
+          />
+        </div>
+        <div className="qcp-field" style={{ flex: '1 1 120px' }}>
+          <label>النوع</label>
+          <select
+            className="qcp-select"
+            value={settings.taxType}
+            onChange={(e) => setSettings({ ...settings, taxType: e.target.value as 'percent' | 'value' })}
+          >
+            <option value="percent">نسبة %</option>
+            <option value="value">قيمة ثابتة</option>
+          </select>
+        </div>
+        <div className="qcp-field" style={{ flex: '1 1 120px' }}>
+          <label>القيمة</label>
+          <input
+            className="qcp-input"
+            type="number"
+            min={0}
+            step="any"
+            value={settings.taxValue}
+            onChange={(e) => setSettings({ ...settings, taxValue: Number(e.target.value) })}
+          />
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 18, fontSize: 14 }}>
+        <span style={{ color: 'var(--qcp-ink-faint)' }}>تتطبق على:</span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={settings.taxDineIn} onChange={(e) => setSettings({ ...settings, taxDineIn: e.target.checked })} />
+          الصالة
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={settings.taxTakeaway} onChange={(e) => setSettings({ ...settings, taxTakeaway: e.target.checked })} />
+          التيك أواي
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={settings.taxDelivery} onChange={(e) => setSettings({ ...settings, taxDelivery: e.target.checked })} />
+          الديلفري
+        </label>
+      </div>
+
+      <h3>بعد الإرسال للمطبخ (تجهيز)</h3>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
+        <input
+          type="checkbox"
+          checked={settings.autoNewOrderAfterKitchen}
+          onChange={(e) => setSettings({ ...settings, autoNewOrderAfterKitchen: e.target.checked })}
+        />
+        افتح فاتورة جديدة تلقائي بعد التجهيز (تيك أواي/ديلفري: طلب جديد على طول — الصالة: يرجع لخريطة الترابيزات)
+      </label>
+
+      <h3>إشعارات التجهيز 🍳</h3>
+      <div className="qcp-field" style={{ maxWidth: 360, marginBottom: 18 }}>
+        <label>زرار إشعارات طلبات التجهيز يظهر على</label>
+        <select
+          className="qcp-select"
+          value={settings.kitchenNotifyMode}
+          onChange={(e) => setSettings({ ...settings, kitchenNotifyMode: e.target.value as RestaurantSettings['kitchenNotifyMode'] })}
+        >
+          <option value="all">كل الأجهزة</option>
+          <option value="sub_only">الأجهزة الفرعية بس</option>
+          <option value="main_only">الجهاز الرئيسي بس</option>
+          <option value="off">متوقفة</option>
+        </select>
+      </div>
+
       <div className="qcp-field" style={{ maxWidth: 320, marginBottom: 18 }}>
         <label>طابعة المطبخ الافتراضية (لأي تصنيف مالوش طابعة محددة)</label>
         <select
@@ -1488,7 +1589,7 @@ function BackupSection(): JSX.Element {
   }
 
   async function handleRestore(filePath: string): Promise<void> {
-    if (!window.confirm(t('settings.restoreConfirm') ?? '')) return
+    if (!await confirmDialog(t('settings.restoreConfirm') ?? '')) return
     const result = await window.api.backup.restore(filePath)
     if (!result.ok) setMessage(result.error ?? 'حدث خطأ')
   }
@@ -1838,7 +1939,7 @@ function PriceCheckerSyncSection(): JSX.Element {
   )
 }
 
-function NetworkSection(): JSX.Element {
+export function NetworkSection(): JSX.Element {
   const { t } = useTranslation()
   const [config, setConfig] = useState<NetworkConfig | null>(null)
   const [status, setStatus] = useState<NetworkStatus | null>(null)
@@ -1861,7 +1962,20 @@ function NetworkSection(): JSX.Element {
     if (!config) return
     setSaving(true)
     try {
-      const updated = await window.api.network.updateConfig(config)
+      // تنظيف اللي المستخدم بيلصقه: مسافات، http://، أو "IP:بورت" في نفس الخانة
+      let mainHost = config.mainHost?.trim().replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '') || null
+      let mainPort = config.mainPort || 4545
+      const hostPort = mainHost?.match(/^([^:]+):(\d+)$/)
+      if (hostPort) {
+        mainHost = hostPort[1]
+        mainPort = Number(hostPort[2])
+      }
+      const updated = await window.api.network.updateConfig({
+        ...config,
+        mainHost,
+        mainPort,
+        mainConnectionCode: config.mainConnectionCode?.replace(/\s+/g, '') || null
+      })
       setConfig(updated)
       setNeedsRestart(true)
     } finally {
@@ -1932,6 +2046,11 @@ function NetworkSection(): JSX.Element {
           <div className="qcp-pill success" style={{ marginBottom: 16 }}>
             {t('settings.connectedDevices')}: {status.connectedDeviceCount}
           </div>
+          {status.role === 'main' && !status.serverRunning && (
+            <div className="qcp-callout" style={{ marginBottom: 16, color: 'var(--qcp-critical)' }}>
+              {status.serverError ?? t('settings.restartRequired')}
+            </div>
+          )}
         </>
       )}
 
@@ -1970,6 +2089,11 @@ function NetworkSection(): JSX.Element {
           <div className={`qcp-pill ${status.connectedToMain ? 'success' : 'critical'}`} style={{ marginBottom: 16 }}>
             {t('settings.connectionStatus')}: {status.connectedToMain ? t('settings.connected') : t('settings.disconnected')}
           </div>
+          {!status.connectedToMain && status.lastConnectionError && (
+            <div className="qcp-callout" style={{ marginBottom: 16, color: 'var(--qcp-critical)' }}>
+              {status.lastConnectionError}
+            </div>
+          )}
         </>
       )}
 
@@ -2667,6 +2791,49 @@ function PosUiSection(): JSX.Element {
         hint={t('posUi.priceEditEnabledHint')}
         checked={settings.priceEditEnabled}
         onChange={(v) => handleSave({ ...settings, priceEditEnabled: v })}
+      />
+      <div
+        className="qcp-card"
+        style={{ marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}
+      >
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 13.5 }}>أقصى نسبة خصم للكاشير (%)</div>
+          <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)', marginTop: 4 }}>
+            بتتطبق على خصم الصنف وخصم الفاتورة (نسبة أو قيمة). الأدمن مالوش حد. مين يقدر يخصم أصلاً بيتحدد من صلاحية "عمل خصم" في إعدادات المستخدمين.
+          </div>
+        </div>
+        <input
+          className="qcp-input"
+          type="number"
+          min={0}
+          max={100}
+          style={{ width: 90 }}
+          defaultValue={settings.maxDiscountPercent}
+          key={settings.maxDiscountPercent}
+          onBlur={(e) => {
+            const v = Math.min(100, Math.max(0, Number(e.target.value) || 0))
+            if (v !== settings.maxDiscountPercent) handleSave({ ...settings, maxDiscountPercent: v })
+          }}
+        />
+      </div>
+      <ToggleRow
+        title="السماح بالبيع بالرصيد السالب"
+        hint="يسمح ببيع صنف رصيده صفر أو أقل من الكمية المطلوبة في البيع العادي (الرصيد بيروح بالسالب وبيتصلّح بعدين بفاتورة شراء أو إذن إضافة). المطاعم بتبيع بالسالب دايمًا."
+        checked={settings.allowNegativeStock}
+        onChange={(v) => handleSave({ ...settings, allowNegativeStock: v })}
+      />
+      <ToggleRow
+        title="تعليق الفاتورة قبل الدفع"
+        hint="زرار تعليق وقايمة فواتير معلّقة في شاشة البيع — تقدر ترجعلها أو تطبعها (مسودة) في أي وقت."
+        checked={settings.holdInvoicesEnabled}
+        onChange={(v) => handleSave({ ...settings, holdInvoicesEnabled: v })}
+      />
+      <ToggleRow
+        title="تنبيه الفاتورة المنسية"
+        hint="لو خرجت من شاشة البيع وفيها فاتورة ما اتحفظتش، بتتعلّق تلقائيًا ويظهر زرار تنبيه «معلّقة» في الشريط العلوي."
+        checked={settings.autoHoldOnLeave}
+        onChange={(v) => handleSave({ ...settings, autoHoldOnLeave: v })}
+        locked={!settings.holdInvoicesEnabled}
       />
       <ToggleRow
         title={t('posUi.multiWarehouseEnabled')}
