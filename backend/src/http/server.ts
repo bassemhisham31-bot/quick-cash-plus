@@ -9,7 +9,8 @@ import { login } from '../main/services/auth'
 import { logUserActivity } from '../main/services/users'
 import { statfsSync } from 'fs'
 import { getDb, getDbPath } from '../main/db'
-import { licenseBlockReason } from '../main/services/license'
+import { getWebLicenseStatus, setLicenseFromOwner, webLicenseBlockReason } from '../main/services/licenseWeb'
+import { timingSafeEqual } from 'crypto'
 import { printCapture, type DevicePrintProfile, type PrintJob } from '../main/services/printContext'
 import { triggerDebouncedSync } from '../main/services/priceCheckerSync'
 import { signToken, requireAuth, verifyToken, type AuthedRequest } from './auth'
@@ -76,6 +77,30 @@ export function createApp(): express.Express {
     }
     res.json({ ok: true, service: 'qcp-web-backend', time: new Date().toISOString() })
   })
+  /**
+   * ضبط الترخيص بأمر المالك — بيتنادى من السيرفر نفسه بس (deploy/set-license.sh):
+   * localhost فقط + سر QCP_INTERNAL_SECRET من .env. Caddy بيوجّه /api و/ws بس، فالمسار ده مش متاح من الإنترنت أصلًا.
+   * من غير plan في الجسم بيرجّع الحالة الحالية بس.
+   */
+  app.post('/internal/license', async (req, res) => {
+    const secret = process.env.QCP_INTERNAL_SECRET ?? ''
+    const given = String(req.headers['x-qcp-internal'] ?? '')
+    const ip = req.socket.remoteAddress ?? ''
+    const loopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
+    const a = Buffer.from(given)
+    const b = Buffer.from(secret)
+    if (!secret || !loopback || a.length !== b.length || !timingSafeEqual(a, b)) {
+      res.status(404).end()
+      return
+    }
+    try {
+      const status = req.body?.plan ? await setLicenseFromOwner(req.body) : await getWebLicenseStatus()
+      res.json({ ok: true, status })
+    } catch (err: any) {
+      res.status(400).json({ ok: false, error: err?.message ?? 'خطأ' })
+    }
+  })
+
   app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body ?? {}
     if (typeof username !== 'string' || typeof password !== 'string') {
@@ -140,7 +165,7 @@ export function createApp(): express.Express {
     const callArgs = isMutating ? [...args, actor] : args
 
     try {
-      const blocked = await licenseBlockReason(channel)
+      const blocked = await webLicenseBlockReason(channel)
       if (blocked) {
         res.status(403).json({ ok: false, error: blocked })
         return

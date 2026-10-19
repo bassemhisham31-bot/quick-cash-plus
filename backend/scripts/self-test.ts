@@ -13,6 +13,7 @@ async function json(res: Response): Promise<any> {
 
 const TEST_DB_PATH = join(process.cwd(), 'data', 'self-test.sqlite')
 const PORT = 4999
+process.env.QCP_INTERNAL_SECRET = 'test-internal-secret'
 process.env.QCP_HEALTH_MAX_DISK_PCT = '100' // جهاز التطوير ممكن قرصه شبه ممتلي — الاختبار مش بيفحص القرص
 const BASE = `http://127.0.0.1:${PORT}`
 
@@ -206,6 +207,39 @@ async function main(): Promise<void> {
       assert(Number((users.rows[0] as any).n) >= 1, 'النسخة فيها بيانات المستخدمين')
       copyDb.close()
     }
+
+    console.log('\n16) الترخيص: تفعيل بأمر المالك، فترة السماح، والقفل...')
+    const internal = (body: unknown, secret = 'test-internal-secret'): Promise<Response> =>
+      fetch(`${BASE}/internal/license`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-qcp-internal': secret }, body: JSON.stringify(body) })
+    assert((await internal({}, 'wrong')).status === 404, '/internal/license بسر غلط = 404')
+    const paid = await (await internal({ plan: 'monthly', expiresAt: '2099-01-01' })).json()
+    assert(paid.ok && paid.status.status === 'active' && paid.status.plan === 'monthly', 'تفعيل شهري بأمر المالك نجح')
+    const pastTry = await (await internal({ plan: 'monthly', expiresAt: '2020-01-01' })).json()
+    assert(pastTry.ok === false, 'تاريخ انتهاء في الماضي اترفض')
+    const act = await rpc('license:activate', ['abc'])
+    assert(act.result?.ok === false, 'التفعيل بكود من العميل مقفول على الويب')
+
+    const { getDb: getTestDb } = await import('../src/main/db')
+    const { invalidateWebLicenseCache } = await import('../src/main/services/licenseWeb')
+    const daysAgo = (d: number): string => new Date(Date.now() - d * 86400000).toISOString()
+    await getTestDb().execute({ sql: "UPDATE license SET status = 'active', plan = 'monthly', expires_at = ? WHERE id = 1", args: [daysAgo(3)] })
+    invalidateWebLicenseCache()
+    const grace = await rpc('license:getStatus')
+    assert(grace.result?.status === 'active' && grace.result?.graceDaysLeft >= 1 && grace.result?.graceDaysLeft <= 7, 'بعد الانتهاء بـ3 أيام: شغال مع graceDaysLeft = ' + grace.result?.graceDaysLeft)
+    const stillWorks = await rpc('catalog:listWarehouses')
+    assert(stillWorks.ok === true, 'القنوات شغالة أثناء فترة السماح')
+
+    await getTestDb().execute({ sql: "UPDATE license SET expires_at = ? WHERE id = 1", args: [daysAgo(10)] })
+    invalidateWebLicenseCache()
+    const locked = await rpc('license:getStatus')
+    assert(locked.result?.status === 'expired', 'بعد السماح: الحالة expired')
+    const blockedRes = await fetch(`${BASE}/api/rpc/catalog:listWarehouses`, { method: 'POST', headers: authHeaders, body: JSON.stringify({ args: [] }) })
+    assert(blockedRes.status === 500 || blockedRes.status === 403, 'القنوات العادية مقفولة بعد السماح (HTTP ' + blockedRes.status + ')')
+
+    const renewed = await (await internal({ plan: 'yearly', expiresAt: '2099-01-01' })).json()
+    assert(renewed.ok && renewed.status.status === 'active', 'تجديد بأمر المالك رجّع التشغيل')
+    const unlocked = await rpc('catalog:listWarehouses')
+    assert(unlocked.ok === true, 'القنوات رجعت تشتغل بعد التجديد')
   } finally {
     server.close()
   }

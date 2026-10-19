@@ -122,7 +122,7 @@ import {
   printShiftSummary,
   printStockPermit
 } from './services/print'
-import { activateLicense, getLicenseStatus } from './services/license'
+import { getWebLicenseStatus } from './services/licenseWeb'
 import { listBackups, restoreBackup, runLocalBackup, scheduleAutoBackup } from './services/backup'
 import {
   saveAndReschedulePriceCheckerSync,
@@ -619,8 +619,8 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
       items: { name: string; qty: number; note: string | null }[]
     ) => printKitchenTicket(meta, printerName, items),
 
-    'license:getStatus': () => getLicenseStatus(),
-    'license:activate': (key: string) => activateLicense(key),
+    'license:getStatus': () => getWebLicenseStatus(),
+    'license:activate': async () => ({ ok: false, error: 'التفعيل بيتم من مزوّد الخدمة — تواصل معاه للتجديد' }),
 
     'backup:getSettings': () => getBackupSettings(),
     'backup:updateSettings': async (

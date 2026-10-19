@@ -39,6 +39,7 @@ if [ ! -f "$ENV_FILE" ]; then
 PORT=$PORT
 QCP_JWT_SECRET=$(openssl rand -hex 48)
 QCP_ADMIN_PASSWORD=$ADMIN_PASS
+QCP_INTERNAL_SECRET=$(openssl rand -hex 24)
 $( [ -n "$DB_URL" ] && printf "QCP_DB_URL=%s
 QCP_DB_AUTH_TOKEN=%s" "$DB_URL" "$DB_TOKEN" )
 QCP_DATA_DIR=$CLIENT_DIR/data

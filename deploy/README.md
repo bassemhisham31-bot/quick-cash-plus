@@ -47,13 +47,25 @@ bash /opt/qcp/app/deploy/restore-client.sh acme quick-cash-plus-backup-<الوق
 ```
 بيتأكد إن النسخة سليمة، وبيحفظ القاعدة الحالية جنبها (`*.before-restore-*`) ويرجّع التشغيل. **جرّب الاسترجاع مرة على عميل اختبار قبل ما تحتاجه فعلًا.**
 
-## 4) التحديث
+## 4) الترخيص والاشتراكات
+التفعيل بأمر من السيرفر (العميل مابيكتبش أكواد — والتفعيل بكود معطّل على الويب عن قصد لأن سر توقيع الأكواد في الكود المنشور).
+```bash
+bash /opt/qcp/app/deploy/set-license.sh quickcash status
+bash /opt/qcp/app/deploy/set-license.sh quickcash trial 30
+bash /opt/qcp/app/deploy/set-license.sh quickcash yearly 2027-10-31
+bash /opt/qcp/app/deploy/set-license.sh quickcash monthly 2026-12-01 settings:backup,restaurant   # ميزات موقوفة (اختياري)
+```
+- قبل الانتهاء بـ7 أيام: شريط تحذير أصفر للعميل. بعد الانتهاء: **فترة سماح 7 أيام** (شغال مع شريط أحمر)، وبعدها البرنامج بيتقفل (قراءة شاشة التفعيل فقط) لحد ما تجدد.
+- التجديد = نفس الأمر بتاريخ جديد؛ بيرجّع التشغيل فورًا.
+- المسار `/internal/license` على localhost فقط + سر `QCP_INTERNAL_SECRET` في .env الخاص بالعميل (مش متاح من الإنترنت).
+
+## 5) التحديث
 ```bash
 bash /opt/qcp/app/deploy/update.sh
 ```
 بيعمل `git pull` ويبني الواجهة ويعيد تشغيل كل العملاء (الـmigrations بتتطبق تلقائيًا على كل قاعدة).
 
-## 5) إيقاف عميل
+## 6) إيقاف عميل
 ```bash
 bash /opt/qcp/app/deploy/remove-client.sh acme
 ```
@@ -62,4 +74,4 @@ bash /opt/qcp/app/deploy/remove-client.sh acme
 ## ملاحظات أمان
 - كل عميل له `QCP_JWT_SECRET` عشوائي مولّد تلقائيًا في `.env` (صلاحيات 600).
 - الـfirewall بيفتح SSH و80/443 بس؛ المنافذ الداخلية (4101+) مش متاحة من برّه.
-- التراخيص: لسه مبنية على بصمة الجهاز — تحويلها لاشتراك لكل عميل شغل لاحق.
+- التراخيص: بأمر المالك من السيرفر (set-license.sh) — شوف قسم 4.

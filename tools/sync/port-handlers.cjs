@@ -32,6 +32,18 @@ s = s.slice(0, a) + "    'settings:getPrinters': () => getSystemPrinters(),\n" +
 s = s.replace("'dataReset:factoryReset': (userId: number) => resetFactory(userId),\n\n  }", 'x')
 s = s.replace('importProductsFromExcel()', 'importProductsFromExcel(dataBase64)').replace("'catalog:importProducts': ()", "'catalog:importProducts': (dataBase64: string)")
 // (نسخة الويب: الملف بيتبعت base64 من المتصفح)
+
+// الترخيص: حالة مع فترة سماح + منع التفعيل بكود من العميل (التفعيل بأمر المالك من السيرفر — services/licenseWeb.ts)
+const licenseReplacements = [
+  ["import { activateLicense, getLicenseStatus } from '../services/license'", "import { getWebLicenseStatus } from '../services/licenseWeb'"],
+  ["'license:getStatus': () => getLicenseStatus()", "'license:getStatus': () => getWebLicenseStatus()"],
+  ["'license:activate': (key: string) => activateLicense(key)", "'license:activate': async () => ({ ok: false, error: 'التفعيل بيتم من مزوّد الخدمة — تواصل معاه للتجديد' })"]
+]
+for (const [from, to] of licenseReplacements) {
+  if (!s.includes(from)) throw new Error('license replacement target not found: ' + from)
+  s = s.replace(from, to)
+}
+
 s = s.split("'../services/").join("'./services/").split("'../../shared/").join("'../shared/")
 fs.writeFileSync('D:/quick-cash-plus-web/backend/src/main/handlers.ts', s)
 console.log('ok')

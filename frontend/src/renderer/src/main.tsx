@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { getStoredUser, installWebApi } from './platform/webApi'
 import { useAppStore } from './store/appStore'
+import { WebLicenseBanner } from './platform/WebLicenseBanner'
 import { App } from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import './i18n'
@@ -16,6 +17,7 @@ if (restoredUser) useAppStore.setState({ user: restoredUser })
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
+      <WebLicenseBanner />
       <App />
     </ErrorBoundary>
   </React.StrictMode>
