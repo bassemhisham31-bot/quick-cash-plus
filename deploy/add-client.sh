@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # إضافة عميل جديد: نسخة backend منفصلة (منفذ + قاعدة Turso + سر JWT خاص) + دومين فرعي بـHTTPS.
 # الاستخدام:
-#   bash add-client.sh <اسم-العميل> <الدومين-الكامل> <TURSO_URL> <TURSO_TOKEN>
+#   bash add-client.sh <اسم-العميل> <الدومين-الكامل> [<TURSO_URL> <TURSO_TOKEN>]
+#   من غير Turso: قاعدة SQLite محلية على السيرفر (الأسرع — النسخ الاحتياطية تلقائية داخل البرنامج)
 # مثال:
 #   bash add-client.sh acme acme.example.com libsql://acme-xxx.turso.io eyJ...
 set -euo pipefail
 
 NAME="${1:?اسم العميل (حروف إنجليزية صغيرة وأرقام وشرطة)}"
 DOMAIN="${2:?الدومين الكامل للعميل}"
-DB_URL="${3:?رابط قاعدة Turso}"
-DB_TOKEN="${4:?توكن قاعدة Turso}"
+DB_URL="${3:-}"
+DB_TOKEN="${4:-}"
 
 [[ "$NAME" =~ ^[a-z0-9-]+$ ]] || { echo "اسم العميل غير صالح"; exit 1; }
 
@@ -38,8 +39,8 @@ if [ ! -f "$ENV_FILE" ]; then
 PORT=$PORT
 QCP_JWT_SECRET=$(openssl rand -hex 48)
 QCP_ADMIN_PASSWORD=$ADMIN_PASS
-QCP_DB_URL=$DB_URL
-QCP_DB_AUTH_TOKEN=$DB_TOKEN
+$( [ -n "$DB_URL" ] && printf "QCP_DB_URL=%s
+QCP_DB_AUTH_TOKEN=%s" "$DB_URL" "$DB_TOKEN" )
 QCP_DATA_DIR=$CLIENT_DIR/data
 QCP_BACKUP_DIR=$CLIENT_DIR/backups
 ENV

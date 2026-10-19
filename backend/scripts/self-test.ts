@@ -192,6 +192,19 @@ async function main(): Promise<void> {
     assert(xl.result?.ok && xl.result.fileName === 'تقرير تجربة.xlsx' && xl.result.dataBase64.length > 100, 'reports:exportExcel رجع xlsx')
     const pdf = await rpc('reports:exportPdf', [rep])
     assert(pdf.result?.ok && String(pdf.result.html).includes('x&lt;y'), 'reports:exportPdf رجع HTML آمن للطباعة')
+
+    console.log('\n15) نسخة احتياطية محلية (VACUUM INTO) وسلامتها...')
+    const bk = await rpc('backup:runNow')
+    assert(bk.ok === true && bk.result?.ok === true && typeof bk.result.filePath === 'string', 'backup:runNow نجح: ' + JSON.stringify(bk.result))
+    if (bk.result?.filePath) {
+      const { createClient } = await import('@libsql/client')
+      const copyDb = createClient({ url: `file:${String(bk.result.filePath).split(String.fromCharCode(92)).join('/')}` })
+      const integrity = await copyDb.execute('PRAGMA integrity_check')
+      const users = await copyDb.execute('SELECT COUNT(*) n FROM users')
+      assert(String((integrity.rows[0] as any)[0]) === 'ok', 'integrity_check على النسخة = ok')
+      assert(Number((users.rows[0] as any).n) >= 1, 'النسخة فيها بيانات المستخدمين')
+      copyDb.close()
+    }
   } finally {
     server.close()
   }

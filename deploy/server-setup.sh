@@ -9,7 +9,7 @@ CLIENTS_DIR=/opt/qcp/clients
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y curl git ufw debian-keyring debian-archive-keyring apt-transport-https gnupg
+apt-get install -y curl git ufw sqlite3 rclone debian-keyring debian-archive-keyring apt-transport-https gnupg
 
 # Node.js 22 LTS
 if ! command -v node >/dev/null; then

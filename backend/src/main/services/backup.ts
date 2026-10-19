@@ -20,15 +20,14 @@ export async function runLocalBackup(): Promise<BackupResult> {
       return { ok: false, error: 'قاعدة البيانات متصلة بسيرفر بعيد (Turso) — النسخ الاحتياطي المحلي غير مدعوم في هذه الحالة بعد' }
     }
 
-    await db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-
     const folder = await resolveBackupFolder()
     if (!existsSync(folder)) await mkdir(folder, { recursive: true })
 
     const dbPath = getDbPath()
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
     const destPath = join(folder, `quick-cash-plus-backup-${timestamp}.sqlite`)
-    await copyFile(dbPath, destPath)
+    // VACUUM INTO بيعمل نسخة متسقة وذرّية من نفس الاتصال الحي (مفيش اتصال تاني بالملف ولا نسخ ملف شغال فيه كتابة)
+    await db.execute(`VACUUM INTO '${destPath.replace(/'/g, "''")}'`)
 
     const info = await stat(destPath)
     await db.execute({
@@ -118,4 +117,12 @@ export async function scheduleAutoBackup(): Promise<void> {
   scheduledTimer = setInterval(() => {
     runLocalBackup()
   }, intervalMs)
+
+  // السيرفر بيتعاد تشغيله مع كل تحديث، فالمؤقت لوحده ممكن مايوصلش لميعاده أبدًا — لو آخر نسخة أقدم من الفترة نعمل نسخة بعد دقيقة من الإقلاع
+  const last = settings.lastBackupAt ? Date.parse(settings.lastBackupAt.replace(' ', 'T') + 'Z') : NaN
+  if (Number.isNaN(last) || Date.now() - last >= intervalMs) {
+    setTimeout(() => {
+      runLocalBackup()
+    }, 60_000)
+  }
 }
