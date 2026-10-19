@@ -47,6 +47,7 @@ else
   echo "ملف .env موجود بالفعل لعميل $NAME — مش هعدّل عليه (السر والتوكن محفوظين)"
 fi
 chmod 600 "$ENV_FILE"
+umask 022   # ملفات Caddy لازم تتقري من مستخدم caddy
 
 cat > "$CLIENT_DIR/ecosystem.config.cjs" <<PM2
 module.exports = {
@@ -79,6 +80,7 @@ $DOMAIN {
 }
 CADDY
 
+chmod 644 /etc/caddy/clients/$NAME.caddy
 sudo -u qcp pm2 start "$CLIENT_DIR/ecosystem.config.cjs"
 sudo -u qcp pm2 save
 systemctl reload caddy
