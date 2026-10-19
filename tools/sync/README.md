@@ -22,3 +22,5 @@
 - `http/server.ts`: JWT، capture الطباعة، قفل الترخيص، `{__undef:true}` لتمييز undefined من null
 - `attachments.ts` / `googleDrive.ts`: مش منقولين (قنوات stub في `webApi.ts`)
 - `web-tail.txt`: network/system/onDataChanged الخاصين بالويب في `webApi.ts`
+
+- `db/seed.ts`: سطر الـhash بيقرا `QCP_ADMIN_PASSWORD` من البيئة (باسورد admin الأولي لكل عميل)

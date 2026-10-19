@@ -20,6 +20,7 @@
     "jsonwebtoken": "^9.0.2",
     "mssql": "^11.0.1",
     "qrcode": "^1.5.4",
+    "tsx": "^4.19.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -32,7 +33,6 @@
     "@types/node": "^22.9.0",
     "@types/qrcode": "^1.5.5",
     "@types/ws": "^8.5.12",
-    "tsx": "^4.19.2",
     "typescript": "^5.6.2"
   }
 }

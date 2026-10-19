@@ -3,7 +3,9 @@ import { existsSync } from 'fs'
 // Node 20.6+ built-in .env loader — بدون أي مكتبة إضافية.
 // لازم يتنفذ هنا قبل أي import تاني (عبر dynamic import) عشان الموديولات اللي بتقرأ
 // process.env وقت التحميل (زي http/auth.ts) تلاقي القيم جاهزة، مش قبل ما تتحمل.
-if (existsSync('.env')) process.loadEnvFile('.env')
+// QCP_ENV_FILE: كل عميل على السيرفر له ملف .env خاص بيه (نسخة منفصلة لكل عميل)
+const envFile = process.env.QCP_ENV_FILE ?? '.env'
+if (existsSync(envFile)) process.loadEnvFile(envFile)
 
 const { initDatabase } = await import('./main/db')
 const { startHttpServer } = await import('./http/server')

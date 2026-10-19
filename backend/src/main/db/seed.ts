@@ -32,7 +32,7 @@ export async function seedDatabase(db: Client): Promise<void> {
   }
 
   if ((await count(db, 'users')) === 0) {
-    const hash = bcrypt.hashSync(DEFAULT_ADMIN_PASSWORD, 10)
+    const hash = bcrypt.hashSync(process.env.QCP_ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD, 10)
     await db.execute({
       sql: `INSERT INTO users (username, password_hash, full_name, role, active)
             VALUES (?, ?, ?, 'admin', 1)`,
