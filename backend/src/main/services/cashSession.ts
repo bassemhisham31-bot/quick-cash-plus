@@ -140,8 +140,9 @@ export async function listShifts(filter: { from?: string; to?: string } = {}): P
   const rs = await db.execute({
     sql: `SELECT cs.id, cs.opened_at AS openedAt, cs.closed_at AS closedAt, cs.opening_balance AS openingBalance,
                  cs.expected_cash AS expectedCash, cs.actual_cash AS actualCash, cs.status,
-                 opener.full_name AS cashierName, closer.full_name AS closedByName
+                 opener.full_name AS cashierName, closer.full_name AS closedByName, COALESCE(br.name, '') AS branchName
           FROM cash_sessions cs
+          LEFT JOIN branches br ON br.id = cs.branch_id
           JOIN users opener ON opener.id = cs.opened_by
           LEFT JOIN users closer ON closer.id = cs.closed_by
           ${where}
@@ -159,7 +160,8 @@ export async function listShifts(filter: { from?: string; to?: string } = {}): P
     expectedCash: r.expectedCash != null ? Number(r.expectedCash) : null,
     actualCash: r.actualCash != null ? Number(r.actualCash) : null,
     cashDifference: r.actualCash != null && r.expectedCash != null ? Number(r.actualCash) - Number(r.expectedCash) : null,
-    status: r.status
+    status: r.status,
+    branchName: r.branchName
   }))
 }
 

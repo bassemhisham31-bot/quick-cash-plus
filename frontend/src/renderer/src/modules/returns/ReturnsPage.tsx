@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useAppStore } from '../../store/appStore'
 import { formatCurrency as currency } from '../../lib/currency'
 import { InvoiceDetailModal } from '../invoices/InvoiceDetailModal'
 import { PurchaseReturnModal } from './PurchaseReturnModal'
@@ -25,6 +26,7 @@ function todayIso(): string {
 
 export function ReturnsPage(): JSX.Element {
   const [tab, setTab] = useState<Tab>('sales')
+  const showBranch = useAppStore((s) => s.branchesEnabled && s.user?.role === 'admin' && s.activeBranch === 'all')
   const [salesReturns, setSalesReturns] = useState<SalesReturnListRow[]>([])
   const [purchaseReturns, setPurchaseReturns] = useState<PurchaseReturnListRow[]>([])
   const [from, setFrom] = useState(daysAgoIso(30))
@@ -138,6 +140,7 @@ export function ReturnsPage(): JSX.Element {
           <table className="qcp-table">
             <thead>
               <tr>
+                {showBranch && <th>الفرع</th>}
                 <th>الرقم المرجعي</th>
                 <th>العميل</th>
                 <th>التاريخ والوقت</th>
@@ -149,6 +152,7 @@ export function ReturnsPage(): JSX.Element {
             <tbody>
               {salesReturns.map((r) => (
                 <tr key={r.id}>
+                  {showBranch && <td>{r.branchName}</td>}
                   <td>{r.invoiceNumber}</td>
                   <td>{r.customerName}</td>
                   <td>{r.createdAt}</td>
@@ -163,7 +167,7 @@ export function ReturnsPage(): JSX.Element {
               ))}
               {!salesReturns.length && (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                  <td colSpan={showBranch ? 7 : 6} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                     مفيش مرتجعات مبيعات في المدى المحدد
                   </td>
                 </tr>
@@ -176,6 +180,7 @@ export function ReturnsPage(): JSX.Element {
           <table className="qcp-table">
             <thead>
               <tr>
+                {showBranch && <th>الفرع</th>}
                 <th>الرقم المرجعي</th>
                 <th>المورد</th>
                 <th>التاريخ والوقت</th>
@@ -187,6 +192,7 @@ export function ReturnsPage(): JSX.Element {
             <tbody>
               {purchaseReturns.map((r) => (
                 <tr key={r.id}>
+                  {showBranch && <td>{r.branchName}</td>}
                   <td>{r.invoiceNumber}</td>
                   <td>{r.vendorName}</td>
                   <td>{r.createdAt}</td>
@@ -205,7 +211,7 @@ export function ReturnsPage(): JSX.Element {
               ))}
               {!purchaseReturns.length && (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                  <td colSpan={showBranch ? 7 : 6} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                     مفيش مرتجعات مشتريات في المدى المحدد
                   </td>
                 </tr>

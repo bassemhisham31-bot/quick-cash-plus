@@ -25,6 +25,8 @@ function statusPill(status: InvoiceListItem['status'], t: (k: string) => string)
 export function InvoicesPage(): JSX.Element {
   const { t } = useTranslation()
   const user = useAppStore((s) => s.user)
+  // عمود الفرع بيظهر للأدمن لما يكون على "كل الفروع"
+  const showBranch = useAppStore((s) => s.branchesEnabled && s.user?.role === 'admin' && s.activeBranch === 'all')
   const [filter, setFilter] = useState(defaultFilter)
   const [invoices, setInvoices] = useState<InvoiceListItem[]>([])
   const [selected, setSelected] = useState<InvoiceView | null>(null)
@@ -134,6 +136,7 @@ export function InvoicesPage(): JSX.Element {
         <table className="qcp-table">
           <thead>
             <tr>
+              {showBranch && <th>الفرع</th>}
               <th>{t('invoices.number')}</th>
               <th>{t('invoices.customer')}</th>
               <th>{t('invoices.total')}</th>
@@ -145,6 +148,7 @@ export function InvoicesPage(): JSX.Element {
           <tbody>
             {invoices.map((inv) => (
               <tr key={inv.id} style={{ opacity: inv.deletedAt ? 0.55 : 1 }}>
+                {showBranch && <td>{inv.branchName}</td>}
                 <td style={{ fontFamily: 'var(--qcp-mono)' }}>{inv.number}</td>
                 <td>{inv.customerName}</td>
                 <td>{currency(inv.total)}</td>
@@ -168,7 +172,7 @@ export function InvoicesPage(): JSX.Element {
             ))}
             {invoices.length === 0 && (
               <tr>
-                <td colSpan={6} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                <td colSpan={showBranch ? 7 : 6} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                   —
                 </td>
               </tr>

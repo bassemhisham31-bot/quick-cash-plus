@@ -21,8 +21,10 @@ export async function listExpenses(limit = 200): Promise<ExpenseView[]> {
   const rs = await db.execute({
     sql: `SELECT e.id, e.amount, e.method, e.note, e.created_at AS createdAt,
                  e.attachment_path AS attachmentPath, e.attachment_name AS attachmentName,
-                 COALESCE(c.name, 'بدون تصنيف') AS categoryName, u.full_name AS cashierName
+                 COALESCE(c.name, 'بدون تصنيف') AS categoryName, u.full_name AS cashierName,
+                 COALESCE(br.name, '') AS branchName
           FROM expenses e
+          LEFT JOIN branches br ON br.id = e.branch_id
           LEFT JOIN expense_categories c ON c.id = e.category_id
           JOIN users u ON u.id = e.user_id
           WHERE e.deleted_at IS NULL AND ${bf.sql}
@@ -39,7 +41,8 @@ export async function listExpenses(limit = 200): Promise<ExpenseView[]> {
     cashierName: r.cashierName,
     createdAt: r.createdAt,
     attachmentPath: r.attachmentPath ?? null,
-    attachmentName: r.attachmentName ?? null
+    attachmentName: r.attachmentName ?? null,
+    branchName: r.branchName
   }))
 }
 

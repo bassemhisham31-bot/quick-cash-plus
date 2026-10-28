@@ -169,6 +169,8 @@ export interface PurchaseInvoiceResult {
 }
 
 export interface PurchaseInvoiceListItem {
+  /** اسم الفرع (لما ميزة الفروع تكون مفعّلة) */
+  branchName?: string
   id: number
   number: string
   vendorName: string
@@ -212,6 +214,8 @@ export interface ReturnPurchaseLineInput {
 }
 
 export interface SalesReturnListRow {
+  /** اسم الفرع (لما ميزة الفروع تكون مفعّلة) */
+  branchName?: string
   id: number
   invoiceId: number
   invoiceNumber: string
@@ -222,6 +226,8 @@ export interface SalesReturnListRow {
 }
 
 export interface PurchaseReturnListRow {
+  /** اسم الفرع (لما ميزة الفروع تكون مفعّلة) */
+  branchName?: string
   id: number
   purchaseInvoiceId: number
   invoiceNumber: string
@@ -471,6 +477,8 @@ export interface CloseRestaurantOrderInput {
 }
 
 export interface ShiftListRow {
+  /** اسم الفرع (لما ميزة الفروع تكون مفعّلة) */
+  branchName?: string
   id: number
   cashierName: string
   closedByName: string | null
@@ -793,6 +801,8 @@ export interface StatementView {
 }
 
 export interface InvoiceListItem {
+  /** اسم الفرع (لما ميزة الفروع تكون مفعّلة) */
+  branchName?: string
   id: number
   number: string
   customerName: string
@@ -886,6 +896,8 @@ export interface ExpenseResult {
 }
 
 export interface ExpenseView {
+  /** اسم الفرع (لما ميزة الفروع تكون مفعّلة) */
+  branchName?: string
   id: number
   categoryName: string
   amount: number

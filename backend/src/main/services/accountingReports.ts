@@ -1,5 +1,5 @@
 import { getDb } from '../db'
-import { branchFilter } from './branchScope'
+import { branchesEnabled, branchFilter, currentBranchId } from './branchScope'
 import { listTreasuries, getTreasuryStatement } from './treasuries'
 import { accountLedgerReport, balanceSheetReport, incomeStatementReport, journalReport, trialBalanceReport } from './ledger'
 import type { ReportResult } from '../../shared/types'
@@ -51,6 +51,10 @@ export interface AccountingReportFilter {
 }
 
 const n = (v: unknown): number => Math.round((Number(v) || 0) * 100) / 100
+
+/** وضع "كل الفروع": التقارير التفصيلية بتضيف عمود الفرع */
+const withBranchColumn = (): boolean => branchesEnabled() && currentBranchId() == null
+const BRANCH_COLUMN = { key: 'branch', label: 'الفرع' }
 
 /** شرط التاريخ + (لو اتمرّر branchCol والفروع مفعّلة وفيه فرع محدد) شرط الفرع — بيدفع الـargs بنفس ترتيب الـplaceholders */
 function dateCond(col: string, f: AccountingReportFilter, args: unknown[], branchCol?: string): string {
@@ -153,12 +157,14 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
 
     case 'sales_returns': {
       const rs = await db.execute({
-        sql: `SELECT r.id, r.created_at, r.type, r.amount, i.number, c.name AS customerName, i.payment_method, u.full_name AS userName
+        sql: `SELECT r.id, r.created_at, r.type, r.amount, i.number, c.name AS customerName, i.payment_method, u.full_name AS userName, COALESCE(br.name, '') AS branchName
               FROM sales_returns r JOIN sales_invoices i ON i.id = r.invoice_id JOIN customers c ON c.id = i.customer_id
+              LEFT JOIN branches br ON br.id = r.branch_id
               LEFT JOIN users u ON u.id = r.user_id WHERE ${dateCond('r.created_at', f, args, 'r.branch_id')} ORDER BY r.id`,
         args: args as any
       })
       const rows = (rs.rows as any[]).map((r) => ({
+        branch: r.branchName,
         date: r.created_at,
         number: r.number,
         customer: r.customerName,
@@ -170,6 +176,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
       return {
         title: `مرتجعات المبيعات ${range(f)}`,
         columns: [
+          ...(withBranchColumn() ? [BRANCH_COLUMN] : []),
           { key: 'date', label: 'التاريخ' },
           { key: 'number', label: 'رقم الفاتورة' },
           { key: 'customer', label: 'العميل' },
@@ -185,12 +192,14 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
 
     case 'purchase_returns': {
       const rs = await db.execute({
-        sql: `SELECT r.id, r.created_at, r.type, r.amount, pi.number, v.name AS vendorName, u.full_name AS userName
+        sql: `SELECT r.id, r.created_at, r.type, r.amount, pi.number, v.name AS vendorName, u.full_name AS userName, COALESCE(br.name, '') AS branchName
               FROM purchase_returns r JOIN purchase_invoices pi ON pi.id = r.purchase_invoice_id LEFT JOIN vendors v ON v.id = pi.vendor_id
+              LEFT JOIN branches br ON br.id = r.branch_id
               LEFT JOIN users u ON u.id = r.user_id WHERE ${dateCond('r.created_at', f, args, 'r.branch_id')} ORDER BY r.id`,
         args: args as any
       })
       const rows = (rs.rows as any[]).map((r) => ({
+        branch: r.branchName,
         date: r.created_at,
         number: r.number,
         vendor: r.vendorName ?? '',
@@ -201,6 +210,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
       return {
         title: `مرتجعات المشتريات ${range(f)}`,
         columns: [
+          ...(withBranchColumn() ? [BRANCH_COLUMN] : []),
           { key: 'date', label: 'التاريخ' },
           { key: 'number', label: 'رقم فاتورة الشراء' },
           { key: 'vendor', label: 'المورد' },
@@ -217,14 +227,16 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
       const rs = await db.execute({
         sql: `SELECT i.number, i.created_at, c.name AS customerName, u.full_name AS cashier,
                      i.subtotal, i.discount_total AS invoiceDiscount,
-                     COALESCE((SELECT SUM(si.discount) FROM sales_items si WHERE si.invoice_id = i.id), 0) AS itemsDiscount, i.total
-              FROM sales_invoices i JOIN customers c ON c.id = i.customer_id JOIN users u ON u.id = i.cashier_id
+                     COALESCE((SELECT SUM(si.discount) FROM sales_items si WHERE si.invoice_id = i.id), 0) AS itemsDiscount, i.total,
+                     COALESCE(br.name, '') AS branchName
+              FROM sales_invoices i LEFT JOIN branches br ON br.id = i.branch_id JOIN customers c ON c.id = i.customer_id JOIN users u ON u.id = i.cashier_id
               WHERE i.deleted_at IS NULL AND ${dateCond('i.created_at', f, args, 'i.branch_id')}
                 AND (i.discount_total > 0 OR EXISTS (SELECT 1 FROM sales_items si WHERE si.invoice_id = i.id AND si.discount > 0))
               ORDER BY i.id`,
         args: args as any
       })
       const rows = (rs.rows as any[]).map((r) => ({
+        branch: r.branchName,
         date: r.created_at,
         number: r.number,
         cashier: r.cashier,
@@ -237,6 +249,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
       return {
         title: `تقرير الخصومات ${range(f)}`,
         columns: [
+          ...(withBranchColumn() ? [BRANCH_COLUMN] : []),
           { key: 'date', label: 'التاريخ' },
           { key: 'number', label: 'رقم الفاتورة' },
           { key: 'cashier', label: 'الكاشير' },
@@ -271,12 +284,13 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
 
     case 'vouchers': {
       const rs = await db.execute({
-        sql: `SELECT v.id, v.type, v.created_at, v.amount, v.party_name, v.note, t.name AS treasuryName, u.full_name AS userName
-              FROM vouchers v JOIN treasuries t ON t.id = v.treasury_id LEFT JOIN users u ON u.id = v.user_id
+        sql: `SELECT v.id, v.type, v.created_at, v.amount, v.party_name, v.note, t.name AS treasuryName, u.full_name AS userName, COALESCE(br.name, '') AS branchName
+              FROM vouchers v LEFT JOIN branches br ON br.id = v.branch_id JOIN treasuries t ON t.id = v.treasury_id LEFT JOIN users u ON u.id = v.user_id
               WHERE v.deleted_at IS NULL AND ${dateCond('v.created_at', f, args, 'v.branch_id')} ORDER BY v.id`,
         args: args as any
       })
       const rows = (rs.rows as any[]).map((r) => ({
+        branch: r.branchName,
         number: `${r.type === 'receipt' ? 'RV' : 'PV'}-${String(r.id).padStart(6, '0')}`,
         date: r.created_at,
         kind: r.type === 'receipt' ? 'قبض' : 'صرف',
@@ -290,6 +304,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
       return {
         title: `سندات القبض والصرف ${range(f)}`,
         columns: [
+          ...(withBranchColumn() ? [BRANCH_COLUMN] : []),
           { key: 'number', label: 'رقم السند' },
           { key: 'date', label: 'التاريخ' },
           { key: 'kind', label: 'النوع' },

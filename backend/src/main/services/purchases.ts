@@ -87,8 +87,9 @@ export async function listPurchaseInvoices(): Promise<PurchaseInvoiceListItem[]>
   const bf = branchFilter('pi.branch_id')
   const rs = await db.execute({
     sql: `SELECT pi.id, pi.number, pi.total, pi.paid, pi.payment_method AS paymentMethod, pi.created_at AS createdAt,
-            COALESCE(v.name, 'مورد غير محدد') AS vendorName
+            COALESCE(v.name, 'مورد غير محدد') AS vendorName, COALESCE(br.name, '') AS branchName
      FROM purchase_invoices pi
+     LEFT JOIN branches br ON br.id = pi.branch_id
      LEFT JOIN vendors v ON v.id = pi.vendor_id
      WHERE ${bf.sql}
      ORDER BY pi.id DESC
@@ -102,7 +103,8 @@ export async function listPurchaseInvoices(): Promise<PurchaseInvoiceListItem[]>
     total: Number(r.total),
     paid: Number(r.paid),
     paymentMethod: r.paymentMethod,
-    createdAt: r.createdAt
+    createdAt: r.createdAt,
+    branchName: r.branchName
   }))
 }
 
@@ -277,8 +279,9 @@ export async function listPurchaseReturns(filter: { from?: string; to?: string }
 
   const rs = await db.execute({
     sql: `SELECT pr.id, pr.purchase_invoice_id AS purchaseInvoiceId, pr.amount, pr.note, pr.created_at AS createdAt,
-                 pi.number AS invoiceNumber, COALESCE(v.name, 'مورد غير محدد') AS vendorName
+                 pi.number AS invoiceNumber, COALESCE(v.name, 'مورد غير محدد') AS vendorName, COALESCE(br.name, '') AS branchName
           FROM purchase_returns pr
+          LEFT JOIN branches br ON br.id = pr.branch_id
           JOIN purchase_invoices pi ON pi.id = pr.purchase_invoice_id
           LEFT JOIN vendors v ON v.id = pi.vendor_id
           ${where}
@@ -293,6 +296,7 @@ export async function listPurchaseReturns(filter: { from?: string; to?: string }
     vendorName: r.vendorName,
     reasonNote: r.note ?? null,
     amount: Number(r.amount),
-    createdAt: r.createdAt
+    createdAt: r.createdAt,
+    branchName: r.branchName
   }))
 }

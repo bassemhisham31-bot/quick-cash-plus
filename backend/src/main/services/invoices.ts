@@ -126,8 +126,10 @@ export async function listInvoices(filter: InvoiceListFilter): Promise<InvoiceLi
 
   const rs = await db.execute({
     sql: `SELECT i.id, i.number, i.total, i.paid, i.payment_method AS paymentMethod, i.status,
-                 i.created_at AS createdAt, i.deleted_at AS deletedAt, c.name AS customerName
+                 i.created_at AS createdAt, i.deleted_at AS deletedAt, c.name AS customerName,
+                 COALESCE(br.name, '') AS branchName
           FROM sales_invoices i
+          LEFT JOIN branches br ON br.id = i.branch_id
           JOIN customers c ON c.id = i.customer_id
           WHERE ${conditions.join(' AND ')}
           ORDER BY i.id DESC
@@ -144,7 +146,8 @@ export async function listInvoices(filter: InvoiceListFilter): Promise<InvoiceLi
     paymentMethod: r.paymentMethod,
     status: r.status,
     createdAt: r.createdAt,
-    deletedAt: r.deletedAt
+    deletedAt: r.deletedAt,
+    branchName: r.branchName
   }))
 }
 
@@ -427,8 +430,9 @@ export async function listSalesReturns(filter: { from?: string; to?: string } = 
 
   const rs = await db.execute({
     sql: `SELECT sr.id, sr.invoice_id AS invoiceId, sr.amount, sr.note, sr.created_at AS createdAt,
-                 i.number AS invoiceNumber, c.name AS customerName
+                 i.number AS invoiceNumber, c.name AS customerName, COALESCE(br.name, '') AS branchName
           FROM sales_returns sr
+          LEFT JOIN branches br ON br.id = sr.branch_id
           JOIN sales_invoices i ON i.id = sr.invoice_id
           JOIN customers c ON c.id = i.customer_id
           ${where}
@@ -443,7 +447,8 @@ export async function listSalesReturns(filter: { from?: string; to?: string } = 
     customerName: r.customerName,
     reasonNote: r.note ?? null,
     amount: Number(r.amount),
-    createdAt: r.createdAt
+    createdAt: r.createdAt,
+    branchName: r.branchName
   }))
 }
 

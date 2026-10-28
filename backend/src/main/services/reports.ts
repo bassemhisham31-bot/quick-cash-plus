@@ -1,6 +1,6 @@
 import { getDb } from '../db'
 import { getDefaultWarehouseId } from '../db/seed'
-import { branchesEnabled, branchFilter, branchScope, branchWarehouseFilter, type SqlFilter } from './branchScope'
+import { branchesEnabled, branchFilter, branchScope, branchWarehouseFilter, currentBranchId, type SqlFilter } from './branchScope'
 import { assertWarehouseInScope } from './branches'
 import { getCustomerStatement } from './customers'
 import { getVendorStatement } from './vendors'
@@ -31,6 +31,10 @@ function dateConditions(filter: ReportFilter, column: string, branchColumn?: str
   }
   return { sql: parts.length ? `AND ${parts.join(' AND ')}` : '', args }
 }
+
+/** وضع "كل الفروع" (الفروع مفعّلة ومفيش فرع محدد): التقارير التفصيلية بتضيف عمود الفرع */
+const withBranchColumn = (): boolean => branchesEnabled() && currentBranchId() == null
+const BRANCH_COLUMN = { key: 'branch', label: 'الفرع' }
 
 /** LEFT JOIN لرصيد المخزون: مخزن محدد، أو (مع الفروع) مجموع مخازن الفرع الحالي/كل الفروع، أو المخزن الافتراضي (زي ما كان) */
 async function stockJoin(db: ReturnType<typeof getDb>, warehouseId: number | null | undefined): Promise<{ sql: string; args: unknown[] }> {
@@ -257,9 +261,11 @@ async function purchasesDetailed(filter: ReportFilter): Promise<ReportResult> {
 
   const rs = await db.execute({
     sql: `SELECT piv.number, piv.created_at AS date, COALESCE(v.name, '-') AS vendorName,
-                 pi.product_name AS product, pi.qty, pi.purchase_price AS unitPrice, pi.total
+                 pi.product_name AS product, pi.qty, pi.purchase_price AS unitPrice, pi.total,
+                 COALESCE(br.name, '') AS branchName
           FROM purchase_items pi
           JOIN purchase_invoices piv ON piv.id = pi.purchase_invoice_id
+          LEFT JOIN branches br ON br.id = piv.branch_id
           LEFT JOIN vendors v ON v.id = piv.vendor_id
           WHERE 1=1 ${dateSql} ${warehouseSql}
           ORDER BY piv.created_at DESC
@@ -267,6 +273,7 @@ async function purchasesDetailed(filter: ReportFilter): Promise<ReportResult> {
     args
   })
   const rows = rs.rows.map((r: any) => ({
+    branch: r.branchName,
     number: r.number,
     date: r.date,
     vendorName: r.vendorName,
@@ -278,6 +285,7 @@ async function purchasesDetailed(filter: ReportFilter): Promise<ReportResult> {
   return {
     title: 'المشتريات التفصيلي',
     columns: [
+      ...(withBranchColumn() ? [BRANCH_COLUMN] : []),
       { key: 'number', label: 'رقم فاتورة الشراء' },
       { key: 'date', label: 'التاريخ' },
       { key: 'vendorName', label: 'المورد' },
@@ -346,15 +354,18 @@ async function salesDetailed(filter: ReportFilter): Promise<ReportResult> {
 
   const rs = await db.execute({
     sql: `SELECT i.number, i.created_at AS date, si.product_name AS product, si.qty,
-                 si.unit_price AS unitPrice, si.discount, si.total, si.serial_number AS serialNumber
+                 si.unit_price AS unitPrice, si.discount, si.total, si.serial_number AS serialNumber,
+                 COALESCE(br.name, '') AS branchName
           FROM sales_items si
           JOIN sales_invoices i ON i.id = si.invoice_id
+          LEFT JOIN branches br ON br.id = i.branch_id
           WHERE i.deleted_at IS NULL ${dateSql} ${warehouseSql} ${serialSql}
           ORDER BY i.created_at DESC
           LIMIT 1000`,
     args
   })
   const rows = rs.rows.map((r: any) => ({
+    branch: r.branchName,
     number: r.number,
     date: r.date,
     product: r.product,
@@ -367,6 +378,7 @@ async function salesDetailed(filter: ReportFilter): Promise<ReportResult> {
   return {
     title: 'المبيعات التفصيلي',
     columns: [
+      ...(withBranchColumn() ? [BRANCH_COLUMN] : []),
       { key: 'number', label: 'رقم الفاتورة' },
       { key: 'date', label: 'التاريخ' },
       { key: 'product', label: 'الصنف' },
@@ -1097,8 +1109,9 @@ async function cashDrawerSessions(filter: ReportFilter): Promise<ReportResult> {
   const rs = await db.execute({
     sql: `SELECT cs.opened_at AS openedAt, cs.closed_at AS closedAt, cs.status,
                  cs.opening_balance AS openingBalance, cs.expected_cash AS expectedCash, cs.actual_cash AS actualCash,
-                 uo.full_name AS openedBy, uc.full_name AS closedBy
+                 uo.full_name AS openedBy, uc.full_name AS closedBy, COALESCE(br.name, '') AS branchName
           FROM cash_sessions cs
+          LEFT JOIN branches br ON br.id = cs.branch_id
           JOIN users uo ON uo.id = cs.opened_by
           LEFT JOIN users uc ON uc.id = cs.closed_by
           WHERE 1 = 1 ${dateSql}
@@ -1111,6 +1124,7 @@ async function cashDrawerSessions(filter: ReportFilter): Promise<ReportResult> {
     const expected = r.expectedCash !== null ? Number(r.expectedCash) : null
     const actual = r.actualCash !== null ? Number(r.actualCash) : null
     return {
+      branch: r.branchName,
       openedAt: r.openedAt,
       closedAt: r.closedAt ?? '—',
       status: statusLabels[r.status] ?? r.status,
@@ -1125,6 +1139,7 @@ async function cashDrawerSessions(filter: ReportFilter): Promise<ReportResult> {
   return {
     title: 'تقرير جلسات الخزنة',
     columns: [
+      ...(withBranchColumn() ? [BRANCH_COLUMN] : []),
       { key: 'openedAt', label: 'وقت الفتح' },
       { key: 'closedAt', label: 'وقت الإقفال' },
       { key: 'status', label: 'الحالة' },

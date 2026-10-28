@@ -232,6 +232,21 @@ async function main(): Promise<void> {
     }).then((r) => r.json())
     assert(String(rcpt.printJobs?.[0]?.html ?? '').includes('فرع المعادي'), 'إيصال فرع 2 عليه اسم الفرع')
 
+    console.log('   - عمود الفرع على "كل الفروع"...')
+    const hasBranchCol = (r: any): boolean => r.columns.some((c: any) => c.key === 'branch')
+    const sdAll = await run(adminTok, 'sales_detailed', 'all')
+    const sdA = await run(A.token, 'sales_detailed')
+    assert(hasBranchCol(sdAll) && new Set(sdAll.rows.map((r: any) => r.branch)).size === 2, 'المبيعات التفصيلي على "كل الفروع": عمود الفرع وفيه الفرعين')
+    assert(!hasBranchCol(sdA), 'المبيعات التفصيلي على فرع محدد: من غير عمود الفرع')
+    const rowOf = (inv: string): any => sdAll.rows.find((r: any) => r.number === inv)
+    assert(rowOf(saleA.invoiceNumber)?.branch === 'الفرع الرئيسي' && rowOf(saleB.invoiceNumber)?.branch === 'فرع المعادي', 'كل صف بيتسمّى بفرعه الصح')
+    assert(hasBranchCol(await run(adminTok, 'cash_drawer_sessions', 'all')), 'جلسات الخزنة: عمود الفرع على "كل الفروع"')
+    assert(hasBranchCol(await acc(adminTok, 'discounts', 'all')) && !hasBranchCol(await acc(A.token, 'discounts')), 'التقارير المحاسبية: عمود الفرع على "كل الفروع" بس')
+    const invAllRows = await result(adminTok, 'invoices:list', [flt], 'all')
+    assert(invAllRows.every((r: any) => r.branchName) && new Set(invAllRows.map((r: any) => r.branchName)).size === 2, 'قايمة الفواتير: اسم الفرع على كل صف')
+    assert((await result(adminTok, 'expenses:list', [50], 'all')).every((r: any) => r.branchName), 'قايمة المصروفات: اسم الفرع على كل صف')
+    assert((await result(adminTok, 'cash:listShifts', [{}], 'all')).every((r: any) => r.branchName), 'قايمة الورديات: اسم الفرع على كل صف')
+
     // المخزون: كل فرع بيشوف أرصدة مخزنه
     const inv = async (tok: string, branch?: string): Promise<Record<string, number>> =>
       Object.fromEntries((await run(tok, 'inventory_status', branch)).rows.map((r: any) => [r.name, r.qty]))

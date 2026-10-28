@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useAppStore } from '../../store/appStore'
 import { formatCurrency as currency } from '../../lib/currency'
 import type { ShiftListRow } from '../../../../shared/types'
 
@@ -19,6 +20,7 @@ export function ShiftsPage(): JSX.Element {
   const [from, setFrom] = useState(daysAgoIso(7))
   const [to, setTo] = useState(todayIso())
   const [search, setSearch] = useState('')
+  const showBranch = useAppStore((s) => s.branchesEnabled && s.user?.role === 'admin' && s.activeBranch === 'all')
 
   function refresh(): void {
     window.api.cash.listShifts({ from: from ? `${from} 00:00:00` : undefined, to: to ? `${to} 23:59:59` : undefined }).then(setShifts)
@@ -85,6 +87,7 @@ export function ShiftsPage(): JSX.Element {
         <table className="qcp-table">
           <thead>
             <tr>
+              {showBranch && <th>الفرع</th>}
               <th>رقم الوردية</th>
               <th>الموظف</th>
               <th>بداية الوردية</th>
@@ -99,6 +102,7 @@ export function ShiftsPage(): JSX.Element {
           <tbody>
             {filtered.map((s) => (
               <tr key={s.id}>
+                {showBranch && <td>{s.branchName}</td>}
                 <td>{s.id}</td>
                 <td>{s.cashierName}</td>
                 <td>{s.openedAt}</td>
@@ -138,7 +142,7 @@ export function ShiftsPage(): JSX.Element {
             ))}
             {!filtered.length && (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                <td colSpan={showBranch ? 10 : 9} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                   مفيش ورديات في المدى المحدد
                 </td>
               </tr>

@@ -17,6 +17,7 @@ const METHOD_LABEL_KEYS: Record<ExpenseInput['method'], string> = {
 export function ExpenseLogTab(): JSX.Element {
   const { t } = useTranslation()
   const user = useAppStore((s) => s.user)
+  const showBranch = useAppStore((s) => s.branchesEnabled && s.user?.role === 'admin' && s.activeBranch === 'all')
   const [expenses, setExpenses] = useState<ExpenseView[]>([])
   const [categories, setCategories] = useState<ExpenseCategory[]>([])
   const [byMethod, setByMethod] = useState<ExpensesByMethodSummary | null>(null)
@@ -122,6 +123,7 @@ export function ExpenseLogTab(): JSX.Element {
         <table className="qcp-table">
           <thead>
             <tr>
+              {showBranch && <th>الفرع</th>}
               <th>{t('expenses.category')}</th>
               <th>{t('expenses.amount')}</th>
               <th>{t('expenses.method')}</th>
@@ -135,6 +137,7 @@ export function ExpenseLogTab(): JSX.Element {
           <tbody>
             {expenses.map((e) => (
               <tr key={e.id}>
+                {showBranch && <td>{e.branchName}</td>}
                 <td>{e.categoryName}</td>
                 <td>{currency(e.amount)}</td>
                 <td>{e.method}</td>
@@ -164,7 +167,7 @@ export function ExpenseLogTab(): JSX.Element {
             ))}
             {expenses.length === 0 && (
               <tr>
-                <td colSpan={8} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                <td colSpan={showBranch ? 9 : 8} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                   —
                 </td>
               </tr>
