@@ -1,6 +1,7 @@
 import { getDb } from '../db'
 import { getLicenseStatus, invalidateLicenseCache } from './license'
 import { editionDisabledFeatures } from './edition'
+import { branchesEnabled } from './branchScope'
 import type { LicensePlan, LicenseStatus } from '../../shared/types'
 
 /**
@@ -18,8 +19,8 @@ export type WebLicenseStatus = LicenseStatus & { graceDaysLeft?: number }
 export async function getWebLicenseStatus(): Promise<WebLicenseStatus> {
   const s = await computeWebLicenseStatus()
   const fromEdition = editionDisabledFeatures()
-  if (fromEdition.length === 0) return s
-  return { ...s, disabledFeatures: [...new Set([...s.disabledFeatures, ...fromEdition])] }
+  const withEdition = fromEdition.length === 0 ? s : { ...s, disabledFeatures: [...new Set([...s.disabledFeatures, ...fromEdition])] }
+  return branchesEnabled() ? { ...withEdition, branchesEnabled: true } : withEdition
 }
 
 /** حالة الترخيص مع فترة السماح: أثناء السماح بنرجّع active/trial مع graceDaysLeft بدل expired عشان الواجهة ماتتقفلش */

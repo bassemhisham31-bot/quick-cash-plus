@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { assertBranchAccess, branchFilter } from './branchScope'
 import { getTaxSettings } from './settings'
 import { generateQrDataUrl } from './qrCode'
 import type {
@@ -21,7 +22,8 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
                  c.loyalty_points AS customerLoyaltyBalance, c.balance AS customerBalance, c.is_walk_in AS isWalkIn, i.customer_label AS customerLabel,
                  i.order_type AS orderType, t.name AS tableName, d.name AS deliveryDriverName,
                  COALESCE(ro.delivery_address, i.delivery_address) AS deliveryAddress,
-                 COALESCE(ro.special_mark, i.delivery_mark) AS deliveryMark, i.delivery_fee AS deliveryFee, i.service_charge_total AS serviceChargeTotal, cap.name AS captainName
+                 COALESCE(ro.special_mark, i.delivery_mark) AS deliveryMark, i.delivery_fee AS deliveryFee, i.service_charge_total AS serviceChargeTotal, cap.name AS captainName,
+                 i.branch_id AS branchId
           FROM sales_invoices i
           JOIN customers c ON c.id = i.customer_id
           JOIN users u ON u.id = i.cashier_id
@@ -34,6 +36,7 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
   })
   const header = headerRs.rows[0] as any
   if (!header) return null
+  assertBranchAccess(header.branchId, 'الفاتورة')
 
   const linesRs = await db.execute({
     sql: `SELECT si.id AS salesItemId, si.product_name AS productName, si.barcode, si.qty,
@@ -95,8 +98,9 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
 export async function listInvoices(filter: InvoiceListFilter): Promise<InvoiceListItem[]> {
   const db = getDb()
   const term = `%${filter.search.trim()}%`
-  const conditions: string[] = []
-  const args: unknown[] = []
+  const bf = branchFilter('i.branch_id')
+  const conditions: string[] = [bf.sql]
+  const args: unknown[] = [...bf.args]
 
   conditions.push(filter.includeDeleted ? '1=1' : 'i.deleted_at IS NULL')
   if (filter.search.trim()) {
@@ -150,6 +154,7 @@ export async function deleteInvoice(invoiceId: number, userId: number): Promise<
   const invoiceRs = await db.execute({ sql: 'SELECT * FROM sales_invoices WHERE id = ?', args: [invoiceId] })
   const invoice = invoiceRs.rows[0] as any
   if (!invoice) throw new Error('الفاتورة غير موجودة')
+  assertBranchAccess(invoice.branch_id, 'الفاتورة')
   if (invoice.deleted_at) return
   const warehouseId = Number(invoice.warehouse_id)
 
@@ -205,6 +210,7 @@ export async function restoreInvoice(invoiceId: number, userId: number): Promise
   const invoiceRs = await db.execute({ sql: 'SELECT * FROM sales_invoices WHERE id = ?', args: [invoiceId] })
   const invoice = invoiceRs.rows[0] as any
   if (!invoice) throw new Error('الفاتورة غير موجودة')
+  assertBranchAccess(invoice.branch_id, 'الفاتورة')
   if (!invoice.deleted_at) return
   const warehouseId = Number(invoice.warehouse_id)
 
@@ -269,6 +275,7 @@ export async function updateInvoice(
   const invoiceRs = await db.execute({ sql: 'SELECT * FROM sales_invoices WHERE id = ?', args: [invoiceId] })
   const invoice = invoiceRs.rows[0] as any
   if (!invoice) throw new Error('الفاتورة غير موجودة')
+  assertBranchAccess(invoice.branch_id, 'الفاتورة')
 
   const tx = await db.transaction('write')
   try {
@@ -318,6 +325,11 @@ export async function returnInvoiceLines(
   const invoiceRs = await db.execute({ sql: 'SELECT * FROM sales_invoices WHERE id = ?', args: [invoiceId] })
   const invoice = invoiceRs.rows[0] as any
   if (!invoice || invoice.deleted_at) return { ok: false, error: 'الفاتورة غير موجودة' }
+  try {
+    assertBranchAccess(invoice.branch_id, 'الفاتورة')
+  } catch (err: any) {
+    return { ok: false, error: err.message }
+  }
   const warehouseId = Number(invoice.warehouse_id)
 
   const tx = await db.transaction('write')
@@ -328,8 +340,8 @@ export async function returnInvoiceLines(
     const itemsById = new Map((itemsRs.rows as any[]).map((r) => [Number(r.id), r]))
 
     const returnInfo = await tx.execute({
-      sql: `INSERT INTO sales_returns (invoice_id, type, amount, note, user_id) VALUES (?, 'partial', 0, NULL, ?)`,
-      args: [invoiceId, userId]
+      sql: `INSERT INTO sales_returns (invoice_id, type, amount, note, user_id, branch_id) VALUES (?, 'partial', 0, NULL, ?, ?)`,
+      args: [invoiceId, userId, Number(invoice.branch_id) || 1]
     })
     const returnId = Number(returnInfo.lastInsertRowid)
 
@@ -400,8 +412,9 @@ export async function returnInvoiceLines(
 
 export async function listSalesReturns(filter: { from?: string; to?: string } = {}): Promise<SalesReturnListRow[]> {
   const db = getDb()
-  const conditions: string[] = []
-  const args: unknown[] = []
+  const bf = branchFilter('sr.branch_id')
+  const conditions: string[] = [bf.sql]
+  const args: unknown[] = [...bf.args]
   if (filter.from) {
     conditions.push('sr.created_at >= ?')
     args.push(filter.from)

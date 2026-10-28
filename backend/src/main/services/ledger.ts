@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { currentBranchId } from './branchScope'
 import { loadTreasuryRows, resolveTreasury } from './treasuries'
 import type { ReportResult } from '../../shared/types'
 
@@ -103,6 +104,8 @@ export interface LedgerLine {
 }
 
 export interface LedgerEntry {
+  /** فرع المستند (من branch_id) — القيود اليدوية والأرصدة الافتتاحية مالهاش فرع (على مستوى الشركة) */
+  branchId?: number
   date: string
   ref: string
   description: string
@@ -111,6 +114,7 @@ export interface LedgerEntry {
 }
 
 const r2 = (v: number): number => Math.round(v * 100) / 100
+const branchOf = (r: any): number | undefined => (r?.branch_id != null && Number.isFinite(Number(r.branch_id)) ? Number(r.branch_id) : undefined)
 
 /** بيحوّل أجزاء قيد لسطور متوازنة (فرق التقريب بيتحط على الحساب المحدد) */
 function balanced(lines: LedgerLine[], plugCode: string): LedgerLine[] {
@@ -132,14 +136,14 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
   const db = getDb()
   const treasuries = await loadTreasuryRows()
   const entries: LedgerEntry[] = []
-  const tCode = (method: string | null, explicitId?: number | null): string => {
-    const id = resolveTreasury(treasuries, method, explicitId)
+  const tCode = (method: string | null, explicitId?: number | null, branchId?: number | null): string => {
+    const id = resolveTreasury(treasuries, method, explicitId, branchId)
     return id != null ? treasuryCode(id) : treasuryCode(treasuries[0]?.id ?? 1)
   }
 
   // ---------- المبيعات + تكلفتها ----------
   const sales = await db.execute(
-    `SELECT i.id, i.number, i.created_at, i.subtotal, i.discount_total, i.tax_total, i.total, i.paid, i.payment_method,
+    `SELECT i.id, i.number, i.created_at, i.subtotal, i.discount_total, i.tax_total, i.total, i.paid, i.payment_method, i.branch_id,
             i.delivery_fee, i.service_charge_total, i.tip_amount, c.name AS customerName,
             COALESCE((SELECT SUM(si.discount) FROM sales_items si WHERE si.invoice_id = i.id), 0) AS itemsDiscount,
             COALESCE((SELECT SUM(si.qty * COALESCE(si.cost_price, p.cost_price, 0)) FROM sales_items si
@@ -162,7 +166,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
     const cashPart = Math.max(0, paid - settled)
     const arPart = Math.max(0, total - paid)
     const lines: LedgerLine[] = [
-      { code: tCode(r.payment_method), debit: cashPart, credit: 0 },
+      { code: tCode(r.payment_method, null, Number(r.branch_id)), debit: cashPart, credit: 0 },
       { code: AR, debit: arPart, credit: 0, memo: r.customerName },
       { code: AP, debit: settled, credit: 0, memo: 'تسوية مع مورد مرتبط' },
       { code: SALES_DISCOUNTS, debit: itemsDiscount + invoiceDiscount + redeem, credit: 0 },
@@ -172,10 +176,10 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       { code: DELIVERY_REVENUE, debit: 0, credit: delivery },
       { code: COGS, debit: Number(r.cogs), credit: 0 },
       { code: INVENTORY, debit: 0, credit: Number(r.cogs) },
-      { code: tCode(r.payment_method), debit: Number(r.tip_amount) || 0, credit: 0, memo: 'إكرامية' },
+      { code: tCode(r.payment_method, null, Number(r.branch_id)), debit: Number(r.tip_amount) || 0, credit: 0, memo: 'إكرامية' },
       { code: TIPS, debit: 0, credit: Number(r.tip_amount) || 0 }
     ]
-    entries.push({ date: r.created_at, ref: r.number, description: `فاتورة بيع — ${r.customerName}`, source: 'مبيعات', lines: balanced(lines, SALES) })
+    entries.push({ branchId: branchOf(r), date: r.created_at, ref: r.number, description: `فاتورة بيع — ${r.customerName}`, source: 'مبيعات', lines: balanced(lines, SALES) })
   }
 
   // ---------- حجوزات المناسبات: الدفعات التزام (عربون) لحد ما الحجز يتنفّذ فيتحوّل لإيراد ----------
@@ -185,7 +189,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
   )
   for (const r of eventPays.rows as any[]) {
     const amt = Number(r.amount)
-    entries.push({
+    entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: r.number,
       description: `${amt >= 0 ? 'دفعة حجز' : 'استرداد حجز'} — ${r.customer_name}`,
@@ -207,7 +211,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
   for (const r of doneEvents.rows as any[]) {
     const paid = Number(r.paid)
     if (paid <= 0) continue
-    entries.push({
+    entries.push({ branchId: branchOf(r),
       date: r.completed_at,
       ref: r.number,
       description: `تنفيذ حجز مناسبة — ${r.customer_name}`,
@@ -224,7 +228,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
 
   // ---------- مرتجعات المبيعات ----------
   const salesReturns = await db.execute(
-    `SELECT r.id, r.created_at, r.amount, i.number, i.payment_method, c.name AS customerName,
+    `SELECT r.id, r.created_at, r.amount, r.branch_id, i.number, i.payment_method, c.name AS customerName,
             COALESCE((SELECT SUM(ri.qty * COALESCE(si.cost_price, p.cost_price, 0)) FROM sales_return_items ri
                       JOIN sales_items si ON si.id = ri.sales_item_id LEFT JOIN products p ON p.id = si.product_id
                       WHERE ri.return_id = r.id), 0) AS cogs
@@ -232,7 +236,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
   )
   for (const r of salesReturns.rows as any[]) {
     const credit = r.payment_method === 'credit'
-    entries.push({
+    entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `SR-${r.id}`,
       description: `مرتجع على فاتورة ${r.number} — ${r.customerName}`,
@@ -240,7 +244,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       lines: balanced(
         [
           { code: SALES_RETURNS, debit: Number(r.amount), credit: 0 },
-          { code: credit ? AR : tCode(r.payment_method), debit: 0, credit: Number(r.amount) },
+          { code: credit ? AR : tCode(r.payment_method, null, Number(r.branch_id)), debit: 0, credit: Number(r.amount) },
           { code: INVENTORY, debit: Number(r.cogs), credit: 0 },
           { code: COGS, debit: 0, credit: Number(r.cogs) }
         ],
@@ -251,14 +255,14 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
 
   // ---------- المشتريات ومرتجعاتها ----------
   const purchases = await db.execute(
-    `SELECT pi.number, pi.created_at, pi.total, pi.payment_method, v.name AS vendorName,
+    `SELECT pi.number, pi.created_at, pi.total, pi.payment_method, pi.branch_id, v.name AS vendorName,
             pi.paid - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.invoice_id = pi.id AND p.party_type = 'vendor'), 0) AS paidNow
      FROM purchase_invoices pi LEFT JOIN vendors v ON v.id = pi.vendor_id`
   )
   for (const r of purchases.rows as any[]) {
     const total = Number(r.total)
     const paidNow = r.payment_method === 'credit' ? 0 : Math.min(total, Math.max(0, Number(r.paidNow)))
-    entries.push({
+    entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: r.number,
       description: `فاتورة شراء — ${r.vendorName ?? ''}`.trim(),
@@ -266,7 +270,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       lines: balanced(
         [
           { code: INVENTORY, debit: total, credit: 0 },
-          { code: tCode(r.payment_method), debit: 0, credit: paidNow },
+          { code: tCode(r.payment_method, null, Number(r.branch_id)), debit: 0, credit: paidNow },
           { code: AP, debit: 0, credit: total - paidNow, memo: r.vendorName ?? '' }
         ],
         INVENTORY
@@ -275,19 +279,19 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
   }
 
   const purchaseReturns = await db.execute(
-    `SELECT r.id, r.created_at, r.amount, pi.number, pi.payment_method, v.name AS vendorName
+    `SELECT r.id, r.created_at, r.amount, r.branch_id, pi.number, pi.payment_method, v.name AS vendorName
      FROM purchase_returns r JOIN purchase_invoices pi ON pi.id = r.purchase_invoice_id LEFT JOIN vendors v ON v.id = pi.vendor_id`
   )
   for (const r of purchaseReturns.rows as any[]) {
     const credit = r.payment_method === 'credit'
-    entries.push({
+    entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `PR-${r.id}`,
       description: `مرتجع مشتريات على ${r.number} — ${r.vendorName ?? ''}`.trim(),
       source: 'مرتجع مشتريات',
       lines: balanced(
         [
-          { code: credit ? AP : tCode(r.payment_method), debit: Number(r.amount), credit: 0 },
+          { code: credit ? AP : tCode(r.payment_method, null, Number(r.branch_id)), debit: Number(r.amount), credit: 0 },
           { code: INVENTORY, debit: 0, credit: Number(r.amount) }
         ],
         INVENTORY
@@ -297,14 +301,14 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
 
   // ---------- تحصيل وسداد ----------
   const payments = await db.execute(
-    `SELECT p.id, p.party_type, p.amount, p.method, p.treasury_id, p.created_at, COALESCE(c.name, v.name, '') AS partyName
+    `SELECT p.id, p.party_type, p.amount, p.method, p.treasury_id, p.branch_id, p.created_at, COALESCE(c.name, v.name, '') AS partyName
      FROM payments p LEFT JOIN customers c ON p.party_type = 'customer' AND c.id = p.party_id
      LEFT JOIN vendors v ON p.party_type = 'vendor' AND v.id = p.party_id`
   )
   for (const r of payments.rows as any[]) {
     const isCustomer = r.party_type === 'customer'
-    const cash = tCode(r.method, r.treasury_id != null ? Number(r.treasury_id) : null)
-    entries.push({
+    const cash = tCode(r.method, r.treasury_id != null ? Number(r.treasury_id) : null, Number(r.branch_id))
+    entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `P-${r.id}`,
       description: `${isCustomer ? 'تحصيل من' : 'سداد إلى'} ${r.partyName}`,
@@ -317,28 +321,28 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
 
   // ---------- مصروفات ----------
   const expenses = await db.execute(
-    `SELECT e.id, e.created_at, e.amount, e.method, e.treasury_id, e.category_id, e.note, ec.name AS categoryName
+    `SELECT e.id, e.created_at, e.amount, e.method, e.treasury_id, e.branch_id, e.category_id, e.note, ec.name AS categoryName
      FROM expenses e LEFT JOIN expense_categories ec ON ec.id = e.category_id WHERE e.deleted_at IS NULL`
   )
   for (const r of expenses.rows as any[]) {
-    entries.push({
+    entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `E-${r.id}`,
       description: `${r.categoryName ?? 'مصروف'}${r.note ? ` — ${r.note}` : ''}`,
       source: 'مصروف',
       lines: [
         { code: r.category_id != null ? expenseCategoryCode(Number(r.category_id)) : MISC_EXPENSE, debit: Number(r.amount), credit: 0 },
-        { code: tCode(r.method, r.treasury_id != null ? Number(r.treasury_id) : null), debit: 0, credit: Number(r.amount) }
+        { code: tCode(r.method, r.treasury_id != null ? Number(r.treasury_id) : null, Number(r.branch_id)), debit: 0, credit: Number(r.amount) }
       ]
     })
   }
 
   // ---------- إيرادات أخرى / تحويلات / فروقات خزينة ----------
   const receipts = await db.execute(
-    `SELECT id, created_at, amount, treasury_id, party_name, note FROM vouchers WHERE deleted_at IS NULL AND type = 'receipt' AND payment_id IS NULL`
+    `SELECT id, created_at, amount, treasury_id, branch_id, party_name, note FROM vouchers WHERE deleted_at IS NULL AND type = 'receipt' AND payment_id IS NULL`
   )
   for (const r of receipts.rows as any[]) {
-    entries.push({
+    entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `RV-${String(r.id).padStart(6, '0')}`,
       description: `${r.party_name ?? 'إيراد'}${r.note ? ` — ${r.note}` : ''}`,
@@ -354,7 +358,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
     'SELECT id, created_at, amount, from_treasury_id, to_treasury_id FROM treasury_transfers WHERE deleted_at IS NULL'
   )
   for (const r of transfers.rows as any[]) {
-    entries.push({
+    entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `T-${r.id}`,
       description: 'تحويل بين الخزائن',
@@ -370,7 +374,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
   for (const r of diffs.rows as any[]) {
     const diff = Number(r.difference)
     const t = treasuryCode(Number(r.treasury_id))
-    entries.push({
+    entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `S-${r.session_id}`,
       description: `فرق جرد الوردية #${r.session_id} (${diff < 0 ? 'عجز' : 'زيادة'})`,
@@ -424,7 +428,9 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
   }
 
   entries.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-  return entries
+  // نطاق الفرع: قيود الفرع ده بس (القيود اليدوية والأرصدة الافتتاحية بتظهر في "كل الفروع" بس)
+  const cur = currentBranchId()
+  return cur == null ? entries : entries.filter((e) => e.branchId === cur)
 }
 
 /* ------------------------------ القيود اليدوية ------------------------------ */

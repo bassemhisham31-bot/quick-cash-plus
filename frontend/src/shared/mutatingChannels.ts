@@ -15,6 +15,8 @@ export const MUTATING_CHANNELS = new Set<string>([
   'users:create',
   'users:update',
   'users:delete',
+  'branches:create',
+  'branches:update',
   'shortcuts:update',
   'shortcuts:create',
   'shortcuts:delete',

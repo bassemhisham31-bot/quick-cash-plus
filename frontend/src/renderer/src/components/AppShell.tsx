@@ -59,6 +59,9 @@ export function AppShell(): JSX.Element {
   const setSoundPrefs = useAppStore((s) => s.setSoundPrefs)
   const disabledFeatures = useAppStore((s) => s.disabledFeatures)
   const setDisabledFeatures = useAppStore((s) => s.setDisabledFeatures)
+  const setBranchesEnabled = useAppStore((s) => s.setBranchesEnabled)
+  const setBranches = useAppStore((s) => s.setBranches)
+  const branchKey = useAppStore((s) => (s.branchesEnabled ? (s.activeBranch ?? '') : ''))
 
   useKeyboardShortcuts()
 
@@ -72,10 +75,15 @@ export function AppShell(): JSX.Element {
       setCurrencySymbol(s.currencySymbol)
       setSoundPrefs(s.soundEnabled, s.soundVolume)
     })
-    window.api.license.getStatus().then((s) => setDisabledFeatures(s.disabledFeatures))
-  }, [dataVersion, setCurrencySymbol, setSoundPrefs, setDisabledFeatures])
+    window.api.license.getStatus().then((s) => {
+      setDisabledFeatures(s.disabledFeatures)
+      setBranchesEnabled(!!s.branchesEnabled)
+      if (s.branchesEnabled) window.api.branches.list().then(setBranches).catch(() => {})
+    })
+  }, [dataVersion, setCurrencySymbol, setSoundPrefs, setDisabledFeatures, setBranchesEnabled, setBranches])
 
-  const refreshKey = SELF_REFRESHING_VIEWS.includes(view) ? view : `${view}-${dataVersion}`
+  // تبديل الفرع بيعمل remount لأي شاشة (حتى اللي بتحدّث نفسها) عشان تتحمّل ببيانات الفرع الجديد
+  const refreshKey = `${SELF_REFRESHING_VIEWS.includes(view) ? view : `${view}-${dataVersion}`}|${branchKey}`
   const viewAllowed = isViewAllowed(user, view, disabledFeatures)
   // القايمة الجانبية بتظهر في الشاشة الرئيسية (لوحة التحكم) بس — أي شاشة تانية بتفتح بالعرض الكامل
   // وفيها زرار 🏠 في الشريط العلوي يرجّع للرئيسية

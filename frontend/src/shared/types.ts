@@ -9,6 +9,9 @@ export interface SessionUser {
   fullName: string
   role: 'admin' | 'cashier'
   permissions: string[]
+  /** فرع المستخدم (الفرع الرئيسي رقم 1 لو ميزة الفروع مقفولة) */
+  branchId: number
+  branchName: string
 }
 
 export interface LoginResult {
@@ -119,6 +122,8 @@ export interface Warehouse {
   id: number
   name: string
   isDefault: boolean
+  branchId?: number
+  branchName?: string
 }
 
 export interface TransferLineInput {
@@ -1069,7 +1074,8 @@ export const REPORT_TYPES = [
   'restaurant_table_activity',
   'category_sales_daily',
   'item_sales',
-  'sales_by_captain'
+  'sales_by_captain',
+  'branch_comparison'
 ] as const
 
 export type ReportType = (typeof REPORT_TYPES)[number]
@@ -1257,6 +1263,8 @@ export interface LicenseStatus {
   daysRemaining: number | null
   expiresAt: string | null
   disabledFeatures: string[]
+  /** ميزة الفروع مفعّلة لعميل ده (QCP_BRANCHES) */
+  branchesEnabled?: boolean
 }
 
 export interface ActivateLicenseResult {
@@ -1485,6 +1493,8 @@ export interface UserListItem {
   active: boolean
   email: string | null
   permissionCount: number
+  branchId: number
+  branchName: string
 }
 
 export interface UserInput {
@@ -1494,6 +1504,8 @@ export interface UserInput {
   role: 'admin' | 'cashier'
   email?: string | null
   permissions: string[]
+  /** فرع المستخدم (لو ميزة الفروع مفعّلة) — الافتراضي الفرع المختار حاليًا */
+  branchId?: number
 }
 
 export interface UserUpdateInput {
@@ -1503,6 +1515,26 @@ export interface UserUpdateInput {
   password: string | null
   email?: string | null
   permissions: string[]
+  branchId?: number
+}
+
+/* ------------------------------- الفروع ------------------------------- */
+
+export interface Branch {
+  id: number
+  name: string
+  code: string | null
+  address: string | null
+  phone: string | null
+  active: boolean
+}
+
+export interface BranchInput {
+  name: string
+  code?: string | null
+  address?: string | null
+  phone?: string | null
+  active?: boolean
 }
 
 export interface UserActivityEntry {
@@ -1621,6 +1653,8 @@ export interface Treasury {
   isDefault: boolean
   active: boolean
   balance: number
+  branchId: number
+  branchName: string
 }
 
 export interface TreasuryInput {

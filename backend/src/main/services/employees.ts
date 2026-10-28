@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { assertBranchAccess, branchEmployeeFilter, branchFilter, requireBranchId } from './branchScope'
 import type {
   Employee,
   EmployeeInput,
@@ -55,15 +56,16 @@ function mapTransaction(r: any): EmployeeTransactionView {
 
 export async function listEmployees(): Promise<Employee[]> {
   const db = getDb()
-  const rs = await db.execute('SELECT * FROM employees WHERE deleted_at IS NULL ORDER BY name')
+  const bf = branchFilter('branch_id')
+  const rs = await db.execute({ sql: `SELECT * FROM employees WHERE deleted_at IS NULL AND ${bf.sql} ORDER BY name`, args: bf.args as any })
   return rs.rows.map(mapEmployee)
 }
 
 export async function createEmployee(input: EmployeeInput): Promise<Employee> {
   const db = getDb()
   const rs = await db.execute({
-    sql: 'INSERT INTO employees (name, phone, role, base_salary) VALUES (?, ?, ?, ?)',
-    args: [input.name.trim(), input.phone.trim() || null, input.role.trim() || null, input.baseSalary || 0]
+    sql: 'INSERT INTO employees (name, phone, role, base_salary, branch_id) VALUES (?, ?, ?, ?, ?)',
+    args: [input.name.trim(), input.phone.trim() || null, input.role.trim() || null, input.baseSalary || 0, requireBranchId()]
   })
   const created = await db.execute({ sql: 'SELECT * FROM employees WHERE id = ?', args: [rs.lastInsertRowid] })
   return mapEmployee(created.rows[0])
@@ -72,6 +74,7 @@ export async function createEmployee(input: EmployeeInput): Promise<Employee> {
 export async function updateEmployee(employeeId: number, input: EmployeeInput): Promise<Employee> {
   if (!input.name.trim()) throw new Error('اكتب اسم الموظف')
   const db = getDb()
+  await assertEmployeeAccess(employeeId)
   await db.execute({
     sql: 'UPDATE employees SET name = ?, phone = ?, role = ?, base_salary = ? WHERE id = ? AND deleted_at IS NULL',
     args: [input.name.trim(), input.phone.trim() || null, input.role.trim() || null, input.baseSalary || 0, employeeId]
@@ -81,8 +84,15 @@ export async function updateEmployee(employeeId: number, input: EmployeeInput): 
   return mapEmployee(rs.rows[0])
 }
 
+/** مفيش وصول لموظف فرع تاني بالـid */
+async function assertEmployeeAccess(employeeId: number): Promise<void> {
+  const row = (await getDb().execute({ sql: 'SELECT branch_id FROM employees WHERE id = ?', args: [employeeId] })).rows[0] as any
+  assertBranchAccess(row?.branch_id, 'الموظف')
+}
+
 export async function deleteEmployee(employeeId: number): Promise<void> {
   const db = getDb()
+  await assertEmployeeAccess(employeeId)
   await db.execute({ sql: "UPDATE employees SET deleted_at = datetime('now') WHERE id = ?", args: [employeeId] })
 }
 
@@ -188,6 +198,7 @@ export async function getEmployeeLedger(employeeId: number): Promise<EmployeeLed
   const employeeRs = await db.execute({ sql: 'SELECT * FROM employees WHERE id = ?', args: [employeeId] })
   const employeeRow = employeeRs.rows[0] as any
   if (!employeeRow) throw new Error('الموظف غير موجود')
+  assertBranchAccess(employeeRow.branch_id, 'الموظف')
 
   const txRs = await db.execute({
     sql: `SELECT id, type, amount, note, created_at AS createdAt, period_id AS periodId,
@@ -218,19 +229,27 @@ export async function getEmployeeLedger(employeeId: number): Promise<EmployeeLed
  * حتى لو لسه ما بدأش فترة رسمية)، و"المتبقي" ممكن يبقى سالب لو المدفوع فعليًا أكتر من الأساسي المتوقع. */
 export async function getEmployeesSummary(): Promise<EmployeesSummary> {
   const db = getDb()
-  const periodsRs = await db.execute(`
+  const bf = branchFilter('e.branch_id')
+  const periodsRs = await db.execute({
+    sql: `
     SELECT e.id, e.base_salary AS baseSalary, COUNT(p.id) AS periodCount
     FROM employees e
     LEFT JOIN employee_pay_periods p ON p.employee_id = e.id
-    WHERE e.deleted_at IS NULL
+    WHERE e.deleted_at IS NULL AND ${bf.sql}
     GROUP BY e.id
-  `)
+  `,
+    args: bf.args as any
+  })
   let totalBaseSalaryAllPeriods = 0
   for (const r of periodsRs.rows as any[]) {
     totalBaseSalaryAllPeriods += Number(r.baseSalary) * Math.max(1, Number(r.periodCount))
   }
 
-  const txRs = await db.execute('SELECT type, COALESCE(SUM(amount), 0) AS total FROM employee_transactions GROUP BY type')
+  const ef = branchEmployeeFilter('employee_id')
+  const txRs = await db.execute({
+    sql: `SELECT type, COALESCE(SUM(amount), 0) AS total FROM employee_transactions WHERE ${ef.sql} GROUP BY type`,
+    args: ef.args as any
+  })
   const totals: Record<string, number> = {}
   for (const r of txRs.rows as any[]) totals[r.type] = Number(r.total)
 

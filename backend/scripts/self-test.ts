@@ -308,7 +308,7 @@ async function main(): Promise<void> {
     console.log('\n17) نسخة retail (QCP_EDITION): من غير أي ميزة مطاعم...')
     const rawRpc = (channel: string, args: unknown[] = [], headers: Record<string, string> = authHeaders): Promise<Response> =>
       fetch(`${BASE}/api/rpc/${channel}`, { method: 'POST', headers, body: JSON.stringify({ args }) })
-    const RESTAURANT_KEYS = ['restaurant', 'restaurantTables', 'restaurantCaptains', 'delivery', 'events', 'settings:restaurant',
+    const RESTAURANT_KEYS = ['restaurant', 'restaurantTables', 'restaurantCaptains', 'delivery', 'events', 'settings:restaurant', 'feature:tips',
       'report:restaurant_sales_by_order_type', 'report:restaurant_recipe_consumption', 'report:restaurant_table_activity', 'report:sales_by_captain']
 
     const fullLic = await rpc('license:getStatus')

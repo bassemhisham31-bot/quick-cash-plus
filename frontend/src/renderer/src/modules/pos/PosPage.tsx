@@ -125,7 +125,11 @@ export function PosPage(): JSX.Element {
   const [showDelivery, setShowDelivery] = useState(false)
   const [drivers, setDrivers] = useState<DeliveryDriver[]>([])
   const [zones, setZones] = useState<DeliveryZone[]>([])
-  const deliveryAllowed = isViewLicensed('delivery', disabledFeatures)
+  const licenseLoaded = useAppStore((s) => s.licenseLoaded)
+  const deliveryAllowed = licenseLoaded && isViewLicensed('delivery', disabledFeatures)
+  // الإكرامية (تيبس) شبه مطاعم — موقوفة في نسخة retail (مفتاح feature:tips)
+  const tipsAllowed = !disabledFeatures.includes('feature:tips')
+  const allBranchesMode = useAppStore((s) => s.branchesEnabled && s.user?.role === 'admin' && s.activeBranch === 'all')
   const [showReturn, setShowReturn] = useState(false)
   const canReturn = hasPermission(user, 'pos.return') || hasPermission(user, 'invoices.manage')
   const searchRef = useRef<HTMLInputElement>(null)
@@ -148,7 +152,7 @@ export function PosPage(): JSX.Element {
   }, [])
 
   // الطاولات ومناطق التوصيل مش موجودة في النسخ اللي من غير مطاعم (السيرفر بيرفض قنواتها) — منناديهاش أصلًا هناك
-  const tablesAllowed = isViewLicensed('restaurantTables', disabledFeatures)
+  const tablesAllowed = licenseLoaded && isViewLicensed('restaurantTables', disabledFeatures)
   useEffect(() => {
     if (tablesAllowed) {
       window.api.settings.getRestaurant().then((s) => setDineInEnabled(s.dineInEnabled)).catch(() => {})
@@ -217,7 +221,7 @@ export function PosPage(): JSX.Element {
   const change = Math.max(0, paidNum - total)
   // الباقي إما يتردّ للعميل أو كله/جزء منه إكرامية (تيبس) بتدخل الدرج
   const tipAmount =
-    paymentMethod === 'credit'
+    paymentMethod === 'credit' || !tipsAllowed
       ? 0
       : paymentMethod !== 'cash'
         ? Math.max(0, Number(tipStr) || 0)
@@ -721,7 +725,8 @@ export function PosPage(): JSX.Element {
           </div>
         </div>
 
-        {!dayOpen && <div className="rst-error">⚠️ {t('pos.dayNotStarted')}</div>}
+        {allBranchesMode && <div className="rst-error">🏬 اختار فرع محدد من أعلى الشاشة قبل البيع (أنت على "كل الفروع")</div>}
+        {!allBranchesMode && !dayOpen && <div className="rst-error">⚠️ {t('pos.dayNotStarted')}</div>}
         {drawerMessage && <div className="rst-error">{drawerMessage}</div>}
 
         <div className="pos-search">
@@ -1272,7 +1277,7 @@ export function PosPage(): JSX.Element {
               </div>
             )}
 
-            {paymentMethod !== 'cash' && paymentMethod !== 'credit' && (
+            {tipsAllowed && paymentMethod !== 'cash' && paymentMethod !== 'credit' && (
               <div className="qcp-field" style={{ marginTop: 8 }}>
                 <label>🎁 إكرامية (تيبس) — اختياري</label>
                 <input className="qcp-input" type="number" min={0} value={tipStr} onChange={(e) => setTipStr(e.target.value)} />
@@ -1284,15 +1289,17 @@ export function PosPage(): JSX.Element {
                   <span>{t('pos.change')}</span>
                   <span>{currency(change)}</span>
                 </div>
-                <div className="rst-methods" style={{ marginTop: 8 }}>
-                  <button type="button" className={tipMode === 'return' ? 'active' : ''} onClick={() => setTipMode('return')}>
-                    ↩️ رد الباقي للعميل
-                  </button>
-                  <button type="button" className={tipMode === 'tip' ? 'active' : ''} onClick={() => setTipMode('tip')}>
-                    🎁 إكرامية (تيبس)
-                  </button>
-                </div>
-                {tipMode === 'tip' && (
+                {tipsAllowed && (
+                  <div className="rst-methods" style={{ marginTop: 8 }}>
+                    <button type="button" className={tipMode === 'return' ? 'active' : ''} onClick={() => setTipMode('return')}>
+                      ↩️ رد الباقي للعميل
+                    </button>
+                    <button type="button" className={tipMode === 'tip' ? 'active' : ''} onClick={() => setTipMode('tip')}>
+                      🎁 إكرامية (تيبس)
+                    </button>
+                  </div>
+                )}
+                {tipsAllowed && tipMode === 'tip' && (
                   <div className="qcp-field" style={{ marginTop: 8 }}>
                     <label>قيمة الإكرامية (الباقي يتردّ للعميل: {currency(changeToReturn)})</label>
                     <input

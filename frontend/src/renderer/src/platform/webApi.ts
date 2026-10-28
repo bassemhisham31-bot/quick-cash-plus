@@ -1,5 +1,7 @@
 import type {
   SessionUser,
+  Branch,
+  BranchInput,
   EventBooking,
   EventBookingInput,
   EventBookingStatus,
@@ -184,6 +186,31 @@ function setToken(token: string | null): void {
   }
 }
 
+/* ------------------------------ الفرع المختار (ميزة الفروع) ------------------------------ */
+
+const BRANCH_STORAGE_KEY = 'qcp.activeBranch'
+let activeBranchHeader: string | null = null
+try {
+  activeBranchHeader = localStorage.getItem(BRANCH_STORAGE_KEY)
+} catch {
+  /* التخزين المحلي مش متاح */
+}
+
+/** الفرع المختار: رقم فرع أو 'all' (كل الفروع — للأدمن). بيتبعت مع كل طلب في هيدر x-qcp-branch، والسيرفر بيتجاهله لغير الأدمن. */
+export function setActiveBranchHeader(value: string | null): void {
+  activeBranchHeader = value
+  try {
+    if (value) localStorage.setItem(BRANCH_STORAGE_KEY, value)
+    else localStorage.removeItem(BRANCH_STORAGE_KEY)
+  } catch {
+    /* التخزين المحلي مش متاح */
+  }
+}
+
+export function getActiveBranchHeader(): string | null {
+  return activeBranchHeader
+}
+
 /** المستخدم المسجّل من زيارة سابقة (لو التوكن لسه محفوظ) — بيرجّع الجلسة بعد إعادة تحميل الصفحة. */
 export function getStoredUser(): SessionUser | null {
   if (!authToken) return null
@@ -240,6 +267,7 @@ const PROFILE_STORAGE_KEY = 'qcp_device_print_profile'
 async function rpc(channel: string, args: unknown[], printProfile?: DevicePrintProfile): Promise<{ result: any; printJobs?: PrintJob[] }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (authToken) headers.Authorization = `Bearer ${authToken}`
+  if (activeBranchHeader) headers['x-qcp-branch'] = activeBranchHeader
 
   const res = await fetch(`/api/rpc/${channel}`, {
     method: 'POST',
@@ -610,6 +638,8 @@ const api = {
     adjustStock: (productId: number, warehouseId: number, mode: 'add' | 'set', qty: number, userId: number): Promise<number> =>
       invoke('catalog:adjustStock', productId, warehouseId, mode, qty, userId),
     listWarehouses: (): Promise<Warehouse[]> => invoke('catalog:listWarehouses'),
+    /** كل المخازن في كل الفروع (لاختيار وجهة نقل البضاعة بين الفروع) */
+    listAllWarehouses: (): Promise<Warehouse[]> => invoke('catalog:listAllWarehouses'),
     stockByWarehouse: (productIds: number[]): Promise<{ productId: number; warehouseId: number; quantity: number }[]> =>
       invoke('catalog:stockByWarehouse', productIds),
     createWarehouse: (name: string): Promise<Warehouse> => invoke('catalog:createWarehouse', name),
@@ -620,6 +650,11 @@ const api = {
       invoke('catalog:bulkUpdatePricesAndImages', items),
     bulkCreateProducts: (inputs: ProductInput[]): Promise<ProductImportResult> =>
       invoke('catalog:bulkCreateProducts', inputs)
+  },
+  branches: {
+    list: (): Promise<Branch[]> => invoke('branches:list'),
+    create: (input: BranchInput): Promise<Branch> => invoke('branches:create', input),
+    update: (id: number, input: BranchInput): Promise<Branch> => invoke('branches:update', id, input)
   },
   users: {
     list: (): Promise<UserListItem[]> => invoke('users:list'),

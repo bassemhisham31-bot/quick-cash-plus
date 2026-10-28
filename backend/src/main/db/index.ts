@@ -70,6 +70,7 @@ import { migration066Attendance } from './migrations/066_attendance'
 import { migration067AttendanceHikvision } from './migrations/067_attendance_hikvision'
 import { migration068AttendancePayroll } from './migrations/068_attendance_payroll'
 import { migration069PasswordReset } from './migrations/069_password_reset'
+import { migration070Branches } from './migrations/070_branches'
 import { seedDatabase } from './seed'
 
 let db: Client | null = null
@@ -197,7 +198,8 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
   { name: '066_attendance', sql: migration066Attendance },
   { name: '067_attendance_hikvision', sql: migration067AttendanceHikvision },
   { name: '068_attendance_payroll', sql: migration068AttendancePayroll },
-  { name: '069_password_reset', sql: migration069PasswordReset }
+  { name: '069_password_reset', sql: migration069PasswordReset },
+  { name: '070_branches', sql: migration070Branches }
 ]
 
 async function runMigrations(client: Client): Promise<void> {

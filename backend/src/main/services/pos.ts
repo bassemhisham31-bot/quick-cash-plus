@@ -1,5 +1,6 @@
 import { getDb } from '../db'
 import { getTempItemProductId, getWalkInCustomerId } from '../db/seed'
+import { branchesEnabled, currentBranchId, requireBranchId } from './branchScope'
 import { getOpenSession } from './cashSession'
 import { getLoyaltySettings, getPosUiSettings, getTaxSettings } from './settings'
 import { notifySaleByWhatsApp } from './whatsapp'
@@ -49,10 +50,21 @@ export async function checkout(
 
   if (!input.lines.length) return { ok: false, error: 'السلة فارغة' }
 
+  if (branchesEnabled() && currentBranchId() == null) return { ok: false, error: 'اختار فرع محدد من أعلى الشاشة قبل البيع' }
   const session = await getOpenSession()
   if (!session) return { ok: false, error: 'لازم تبدأ اليوم أول من لوحة التحكم قبل البيع' }
+  const branchId = requireBranchId()
 
   const warehouseId = input.warehouseId
+  if (branchesEnabled()) {
+    // المخازن المستخدمة في الفاتورة لازم تكون تابعة لفرع البيع (مفيش بيع من مخزن فرع تاني)
+    const used = [...new Set([warehouseId, ...input.lines.map((l) => l.warehouseId ?? warehouseId)])]
+    const rs = await db.execute({
+      sql: `SELECT COUNT(*) AS c FROM warehouses WHERE branch_id = ? AND id IN (${used.map(() => '?').join(',')})`,
+      args: [branchId, ...used]
+    })
+    if (Number((rs.rows[0] as any).c) !== used.length) return { ok: false, error: 'مخزن الصنف تابع لفرع تاني' }
+  }
   const isWalkInSelection = input.customerId === null
   const customerId = input.customerId ?? (await getWalkInCustomerId(db))
 
@@ -166,8 +178,8 @@ export async function checkout(
               (number, customer_id, session_id, cashier_id, warehouse_id, subtotal, discount_type, discount_value,
                discount_total, tax_total, total, paid, payment_method, status, loyalty_points_earned, loyalty_points_redeemed,
                sales_rep_id, commission_amount, order_type, table_id, delivery_fee, delivery_driver_id, service_charge_total, captain_id,
-               delivery_address, delivery_mark, customer_label, tip_amount)
-            VALUES ('PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               delivery_address, delivery_mark, customer_label, tip_amount, branch_id)
+            VALUES ('PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         customerId,
         session.id,
@@ -194,7 +206,8 @@ export async function checkout(
         orderType === 'delivery' ? input.deliveryAddress?.trim() || null : null,
         orderType === 'delivery' ? input.deliveryMark?.trim() || null : null,
         isWalkInSelection ? input.customerLabel?.trim().slice(0, 80) || null : null,
-        input.paymentMethod !== 'credit' ? Math.max(0, Math.round((Number(input.tipAmount) || 0) * 100) / 100) : 0
+        input.paymentMethod !== 'credit' ? Math.max(0, Math.round((Number(input.tipAmount) || 0) * 100) / 100) : 0,
+        branchId
       ]
     })
     const invoiceId = Number(info.lastInsertRowid)

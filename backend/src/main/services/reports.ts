@@ -1,11 +1,17 @@
 import { getDb } from '../db'
 import { getDefaultWarehouseId } from '../db/seed'
+import { branchesEnabled, branchFilter, branchScope, branchWarehouseFilter, type SqlFilter } from './branchScope'
+import { assertWarehouseInScope } from './branches'
 import { getCustomerStatement } from './customers'
 import { getVendorStatement } from './vendors'
 import { assertReportInEdition } from './edition'
 import type { OverviewMetric, OverviewSummary, ReportFilter, ReportResult, ReportType } from '../../shared/types'
 
-function dateConditions(filter: ReportFilter, column: string): { sql: string; args: unknown[] } {
+/**
+ * شرط التاريخ للتقارير. لو اتمرّر branchColumn (عمود رقم الفرع في نفس الجدول) والفروع مفعّلة وفيه فرع محدد
+ * بيتضاف شرط الفرع كمان — فكل تقرير بيتفلتر بالفرع من غير ما نكرر المنطق.
+ */
+function dateConditions(filter: ReportFilter, column: string, branchColumn?: string): { sql: string; args: unknown[] } {
   const parts: string[] = []
   const args: unknown[] = []
   if (filter.dateFrom) {
@@ -16,11 +22,39 @@ function dateConditions(filter: ReportFilter, column: string): { sql: string; ar
     parts.push(`date(${column}) <= date(?)`)
     args.push(filter.dateTo)
   }
+  if (branchColumn) {
+    const bf = branchFilter(branchColumn)
+    if (bf.args.length) {
+      parts.push(bf.sql)
+      args.push(...bf.args)
+    }
+  }
   return { sql: parts.length ? `AND ${parts.join(' AND ')}` : '', args }
+}
+
+/** LEFT JOIN لرصيد المخزون: مخزن محدد، أو (مع الفروع) مجموع مخازن الفرع الحالي/كل الفروع، أو المخزن الافتراضي (زي ما كان) */
+async function stockJoin(db: ReturnType<typeof getDb>, warehouseId: number | null | undefined): Promise<{ sql: string; args: unknown[] }> {
+  if (warehouseId) return { sql: 'LEFT JOIN stock s ON s.product_id = p.id AND s.warehouse_id = ?', args: [warehouseId] }
+  if (branchesEnabled()) {
+    const wf = branchWarehouseFilter('warehouse_id')
+    return {
+      sql: `LEFT JOIN (SELECT product_id, SUM(quantity) AS quantity FROM stock WHERE ${wf.sql} GROUP BY product_id) s ON s.product_id = p.id`,
+      args: wf.args
+    }
+  }
+  return { sql: 'LEFT JOIN stock s ON s.product_id = p.id AND s.warehouse_id = ?', args: [await getDefaultWarehouseId(db)] }
+}
+
+/** شرط مخزن لتقارير قيمة المخزون: نفس منطق stockJoin */
+async function stockWarehouseCondition(db: ReturnType<typeof getDb>, column: string, warehouseId: number | null | undefined): Promise<SqlFilter> {
+  if (warehouseId) return { sql: `${column} = ?`, args: [warehouseId] }
+  if (branchesEnabled()) return branchWarehouseFilter(column)
+  return { sql: `${column} = ?`, args: [await getDefaultWarehouseId(db)] }
 }
 
 export async function runReport(type: ReportType, filter: ReportFilter): Promise<ReportResult> {
   assertReportInEdition(type)
+  await assertWarehouseInScope(filter.warehouseId)
   switch (type) {
     case 'inventory_status':
       return inventoryStatus(filter)
@@ -78,6 +112,8 @@ export async function runReport(type: ReportType, filter: ReportFilter): Promise
       return itemSales(filter)
     case 'sales_by_captain':
       return salesByCaptain(filter)
+    case 'branch_comparison':
+      return branchComparison(filter)
     default:
       throw new Error('نوع تقرير غير معروف')
   }
@@ -85,7 +121,7 @@ export async function runReport(type: ReportType, filter: ReportFilter): Promise
 
 async function inventoryStatus(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const warehouseId = filter.warehouseId ?? (await getDefaultWarehouseId(db))
+  const sj = await stockJoin(db, filter.warehouseId)
   const rs = await db.execute({
     sql: `SELECT p.name, p.barcode, COALESCE(c.name, '-') AS category,
                  COALESCE(s.quantity, 0) AS qty, p.reorder_point AS reorderPoint,
@@ -93,10 +129,10 @@ async function inventoryStatus(filter: ReportFilter): Promise<ReportResult> {
                  COALESCE(s.quantity, 0) * p.cost_price AS stockValue
           FROM products p
           LEFT JOIN categories c ON c.id = p.category_id
-          LEFT JOIN stock s ON s.product_id = p.id AND s.warehouse_id = ?
+          ${sj.sql}
           WHERE p.deleted_at IS NULL
           ORDER BY p.name`,
-    args: [warehouseId]
+    args: sj.args as any
   })
   const rows = rs.rows.map((r: any) => ({
     name: r.name,
@@ -128,16 +164,16 @@ async function inventoryStatus(filter: ReportFilter): Promise<ReportResult> {
 // جرد الأصناف فقط: قائمة مبسّطة بالأصناف وأرصدتها بالنظام + عمود "الكمية الفعلية" فاضي يتملّى يدويًا وقت الجرد
 async function stocktake(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const warehouseId = filter.warehouseId ?? (await getDefaultWarehouseId(db))
+  const sj = await stockJoin(db, filter.warehouseId)
   const rs = await db.execute({
     sql: `SELECT p.name, p.barcode, COALESCE(c.name, '-') AS category,
                  COALESCE(s.quantity, 0) AS qty
           FROM products p
           LEFT JOIN categories c ON c.id = p.category_id
-          LEFT JOIN stock s ON s.product_id = p.id AND s.warehouse_id = ?
+          ${sj.sql}
           WHERE p.deleted_at IS NULL
           ORDER BY p.name`,
-    args: [warehouseId]
+    args: sj.args as any
   })
   // الكمية تُعرض كنص عشان لوحة التقارير بتنسّق أي رقم كعملة؛ والكمية الفعلية فاضية للتعبئة اليدوية
   const rows = rs.rows.map((r: any) => ({
@@ -164,7 +200,7 @@ async function stocktake(filter: ReportFilter): Promise<ReportResult> {
 
 async function purchasesLastPrice(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const warehouseId = filter.warehouseId ?? (await getDefaultWarehouseId(db))
+  const sj = await stockJoin(db, filter.warehouseId)
   const rs = await db.execute({
     sql: `WITH ranked AS (
             SELECT pi.product_id, pi.purchase_price, pi.qty, piv.vendor_id, piv.created_at,
@@ -178,12 +214,12 @@ async function purchasesLastPrice(filter: ReportFilter): Promise<ReportResult> {
                  r.created_at AS lastPurchaseDate, COALESCE(v.name, '-') AS vendorName
           FROM products p
           LEFT JOIN categories c ON c.id = p.category_id
-          LEFT JOIN stock s ON s.product_id = p.id AND s.warehouse_id = ?
+          ${sj.sql}
           LEFT JOIN ranked r ON r.product_id = p.id AND r.rn = 1
           LEFT JOIN vendors v ON v.id = r.vendor_id
           WHERE p.deleted_at IS NULL
           ORDER BY p.name`,
-    args: [warehouseId]
+    args: sj.args as any
   })
   const rows = rs.rows.map((r: any) => ({
     name: r.name,
@@ -215,7 +251,7 @@ async function purchasesLastPrice(filter: ReportFilter): Promise<ReportResult> {
 
 async function purchasesDetailed(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'piv.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'piv.created_at', 'piv.branch_id')
   const warehouseSql = filter.warehouseId ? 'AND piv.warehouse_id = ?' : ''
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
@@ -299,7 +335,7 @@ async function accountStatementReport(filter: ReportFilter): Promise<ReportResul
 
 async function salesDetailed(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at', 'i.branch_id')
   const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
   const serialSql = filter.serial?.trim() ? 'AND si.serial_number LIKE ?' : ''
   const args = [
@@ -347,7 +383,7 @@ async function salesDetailed(filter: ReportFilter): Promise<ReportResult> {
 
 async function salesSummary(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at', 'branch_id')
   const warehouseSql = filter.warehouseId ? 'AND warehouse_id = ?' : ''
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
@@ -384,7 +420,7 @@ async function salesSummary(filter: ReportFilter): Promise<ReportResult> {
 
 async function vendorsReport(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'pi.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'pi.created_at', 'pi.branch_id')
   const rs = await db.execute({
     sql: `SELECT v.name, v.balance, COUNT(pi.id) AS purchaseCount, COALESCE(SUM(pi.total), 0) AS totalPurchases
           FROM vendors v
@@ -415,7 +451,7 @@ async function vendorsReport(filter: ReportFilter): Promise<ReportResult> {
 
 async function customersAnalysis(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at', 'i.branch_id')
   const rs = await db.execute({
     sql: `SELECT c.name, c.balance, c.loyalty_points AS loyaltyPoints,
                  COUNT(i.id) AS invoiceCount, COALESCE(SUM(i.total), 0) AS totalPurchases
@@ -492,6 +528,7 @@ async function stockPermitsReport(filter: ReportFilter): Promise<ReportResult> {
   // فلتر المخزن اختياري: لو محدد نعرض مخزن واحد، وإلا كل المخازن (تقرير "جميع الأذون")
   const warehouseSql = filter.warehouseId != null ? 'AND sp.warehouse_id = ?' : ''
   const warehouseArgs = filter.warehouseId != null ? [filter.warehouseId] : []
+  const bwf = branchWarehouseFilter('sp.warehouse_id')
 
   const rs = await db.execute({
     sql: `SELECT sp.created_at AS date, sp.number, sp.type, w.name AS warehouse,
@@ -501,10 +538,10 @@ async function stockPermitsReport(filter: ReportFilter): Promise<ReportResult> {
           JOIN stock_permits sp ON sp.id = spi.permit_id
           JOIN warehouses w ON w.id = sp.warehouse_id
           LEFT JOIN users u ON u.id = sp.user_id
-          WHERE sp.deleted_at IS NULL ${warehouseSql} ${dateSql}
+          WHERE sp.deleted_at IS NULL ${warehouseSql} AND ${bwf.sql} ${dateSql}
           ORDER BY sp.id DESC, spi.id ASC
           LIMIT 5000`,
-    args: [...warehouseArgs, ...dateArgs]
+    args: [...warehouseArgs, ...bwf.args, ...dateArgs] as any
   })
 
   const typeLabels: Record<string, string> = { addition: 'إضافة', deduction: 'خصم' }
@@ -542,7 +579,7 @@ async function stockPermitsReport(filter: ReportFilter): Promise<ReportResult> {
 
 async function profitLoss(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at', 'i.branch_id')
   const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
   const salesArgs = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
@@ -557,7 +594,7 @@ async function profitLoss(filter: ReportFilter): Promise<ReportResult> {
     args: salesArgs
   })
 
-  const { sql: expenseDateSql, args: expenseDateArgs } = dateConditions(filter, 'created_at')
+  const { sql: expenseDateSql, args: expenseDateArgs } = dateConditions(filter, 'created_at', 'branch_id')
   const expensesRs = await db.execute({
     sql: `SELECT date(created_at) AS day, COALESCE(SUM(amount), 0) AS expenses
           FROM expenses WHERE deleted_at IS NULL ${expenseDateSql}
@@ -606,7 +643,7 @@ async function profitLoss(filter: ReportFilter): Promise<ReportResult> {
 
 async function monthlyExpenses(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'e.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'e.created_at', 'e.branch_id')
   const rs = await db.execute({
     sql: `SELECT strftime('%Y-%m', e.created_at) AS month, COALESCE(c.name, 'بدون تصنيف') AS category,
                  SUM(e.amount) AS amount
@@ -633,7 +670,7 @@ async function monthlyExpenses(filter: ReportFilter): Promise<ReportResult> {
 /** مبيعات تصنيف (وتصنيفاته الفرعية) يوم بيوم — لو مفيش تصنيف مختار بتظهر كل التصنيفات */
 async function categorySalesDaily(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at', 'i.branch_id')
   const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
   const catSql = filter.categoryId
     ? `AND p.category_id IN (WITH RECURSIVE sub(id) AS (SELECT ? UNION ALL SELECT c.id FROM categories c JOIN sub ON c.parent_id = sub.id) SELECT id FROM sub)`
@@ -668,7 +705,7 @@ async function categorySalesDaily(filter: ReportFilter): Promise<ReportResult> {
 /** مبيعات كل صنف لوحده (كمية، عدد الفواتير، متوسط السعر، إجمالي المبيعات) — فلتر التصنيف اختياري */
 async function itemSales(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at', 'i.branch_id')
   const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
   const catSql = filter.categoryId
     ? `AND p.category_id IN (WITH RECURSIVE sub(id) AS (SELECT ? UNION ALL SELECT c.id FROM categories c JOIN sub ON c.parent_id = sub.id) SELECT id FROM sub)`
@@ -716,7 +753,7 @@ async function itemSales(filter: ReportFilter): Promise<ReportResult> {
 /** مبيعات كل كابتن (فواتير المطعم المرتبطة بكابتن) — الفواتير من غير كابتن بتظهر في سطر "بدون كابتن" */
 async function salesByCaptain(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at', 'i.branch_id')
   const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
   const rs = await db.execute({
@@ -760,7 +797,7 @@ async function salesByCaptain(filter: ReportFilter): Promise<ReportResult> {
 
 async function productPerformance(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at', 'i.branch_id')
   const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
@@ -797,7 +834,7 @@ async function productPerformance(filter: ReportFilter): Promise<ReportResult> {
 
 async function paymentMethods(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at', 'branch_id')
   const warehouseSql = filter.warehouseId ? 'AND warehouse_id = ?' : ''
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
@@ -837,7 +874,7 @@ async function paymentMethods(filter: ReportFilter): Promise<ReportResult> {
 
 async function restaurantSalesByOrderType(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at', 'branch_id')
   const warehouseSql = filter.warehouseId ? 'AND warehouse_id = ?' : ''
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
@@ -911,7 +948,7 @@ async function restaurantRecipeConsumption(filter: ReportFilter): Promise<Report
 
 async function restaurantTableActivity(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'si.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'si.created_at', 'si.branch_id')
   const rs = await db.execute({
     sql: `SELECT t.name AS tableName, COUNT(*) AS ordersCount, SUM(si.total) AS total, AVG(si.total) AS avgTicket
           FROM sales_invoices si
@@ -942,7 +979,7 @@ async function restaurantTableActivity(filter: ReportFilter): Promise<ReportResu
 
 async function taxReport(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at', 'branch_id')
   const rs = await db.execute({
     sql: `SELECT date(created_at) AS day, SUM(subtotal - discount_total) AS taxableAmount, SUM(tax_total) AS taxCollected
           FROM sales_invoices
@@ -970,7 +1007,7 @@ async function taxReport(filter: ReportFilter): Promise<ReportResult> {
 
 async function financialSummary(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at', 'branch_id')
 
   const salesRs = await db.execute({
     sql: `SELECT COALESCE(SUM(total), 0) AS sales, COUNT(*) AS invoiceCount
@@ -987,12 +1024,12 @@ async function financialSummary(filter: ReportFilter): Promise<ReportResult> {
   const vendorsDebtRs = await db.execute(
     "SELECT COALESCE(SUM(balance), 0) AS debt FROM vendors WHERE deleted_at IS NULL AND balance > 0"
   )
-  const warehouseId = filter.warehouseId ?? (await getDefaultWarehouseId(db))
+  const swc = await stockWarehouseCondition(db, 's.warehouse_id', filter.warehouseId)
   const stockValueRs = await db.execute({
     sql: `SELECT COALESCE(SUM(s.quantity * p.cost_price), 0) AS value
           FROM stock s JOIN products p ON p.id = s.product_id
-          WHERE s.warehouse_id = ? AND p.deleted_at IS NULL`,
-    args: [warehouseId]
+          WHERE ${swc.sql} AND p.deleted_at IS NULL`,
+    args: swc.args as any
   })
 
   const sales = Number((salesRs.rows[0] as any).sales)
@@ -1056,7 +1093,7 @@ async function receivablesPayables(_filter: ReportFilter): Promise<ReportResult>
 
 async function cashDrawerSessions(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'cs.opened_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'cs.opened_at', 'cs.branch_id')
   const rs = await db.execute({
     sql: `SELECT cs.opened_at AS openedAt, cs.closed_at AS closedAt, cs.status,
                  cs.opening_balance AS openingBalance, cs.expected_cash AS expectedCash, cs.actual_cash AS actualCash,
@@ -1105,7 +1142,7 @@ async function cashDrawerSessions(filter: ReportFilter): Promise<ReportResult> {
 
 async function topCustomers(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at', 'i.branch_id')
   const rs = await db.execute({
     sql: `SELECT c.name, c.phone, COUNT(i.id) AS invoiceCount, COALESCE(SUM(i.total), 0) AS totalPurchases
           FROM customers c
@@ -1140,7 +1177,7 @@ async function topCustomers(filter: ReportFilter): Promise<ReportResult> {
 
 async function salesRepCommission(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at', 'i.branch_id')
   const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
@@ -1181,7 +1218,7 @@ async function salesRepCommission(filter: ReportFilter): Promise<ReportResult> {
 
 async function salesByEmployee(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
-  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at', 'i.branch_id')
   const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
@@ -1224,6 +1261,9 @@ async function periodFlowTotals(
   const db = getDb()
   const warehouseSql = warehouseId ? 'AND i.warehouse_id = ?' : ''
   const warehouseArgs = warehouseId ? [warehouseId] : []
+  const bsi = branchFilter('i.branch_id')
+  const bsr = branchFilter('r.branch_id')
+  const bse = branchFilter('branch_id')
 
   const salesRs = await db.execute({
     sql: `SELECT COALESCE(SUM(i.total), 0) AS sales,
@@ -1231,22 +1271,22 @@ async function periodFlowTotals(
                                FROM sales_items si JOIN products p ON p.id = si.product_id
                                WHERE si.invoice_id = i.id)), 0) AS cogs
           FROM sales_invoices i
-          WHERE i.deleted_at IS NULL AND date(i.created_at) >= date(?) AND date(i.created_at) <= date(?) ${warehouseSql}`,
-    args: [dateFrom, dateTo, ...warehouseArgs]
+          WHERE i.deleted_at IS NULL AND date(i.created_at) >= date(?) AND date(i.created_at) <= date(?) ${warehouseSql} AND ${bsi.sql}`,
+    args: [dateFrom, dateTo, ...warehouseArgs, ...bsi.args]
   })
 
   const returnsRs = await db.execute({
     sql: `SELECT COALESCE(SUM(r.amount), 0) AS returns
           FROM sales_returns r
           JOIN sales_invoices i ON i.id = r.invoice_id
-          WHERE date(r.created_at) >= date(?) AND date(r.created_at) <= date(?) ${warehouseSql}`,
-    args: [dateFrom, dateTo, ...warehouseArgs]
+          WHERE date(r.created_at) >= date(?) AND date(r.created_at) <= date(?) ${warehouseSql} AND ${bsr.sql}`,
+    args: [dateFrom, dateTo, ...warehouseArgs, ...bsr.args]
   })
 
   const expensesRs = await db.execute({
     sql: `SELECT COALESCE(SUM(amount), 0) AS expenses
-          FROM expenses WHERE deleted_at IS NULL AND date(created_at) >= date(?) AND date(created_at) <= date(?)`,
-    args: [dateFrom, dateTo]
+          FROM expenses WHERE deleted_at IS NULL AND date(created_at) >= date(?) AND date(created_at) <= date(?) AND ${bse.sql}`,
+    args: [dateFrom, dateTo, ...bse.args]
   })
 
   const wholesaleRs = await db.execute({
@@ -1254,8 +1294,8 @@ async function periodFlowTotals(
           FROM sales_items si
           JOIN sales_invoices i ON i.id = si.invoice_id
           JOIN product_prices pp ON pp.product_id = si.product_id AND pp.tier = 'wholesale' AND pp.price = si.unit_price
-          WHERE i.deleted_at IS NULL AND date(i.created_at) >= date(?) AND date(i.created_at) <= date(?) ${warehouseSql}`,
-    args: [dateFrom, dateTo, ...warehouseArgs]
+          WHERE i.deleted_at IS NULL AND date(i.created_at) >= date(?) AND date(i.created_at) <= date(?) ${warehouseSql} AND ${bsi.sql}`,
+    args: [dateFrom, dateTo, ...warehouseArgs, ...bsi.args]
   })
 
   return {
@@ -1295,12 +1335,12 @@ export async function getOverviewSummary(filter: ReportFilter): Promise<Overview
   const customersDebtRs = await db.execute(
     "SELECT COALESCE(SUM(balance), 0) AS debt FROM customers WHERE deleted_at IS NULL AND balance > 0"
   )
-  const warehouseId = filter.warehouseId ?? (await getDefaultWarehouseId(db))
+  const swc = await stockWarehouseCondition(db, 's.warehouse_id', filter.warehouseId)
   const stockValueRs = await db.execute({
     sql: `SELECT COALESCE(SUM(s.quantity * p.cost_price), 0) AS value
           FROM stock s JOIN products p ON p.id = s.product_id
-          WHERE s.warehouse_id = ? AND p.deleted_at IS NULL`,
-    args: [warehouseId]
+          WHERE ${swc.sql} AND p.deleted_at IS NULL`,
+    args: swc.args as any
   })
 
   return {
@@ -1314,5 +1354,74 @@ export async function getOverviewSummary(filter: ReportFilter): Promise<Overview
     stockValue: Number((stockValueRs.rows[0] as any).value),
     periodFrom: dateFrom,
     periodTo: dateTo
+  }
+}
+
+/** مقارنة الفروع: مبيعات/مرتجعات/مصروفات/مشتريات لكل فرع في الفترة (للأدمن بس، من غير فلتر نطاق الفرع) */
+async function branchComparison(filter: ReportFilter): Promise<ReportResult> {
+  if (!branchesEnabled() || !branchScope.getStore()?.isAdmin) throw new Error('تقرير مقارنة الفروع للأدمن بس (لما ميزة الفروع تكون مفعّلة)')
+  const db = getDb()
+  const byBranch = async (sql: string, args: unknown[]): Promise<Map<number, any>> => {
+    const rs = await db.execute({ sql, args: args as any })
+    return new Map((rs.rows as any[]).map((r) => [Number(r.b), r]))
+  }
+  const d = (col: string): { sql: string; args: unknown[] } => dateConditions(filter, col)
+
+  const si = d('i.created_at')
+  const sales = await byBranch(
+    `SELECT i.branch_id AS b, COUNT(*) AS cnt, COALESCE(SUM(i.total), 0) AS total FROM sales_invoices i
+     WHERE i.deleted_at IS NULL ${si.sql} GROUP BY i.branch_id`,
+    si.args
+  )
+  const sr = d('r.created_at')
+  const returns = await byBranch(
+    `SELECT r.branch_id AS b, COALESCE(SUM(r.amount), 0) AS total FROM sales_returns r WHERE 1 = 1 ${sr.sql} GROUP BY r.branch_id`,
+    sr.args
+  )
+  const se = d('e.created_at')
+  const expenses = await byBranch(
+    `SELECT e.branch_id AS b, COALESCE(SUM(e.amount), 0) AS total FROM expenses e WHERE e.deleted_at IS NULL ${se.sql} GROUP BY e.branch_id`,
+    se.args
+  )
+  const sp = d('pi.created_at')
+  const purchases = await byBranch(
+    `SELECT pi.branch_id AS b, COALESCE(SUM(pi.total), 0) AS total FROM purchase_invoices pi WHERE 1 = 1 ${sp.sql} GROUP BY pi.branch_id`,
+    sp.args
+  )
+  const branches = await db.execute('SELECT id, name FROM branches ORDER BY id')
+  const rows = (branches.rows as any[]).map((b) => {
+    const id = Number(b.id)
+    const salesTotal = Number(sales.get(id)?.total ?? 0)
+    const returnsTotal = Number(returns.get(id)?.total ?? 0)
+    const expensesTotal = Number(expenses.get(id)?.total ?? 0)
+    return {
+      branch: String(b.name),
+      invoiceCount: Number(sales.get(id)?.cnt ?? 0),
+      sales: salesTotal,
+      returns: returnsTotal,
+      expenses: expensesTotal,
+      purchases: Number(purchases.get(id)?.total ?? 0),
+      net: salesTotal - returnsTotal - expensesTotal
+    }
+  })
+  return {
+    title: 'مقارنة الفروع',
+    columns: [
+      { key: 'branch', label: 'الفرع' },
+      { key: 'invoiceCount', label: 'عدد الفواتير', align: 'end' },
+      { key: 'sales', label: 'المبيعات', align: 'end' },
+      { key: 'returns', label: 'المرتجعات', align: 'end' },
+      { key: 'expenses', label: 'المصروفات', align: 'end' },
+      { key: 'purchases', label: 'المشتريات', align: 'end' },
+      { key: 'net', label: 'الصافي (مبيعات − مرتجعات − مصروفات)', align: 'end' }
+    ],
+    rows,
+    totals: {
+      sales: rows.reduce((t, r) => t + r.sales, 0),
+      returns: rows.reduce((t, r) => t + r.returns, 0),
+      expenses: rows.reduce((t, r) => t + r.expenses, 0),
+      purchases: rows.reduce((t, r) => t + r.purchases, 0),
+      net: rows.reduce((t, r) => t + r.net, 0)
+    }
   }
 }

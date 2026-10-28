@@ -11,6 +11,8 @@ import { statfsSync } from 'fs'
 import { getDb, getDbPath } from '../main/db'
 import { getWebLicenseStatus, setLicenseFromOwner, webLicenseBlockReason } from '../main/services/licenseWeb'
 import { editionBlockReason, getEdition } from '../main/services/edition'
+import { branchScope } from '../main/services/branchScope'
+import { resolveBranchScope } from '../main/services/branches'
 import { timingSafeEqual } from 'crypto'
 import { printCapture, type DevicePrintProfile, type PrintJob } from '../main/services/printContext'
 import { triggerDebouncedSync } from '../main/services/priceCheckerSync'
@@ -217,7 +219,10 @@ export function createApp(): express.Express {
       // الطباعة بتتم على جهاز المتصفح (QZ Tray): لو الطلب فيه printProfile بنشغّل القناة جوه capture ونرجّع الـjobs في الرد
       const printProfile = req.body?.printProfile as DevicePrintProfile | undefined
       const capture = printProfile ? { profile: printProfile, jobs: [] as PrintJob[] } : null
-      const result = capture ? await printCapture.run(capture, () => handler(...callArgs)) : await handler(...callArgs)
+      // نطاق الفرع (لو ميزة الفروع مفعّلة): المستخدم العادي على فرعه، والأدمن على اللي اختاره في الهيدر x-qcp-branch
+      const scope = await resolveBranchScope(req.auth!.userId, req.headers['x-qcp-branch'] as string | undefined)
+      const invoke = (): Promise<unknown> => (capture ? printCapture.run(capture, () => handler(...callArgs)) : handler(...callArgs))
+      const result = await branchScope.run(scope, invoke)
       if (isMutating) await afterMutation(channel, actor)
       res.json({ ok: true, result, ...(capture ? { printJobs: capture.jobs } : {}) })
     } catch (err: any) {

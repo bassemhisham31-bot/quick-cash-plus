@@ -1,3 +1,5 @@
+import { getDb } from '../db'
+import { branchesEnabled } from './branchScope'
 import { getInvoiceView, getReceiptQr } from './invoices'
 import { getQuotationView } from './quotations'
 import { getShiftSummaryReport } from './cashSession'
@@ -64,19 +66,32 @@ const EXPENSE_METHOD_LABELS: Record<string, string> = {
   transfer: 'تحويل'
 }
 
+/** لو ميزة الفروع مفعّلة: اسم الفرع بيتضاف لاسم المتجر في رأس المستند (من جدول الفروع بالـsql المعطى) */
+async function withBranchName<T extends { name: string }>(store: T, sql: string, id: number): Promise<T> {
+  if (!branchesEnabled()) return store
+  const rs = await getDb().execute({ sql, args: [id] })
+  const branch = (rs.rows[0] as any)?.name
+  return branch ? { ...store, name: `${store.name} — ${branch}` } : store
+}
+
 export async function buildInvoiceHtml(
   invoiceId: number
 ): Promise<{ html: string; printSettings: PrintSettings } | null> {
   const invoice = await getInvoiceView(invoiceId)
   if (!invoice) return null
 
-  const [printSettings, globalTaxSettings, storeSettings, posUiSettings, restaurantSettings] = await Promise.all([
+  const [printSettings, globalTaxSettings, rawStoreSettings, posUiSettings, restaurantSettings] = await Promise.all([
     getPrintSettings(),
     getTaxSettings(),
     getStoreSettings(),
     getPosUiSettings(),
     getRestaurantSettings()
   ])
+  const storeSettings = await withBranchName(
+    rawStoreSettings,
+    'SELECT b.name FROM sales_invoices i JOIN branches b ON b.id = i.branch_id WHERE i.id = ?',
+    invoiceId
+  )
   currentCurrencySymbol = posUiSettings.currencySymbol
   // فواتير المطعم مع ضريبة المطعم المفعّلة: اسم/نسبة الضريبة في الفاتورة من إعدادات المطعم مش من الضريبة العامة
   // (rate = 0 معناها قيمة ثابتة → بيظهر الاسم بس من غير %)
@@ -990,11 +1005,16 @@ export async function buildShiftSummaryHtml(
   const report = await getShiftSummaryReport(sessionId)
   if (!report) return null
 
-  const [printSettings, storeSettings, posUiSettings] = await Promise.all([
+  const [printSettings, rawStoreSettings, posUiSettings] = await Promise.all([
     getPrintSettings(),
     getStoreSettings(),
     getPosUiSettings()
   ])
+  const storeSettings = await withBranchName(
+    rawStoreSettings,
+    'SELECT b.name FROM cash_sessions cs JOIN branches b ON b.id = cs.branch_id WHERE cs.id = ?',
+    sessionId
+  )
   currentCurrencySymbol = posUiSettings.currencySymbol
   const isThermal = printSettings.paperSize === '80mm' || printSettings.paperSize === '58mm'
 

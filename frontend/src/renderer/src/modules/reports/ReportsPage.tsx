@@ -28,6 +28,7 @@ const REPORT_OPTIONS: { type: ReportType; icon: string; label: string }[] = [
   { type: 'purchases_last_price', icon: '🧾', label: 'تقرير المشتريات الكامل (آخر سعر شراء)' },
   { type: 'purchases_detailed', icon: '📥', label: 'المشتريات التفصيلي' },
   { type: 'account_statement', icon: '📒', label: 'كشف حساب عميل/مورد' },
+  { type: 'branch_comparison', icon: '🏬', label: 'مقارنة الفروع (مبيعات/مصروفات/مشتريات لكل فرع)' },
   { type: 'restaurant_sales_by_order_type', icon: '🍽️', label: 'مبيعات المطاعم حسب نوع الطلب' },
   { type: 'restaurant_recipe_consumption', icon: '🧂', label: 'استهلاك الخامات (الوصفات)' },
   { type: 'restaurant_table_activity', icon: '🪑', label: 'نشاط الترابيزات' },
@@ -99,7 +100,12 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
   const { t } = useTranslation()
   // التقارير المتاحة حسب الترخيص: أي تقرير مفتاحه "report:<النوع>" في الميزات الموقوفة يتخفي
   const disabledFeatures = useAppStore((s) => s.disabledFeatures)
-  const availableOptions = REPORT_OPTIONS.filter((opt) => !disabledFeatures.includes(`report:${opt.type}`))
+  const branchesEnabled = useAppStore((s) => s.branchesEnabled)
+  const isAdminUser = useAppStore((s) => s.user?.role === 'admin')
+  const availableOptions = REPORT_OPTIONS.filter(
+    (opt) =>
+      !disabledFeatures.includes(`report:${opt.type}`) && (opt.type !== 'branch_comparison' || (branchesEnabled && isAdminUser))
+  )
   const [warehouseId, setWarehouseId] = useState<number | null>(null)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')

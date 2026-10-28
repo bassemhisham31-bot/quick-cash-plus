@@ -74,6 +74,7 @@ export function DashboardPage(): JSX.Element {
     refresh()
   }
 
+  const allBranchesMode = useAppStore((s) => s.branchesEnabled && s.user?.role === 'admin' && s.activeBranch === 'all')
   if (!summary) return <p>{t('common.loading')}</p>
 
   return (
@@ -82,7 +83,11 @@ export function DashboardPage(): JSX.Element {
         <h1>{t('dashboard.title')}</h1>
       </div>
 
-      {!summary.dayIsOpen ? (
+      {allBranchesMode ? (
+        <div className="qcp-callout" style={{ marginBottom: 18 }}>
+          <span>🏬 أنت على "كل الفروع" — الأرقام تحت مجموع كل الفروع. اختار فرعًا من أعلى الشاشة لبدء اليوم أو البيع.</span>
+        </div>
+      ) : !summary.dayIsOpen ? (
         <div className="qcp-callout" style={{ marginBottom: 18 }}>
           <span>{t('dashboard.dayClosedWarning')}</span>
           {!showOpenForm ? (

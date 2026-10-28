@@ -28,6 +28,7 @@ import {
   listProducts,
   listUnits,
   listWarehouses,
+  listAllWarehouses,
   getStockByWarehouse,
   updateProduct
 } from './services/catalog'
@@ -123,6 +124,8 @@ import {
   printStockPermit
 } from './services/print'
 import { getWebLicenseStatus } from './services/licenseWeb'
+import { createBranch, listBranches, updateBranch } from './services/branches'
+import type { BranchInput } from '../shared/types'
 import { listBackups, restoreBackup, runLocalBackup, scheduleAutoBackup } from './services/backup'
 import {
   saveAndReschedulePriceCheckerSync,
@@ -330,6 +333,7 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'catalog:adjustStock': (productId: number, warehouseId: number, mode: 'add' | 'set', qty: number, userId: number) =>
       adjustProductStock(productId, warehouseId, mode, qty, userId),
     'catalog:listWarehouses': () => listWarehouses(),
+    'catalog:listAllWarehouses': () => listAllWarehouses(),
     'catalog:stockByWarehouse': (productIds: number[]) => getStockByWarehouse(productIds),
     'catalog:createWarehouse': (name: string) => createWarehouse(name),
     'catalog:exportProducts': () => exportProductsToExcel(),
@@ -344,6 +348,10 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'users:update': (id: number, input: UserUpdateInput) => updateUser(id, input),
     'users:delete': (id: number, currentUserId: number) => deleteUser(id, currentUserId),
     'users:listActivity': (limit?: number) => listUserActivity(limit),
+
+    'branches:list': () => listBranches(),
+    'branches:create': (input: BranchInput) => createBranch(input),
+    'branches:update': (id: number, input: BranchInput) => updateBranch(id, input),
 
     'shortcuts:list': () => listShortcuts(),
     'shortcuts:update': (id: number, patch: KeyboardShortcutPatch) => updateShortcut(id, patch),

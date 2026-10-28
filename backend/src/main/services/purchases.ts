@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { assertBranchAccess, branchesEnabled, branchFilter, requireBranchId } from './branchScope'
 import type {
   PurchaseInvoiceInput,
   PurchaseInvoiceListItem,
@@ -17,13 +18,23 @@ export async function createPurchaseInvoice(
 
   const db = getDb()
   const total = input.lines.reduce((sum, l) => sum + l.qty * l.purchasePrice, 0)
+  let branchId: number
+  try {
+    branchId = requireBranchId()
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'اختار فرع محدد' }
+  }
+  if (branchesEnabled()) {
+    const wh = await db.execute({ sql: 'SELECT branch_id FROM warehouses WHERE id = ?', args: [input.warehouseId] })
+    if (Number((wh.rows[0] as any)?.branch_id) !== branchId) return { ok: false, error: 'المخزن ده تابع لفرع تاني' }
+  }
 
   const tx = await db.transaction('write')
   try {
     const info = await tx.execute({
-      sql: `INSERT INTO purchase_invoices (number, vendor_id, warehouse_id, total, payment_method, paid, user_id)
-            VALUES ('PENDING', ?, ?, ?, ?, ?, ?)`,
-      args: [input.vendorId, input.warehouseId, total, input.paymentMethod, input.paid, userId]
+      sql: `INSERT INTO purchase_invoices (number, vendor_id, warehouse_id, total, payment_method, paid, user_id, branch_id)
+            VALUES ('PENDING', ?, ?, ?, ?, ?, ?, ?)`,
+      args: [input.vendorId, input.warehouseId, total, input.paymentMethod, input.paid, userId, branchId]
     })
     const purchaseId = Number(info.lastInsertRowid)
     const number = `PUR-${String(purchaseId).padStart(6, '0')}`
@@ -73,14 +84,17 @@ export async function createPurchaseInvoice(
 
 export async function listPurchaseInvoices(): Promise<PurchaseInvoiceListItem[]> {
   const db = getDb()
-  const rs = await db.execute(
-    `SELECT pi.id, pi.number, pi.total, pi.paid, pi.payment_method AS paymentMethod, pi.created_at AS createdAt,
+  const bf = branchFilter('pi.branch_id')
+  const rs = await db.execute({
+    sql: `SELECT pi.id, pi.number, pi.total, pi.paid, pi.payment_method AS paymentMethod, pi.created_at AS createdAt,
             COALESCE(v.name, 'مورد غير محدد') AS vendorName
      FROM purchase_invoices pi
      LEFT JOIN vendors v ON v.id = pi.vendor_id
+     WHERE ${bf.sql}
      ORDER BY pi.id DESC
-     LIMIT 300`
-  )
+     LIMIT 300`,
+    args: bf.args as any
+  })
   return rs.rows.map((r: any) => ({
     id: Number(r.id),
     number: r.number,
@@ -97,7 +111,7 @@ export async function getPurchaseInvoiceView(purchaseId: number): Promise<Purcha
   const headerRs = await db.execute({
     sql: `SELECT pi.id, pi.number, pi.total, pi.paid, pi.payment_method AS paymentMethod, pi.note, pi.status,
                  pi.created_at AS createdAt, COALESCE(v.name, 'مورد غير محدد') AS vendorName,
-                 w.name AS warehouseName, u.full_name AS cashierName
+                 w.name AS warehouseName, u.full_name AS cashierName, pi.branch_id AS branchId
           FROM purchase_invoices pi
           LEFT JOIN vendors v ON v.id = pi.vendor_id
           JOIN warehouses w ON w.id = pi.warehouse_id
@@ -107,6 +121,7 @@ export async function getPurchaseInvoiceView(purchaseId: number): Promise<Purcha
   })
   const header = headerRs.rows[0] as any
   if (!header) return null
+  assertBranchAccess(header.branchId, 'فاتورة المشتريات')
 
   const linesRs = await db.execute({
     sql: `SELECT id AS purchaseItemId, product_name AS productName, qty, purchase_price AS purchasePrice, total,
@@ -153,6 +168,11 @@ export async function returnPurchaseLines(
   const invoiceRs = await db.execute({ sql: 'SELECT * FROM purchase_invoices WHERE id = ?', args: [purchaseId] })
   const invoice = invoiceRs.rows[0] as any
   if (!invoice) return { ok: false, error: 'فاتورة المشتريات غير موجودة' }
+  try {
+    assertBranchAccess(invoice.branch_id, 'فاتورة المشتريات')
+  } catch (err: any) {
+    return { ok: false, error: err.message }
+  }
   const warehouseId = Number(invoice.warehouse_id)
 
   const tx = await db.transaction('write')
@@ -163,8 +183,8 @@ export async function returnPurchaseLines(
     const itemsById = new Map((itemsRs.rows as any[]).map((r) => [Number(r.id), r]))
 
     const returnInfo = await tx.execute({
-      sql: `INSERT INTO purchase_returns (purchase_invoice_id, type, amount, note, user_id) VALUES (?, 'partial', 0, NULL, ?)`,
-      args: [purchaseId, userId]
+      sql: `INSERT INTO purchase_returns (purchase_invoice_id, type, amount, note, user_id, branch_id) VALUES (?, 'partial', 0, NULL, ?, ?)`,
+      args: [purchaseId, userId, Number(invoice.branch_id) || 1]
     })
     const returnId = Number(returnInfo.lastInsertRowid)
 
@@ -242,8 +262,9 @@ export async function returnPurchaseLines(
 
 export async function listPurchaseReturns(filter: { from?: string; to?: string } = {}): Promise<PurchaseReturnListRow[]> {
   const db = getDb()
-  const conditions: string[] = []
-  const args: unknown[] = []
+  const bf = branchFilter('pr.branch_id')
+  const conditions: string[] = [bf.sql]
+  const args: unknown[] = [...bf.args]
   if (filter.from) {
     conditions.push('pr.created_at >= ?')
     args.push(filter.from)

@@ -1,4 +1,6 @@
 import { getDb } from '../db'
+import { assertBranchAccess, branchWarehouseFilter } from './branchScope'
+import { assertWarehouseInScope } from './branches'
 import type { StockPermitInput, StockPermitListItem, StockPermitResult, StockPermitType, StockPermitView } from '../../shared/types'
 
 const NUMBER_PREFIX: Record<StockPermitType, string> = {
@@ -8,6 +10,11 @@ const NUMBER_PREFIX: Record<StockPermitType, string> = {
 
 export async function createStockPermit(input: StockPermitInput, userId: number): Promise<StockPermitResult> {
   if (!input.lines.length) return { ok: false, error: 'أضف صنف واحد على الأقل' }
+  try {
+    await assertWarehouseInScope(input.warehouseId)
+  } catch (err: any) {
+    return { ok: false, error: err.message }
+  }
 
   const db = getDb()
 
@@ -79,6 +86,11 @@ export async function deleteStockPermit(permitId: number, userId: number): Promi
   const headRs = await db.execute({ sql: 'SELECT * FROM stock_permits WHERE id = ?', args: [permitId] })
   const permit = headRs.rows[0] as any
   if (!permit) return { ok: false, error: 'الإذن غير موجود' }
+  try {
+    await assertWarehouseInScope(Number(permit.warehouse_id))
+  } catch (err: any) {
+    return { ok: false, error: err.message }
+  }
   if (permit.deleted_at) return { ok: true }
 
   const warehouseId = Number(permit.warehouse_id)
@@ -134,16 +146,17 @@ export async function deleteStockPermit(permitId: number, userId: number): Promi
 
 export async function listStockPermits(type?: StockPermitType): Promise<StockPermitListItem[]> {
   const db = getDb()
+  const bf = branchWarehouseFilter('sp.warehouse_id')
   const rs = await db.execute({
     sql: `SELECT sp.id, sp.number, sp.type, w.name AS warehouseName, sp.reason, sp.total_qty AS totalQty,
                  u.full_name AS userName, sp.created_at AS createdAt
           FROM stock_permits sp
           JOIN warehouses w ON w.id = sp.warehouse_id
           LEFT JOIN users u ON u.id = sp.user_id
-          WHERE sp.deleted_at IS NULL ${type ? 'AND sp.type = ?' : ''}
+          WHERE sp.deleted_at IS NULL AND ${bf.sql} ${type ? 'AND sp.type = ?' : ''}
           ORDER BY sp.id DESC
           LIMIT 500`,
-    args: type ? [type] : []
+    args: [...bf.args, ...(type ? [type] : [])] as any
   })
   return rs.rows.map((r: any) => ({
     id: Number(r.id),
@@ -161,7 +174,7 @@ export async function getStockPermitView(permitId: number): Promise<StockPermitV
   const db = getDb()
   const headRs = await db.execute({
     sql: `SELECT sp.id, sp.number, sp.type, w.name AS warehouseName, sp.reason, sp.note, sp.total_qty AS totalQty,
-                 u.full_name AS userName, sp.created_at AS createdAt
+                 u.full_name AS userName, sp.created_at AS createdAt, w.branch_id AS branchId
           FROM stock_permits sp
           JOIN warehouses w ON w.id = sp.warehouse_id
           LEFT JOIN users u ON u.id = sp.user_id
@@ -170,6 +183,7 @@ export async function getStockPermitView(permitId: number): Promise<StockPermitV
   })
   const head = headRs.rows[0] as any
   if (!head) return null
+  assertBranchAccess(head.branchId, 'الإذن')
 
   const linesRs = await db.execute({
     sql: `SELECT spi.product_name AS productName, p.barcode AS barcode, spi.qty, spi.note,

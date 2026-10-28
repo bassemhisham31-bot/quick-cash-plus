@@ -30,6 +30,7 @@ import type {
   UserActivityEntry,
   UserListItem,
   UserUpdateInput,
+  Branch,
   WhatsAppSettings,
   WhatsAppStatus
 } from '../../../../shared/types'
@@ -53,6 +54,7 @@ type Section =
   | 'whatsapp'
   | 'posUi'
   | 'restaurant'
+  | 'branches'
   | 'dataReset'
   | 'about'
 
@@ -64,6 +66,7 @@ export function SettingsPage(): JSX.Element {
   const user = useAppStore((s) => s.user)
   const disabledFeatures = useAppStore((s) => s.disabledFeatures)
   const [section, setSection] = useState<Section>('store')
+  const branchesEnabled = useAppStore((s) => s.branchesEnabled)
 
   // إخفاء قسم إعدادات مفتاحه "settings:<القسم>" موقوف بالترخيص — عدا الأقسام الأساسية دائمة الإتاحة
   const isSectionLicensed = (key: Section): boolean =>
@@ -88,6 +91,7 @@ export function SettingsPage(): JSX.Element {
     { key: 'whatsapp', icon: '💬', label: t('settings.whatsappSection') },
     { key: 'posUi', icon: '🎛️', label: t('settings.posUiSection') },
     { key: 'restaurant', icon: '🍽️', label: t('settings.restaurantSection') },
+    ...(user?.role === 'admin' && branchesEnabled ? [{ key: 'branches' as Section, icon: '🏬', label: 'الفروع' }] : []),
     ...(user?.role === 'admin'
       ? [{ key: 'dataReset' as Section, icon: '⚠️', label: t('settings.dataResetSection') }]
       : [])
@@ -149,6 +153,7 @@ export function SettingsPage(): JSX.Element {
           {section === 'whatsapp' && <WhatsAppSection />}
           {section === 'posUi' && <PosUiSection />}
           {section === 'restaurant' && <RestaurantSection />}
+          {section === 'branches' && user?.role === 'admin' && <BranchesSection />}
           {section === 'dataReset' && user?.role === 'admin' && <DataResetSection />}
           {section === 'about' && <AboutSection />}
         </div>
@@ -167,6 +172,119 @@ const EXTRA_PERMISSIONS: { code: string; label: string; icon: string }[] = [
   { code: 'accounting.manage', label: 'إضافة قيود يدوية وحسابات في دفتر القيود', icon: '📚' }
 ]
 
+const emptyBranchForm = { id: null as number | null, name: '', code: '', address: '', phone: '', active: true }
+
+/** إدارة الفروع (للأدمن): فرع جديد بيتعمله مخزن وخزائن خاصة بيه تلقائيًا */
+function BranchesSection(): JSX.Element {
+  const setStoreBranches = useAppStore((s) => s.setBranches)
+  const [branches, setBranches] = useState<Branch[]>([])
+  const [form, setForm] = useState(emptyBranchForm)
+  const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  async function refresh(): Promise<void> {
+    const list = await window.api.branches.list()
+    setBranches(list)
+    setStoreBranches(list)
+  }
+  useEffect(() => {
+    refresh().catch((err) => setError(err?.message ?? 'حدث خطأ'))
+  }, [])
+
+  async function save(): Promise<void> {
+    setError(null)
+    setMessage(null)
+    setSaving(true)
+    try {
+      const input = { name: form.name, code: form.code || null, address: form.address || null, phone: form.phone || null, active: form.active }
+      if (form.id === null) await window.api.branches.create(input)
+      else await window.api.branches.update(form.id, input)
+      setMessage(form.id === null ? 'تم إنشاء الفرع (مع مخزن وخزائن خاصة بيه)' : 'تم حفظ الفرع')
+      setForm(emptyBranchForm)
+      await refresh()
+    } catch (err: any) {
+      setError(err?.message ?? 'حدث خطأ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <>
+      <h3 style={{ marginTop: 0 }}>🏬 الفروع</h3>
+      <div className="qcp-card" style={{ fontSize: 13, marginBottom: 14 }}>
+        كل فرع له مخزن وخزائن ويوم/وردية وكاشيرات ومصروفات خاصة بيه. المنتجات والعملاء والموردين مشتركين بين الفروع. المستخدم بيتربط بفرع من شاشة المستخدمين، والأدمن بيبدّل بين الفروع من أعلى الشاشة.
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
+        <div style={{ flex: '1 1 260px', maxWidth: 380, minWidth: 0 }}>
+          {branches.map((b) => (
+            <div key={b.id} className="qcp-card" style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>{b.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--qcp-ink-faint)' }}>
+                  {[b.code, b.phone, b.address].filter(Boolean).join(' · ') || '—'}
+                  {!b.active && ' · متوقف'}
+                </div>
+              </div>
+              <button
+                className="qcp-btn qcp-btn-secondary"
+                style={{ padding: '4px 10px' }}
+                onClick={() => {
+                  setForm({ id: b.id, name: b.name, code: b.code ?? '', address: b.address ?? '', phone: b.phone ?? '', active: b.active })
+                  setError(null)
+                  setMessage(null)
+                }}
+              >
+                تعديل
+              </button>
+            </div>
+          ))}
+        </div>
+        <div style={{ flex: '2 1 320px', minWidth: 0 }}>
+          <h4 style={{ marginTop: 0 }}>{form.id === null ? 'إضافة فرع' : 'تعديل فرع'}</h4>
+          <div className="qcp-field">
+            <label>اسم الفرع</label>
+            <input className="qcp-input" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <div className="qcp-field" style={{ flex: '1 1 140px' }}>
+              <label>كود الفرع (اختياري)</label>
+              <input className="qcp-input" dir="ltr" value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} />
+            </div>
+            <div className="qcp-field" style={{ flex: '1 1 160px' }}>
+              <label>التليفون</label>
+              <input className="qcp-input" dir="ltr" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} />
+            </div>
+          </div>
+          <div className="qcp-field">
+            <label>العنوان</label>
+            <input className="qcp-input" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} />
+          </div>
+          {form.id !== null && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+              <input type="checkbox" checked={form.active} onChange={(e) => setForm((f) => ({ ...f, active: e.target.checked }))} />
+              الفرع نشط (إيقافه بيمنع مستخدميه من الدخول — لازم يكون يومه مقفول)
+            </label>
+          )}
+          {error && <div className="qcp-error">{error}</div>}
+          {message && <div className="qcp-pill accent" style={{ marginBottom: 10 }}>{message}</div>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="qcp-btn qcp-btn-primary" disabled={saving} onClick={save}>
+              {form.id === null ? 'إنشاء الفرع' : 'حفظ'}
+            </button>
+            {form.id !== null && (
+              <button className="qcp-btn qcp-btn-secondary" onClick={() => setForm(emptyBranchForm)}>
+                إلغاء
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
 const emptyUserForm = {
   id: null as number | null,
   username: '',
@@ -175,13 +293,16 @@ const emptyUserForm = {
   email: '',
   role: 'cashier' as 'admin' | 'cashier',
   active: true,
-  permissions: [] as string[]
+  permissions: [] as string[],
+  branchId: null as number | null
 }
 
 function UsersSection(): JSX.Element {
   const { t } = useTranslation()
   const currentUser = useAppStore((s) => s.user)
   const disabledFeatures = useAppStore((s) => s.disabledFeatures)
+  const branchesEnabled = useAppStore((s) => s.branchesEnabled)
+  const branches = useAppStore((s) => s.branches)
   const [tab, setTab] = useState<'users' | 'log'>('users')
   const [users, setUsers] = useState<UserListItem[]>([])
   const [activity, setActivity] = useState<UserActivityEntry[]>([])
@@ -216,7 +337,8 @@ function UsersSection(): JSX.Element {
       email: u.email ?? '',
       role: u.role,
       active: u.active,
-      permissions
+      permissions,
+      branchId: u.branchId
     })
     setError(null)
     setMessage(null)
@@ -241,7 +363,8 @@ function UsersSection(): JSX.Element {
           fullName: form.fullName.trim(),
           role: form.role,
           email: form.email.trim() || null,
-          permissions: form.permissions
+          permissions: form.permissions,
+          branchId: form.branchId ?? undefined
         })
         setMessage(t('settings.userCreated') ?? '')
       } else {
@@ -251,7 +374,8 @@ function UsersSection(): JSX.Element {
           active: form.active,
           password: form.password.trim() || null,
           email: form.email.trim() || null,
-          permissions: form.permissions
+          permissions: form.permissions,
+          branchId: form.branchId ?? undefined
         }
         await window.api.users.update(form.id, input)
         setMessage(t('settings.userUpdated') ?? '')
@@ -322,6 +446,7 @@ function UsersSection(): JSX.Element {
                     {u.role === 'admin' ? t('settings.roleAdmin') : t('settings.roleCashier')}
                     {!u.active && ` · ${t('settings.userInactive')}`}
                     {!u.email && ' · بدون إيميل'}
+                    {branchesEnabled && ` · 🏬 ${u.branchName}`}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
@@ -384,6 +509,26 @@ function UsersSection(): JSX.Element {
                 </select>
               </div>
             </div>
+
+            {branchesEnabled && currentUser?.role === 'admin' && (
+              <div className="qcp-field">
+                <label>🏬 الفرع</label>
+                <select
+                  className="qcp-select"
+                  value={form.branchId ?? ''}
+                  onChange={(e) => setForm((f) => ({ ...f, branchId: e.target.value ? Number(e.target.value) : null }))}
+                >
+                  <option value="">الفرع المختار حاليًا</option>
+                  {branches
+                    .filter((b) => b.active || b.id === form.branchId)
+                    .map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
 
             <div className="qcp-field">
               <label>📧 الإيميل (لاستعادة كلمة المرور — اختياري)</label>

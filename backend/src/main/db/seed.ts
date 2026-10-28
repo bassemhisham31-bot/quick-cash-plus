@@ -1,6 +1,7 @@
 import type { Client } from '@libsql/client'
 import bcrypt from 'bcryptjs'
 import { computeDeviceFingerprint } from '../services/deviceFingerprint'
+import { currentBranchId } from '../services/branchScope'
 
 export const DEFAULT_ADMIN_USERNAME = 'admin'
 export const DEFAULT_ADMIN_PASSWORD = 'admin123'
@@ -49,8 +50,13 @@ export async function seedDatabase(db: Client): Promise<void> {
 }
 
 export async function getDefaultWarehouseId(db: Client): Promise<number> {
-  const rs = await db.execute('SELECT id FROM warehouses WHERE is_default = 1 LIMIT 1')
-  if (!rs.rows[0]) throw new Error('No default warehouse configured')
+  // لو الفروع مفعّلة والمستخدم على فرع: المخزن الافتراضي بتاع الفرع ده؛ غير كده الافتراضي العام (زي ما كان)
+  const branchId = currentBranchId()
+  const rs =
+    branchId == null
+      ? await db.execute('SELECT id FROM warehouses WHERE is_default = 1 LIMIT 1')
+      : await db.execute({ sql: 'SELECT id FROM warehouses WHERE branch_id = ? ORDER BY is_default DESC, id LIMIT 1', args: [branchId] })
+  if (!rs.rows[0]) throw new Error(branchId == null ? 'No default warehouse configured' : 'الفرع ده مالوش مخزن — أضف مخزن للفرع')
   return Number((rs.rows[0] as any).id)
 }
 

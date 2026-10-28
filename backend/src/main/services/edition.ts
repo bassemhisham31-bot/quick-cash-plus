@@ -35,6 +35,7 @@ const RETAIL_DISABLED_FEATURES: readonly string[] = [
   'delivery',
   'events',
   'settings:restaurant',
+  'feature:tips', // الإكرامية (تيبس) في شاشة الدفع
   ...RESTAURANT_REPORT_TYPES.map((t) => `report:${t}`)
 ]
 

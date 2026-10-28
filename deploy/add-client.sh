@@ -11,16 +11,19 @@
 # أمثلة:
 #   bash add-client.sh acme acme.qcplus.app
 #   bash add-client.sh shop shop.qcplus.app --edition retail
+#   bash add-client.sh chain chain.qcplus.app --edition retail --branches   # أكتر من فرع (يوم/خزنة/مخزن/تقارير لكل فرع)
 #   bash add-client.sh acme acme.example.com libsql://acme-xxx.turso.io eyJ...
 set -euo pipefail
 
 EDITION=full
 EDITION_GIVEN=0
+BRANCHES=off
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --edition)   EDITION="${2:?--edition محتاج قيمة: full أو retail}"; EDITION_GIVEN=1; shift 2 ;;
     --edition=*) EDITION="${1#--edition=}"; EDITION_GIVEN=1; shift ;;
+    --branches)  BRANCHES=on; shift ;;
     *)           POSITIONAL+=("$1"); shift ;;
   esac
 done
@@ -64,6 +67,7 @@ QCP_JWT_SECRET=$(openssl rand -hex 48)
 QCP_ADMIN_PASSWORD=$ADMIN_PASS
 QCP_INTERNAL_SECRET=$(openssl rand -hex 24)
 QCP_EDITION=$EDITION
+$( [ "$BRANCHES" = on ] && echo "QCP_BRANCHES=on" )
 $( [ -n "$DB_URL" ] && printf "QCP_DB_URL=%s
 QCP_DB_AUTH_TOKEN=%s" "$DB_URL" "$DB_TOKEN" )
 QCP_DATA_DIR=$CLIENT_DIR/data
@@ -115,5 +119,5 @@ sudo -u qcp pm2 save
 systemctl reload caddy
 
 if [ "${NEW_ENV:-0}" = 1 ]; then echo "🔑 باسورد admin الأولي: $ADMIN_PASS  (غيّره بعد أول دخول — محفوظ كمان في $ENV_FILE)"; fi
-echo "✅ العميل $NAME شغال على https://$DOMAIN (منفذ داخلي $PORT، نسخة: $EDITION)"
+echo "✅ العميل $NAME شغال على https://$DOMAIN (منفذ داخلي $PORT، نسخة: $EDITION$( grep -q '^QCP_BRANCHES=on' "$ENV_FILE" && echo '، فروع: مفعّلة' ))"
 echo "   تأكد إن سجل DNS لـ $DOMAIN بيشاور على IP السيرفر."

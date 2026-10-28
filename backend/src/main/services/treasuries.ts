@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { assertBranchAccess, branchesEnabled, branchFilter, branchScope, currentBranchId, requireBranchId } from './branchScope'
 import type {
   CashDifferenceRow,
   ReportResult,
@@ -21,17 +22,24 @@ interface TreasuryRow {
   methods: string[]
   isDefault: boolean
   active: boolean
+  branchId: number
+  branchName: string
 }
 
+/** بيحمّل كل الخزائن (كل الفروع) — لأن كل حركة بتحتاج تلاقي خزينة فرعها؛ التصفية بالنطاق بتتم في الدوال اللي بتعرض للمستخدم */
 export async function loadTreasuryRows(includeInactive = true): Promise<TreasuryRow[]> {
   const rs = await getDb().execute(
-    `SELECT id, name, kind, opening_balance, methods, is_default, active FROM treasuries
-     WHERE deleted_at IS NULL ${includeInactive ? '' : 'AND active = 1'} ORDER BY is_default DESC, id`
+    `SELECT t.id, t.name, t.kind, t.opening_balance, t.methods, t.is_default, t.active, t.branch_id,
+            COALESCE(b.name, 'الفرع الرئيسي') AS branchName
+     FROM treasuries t LEFT JOIN branches b ON b.id = t.branch_id
+     WHERE t.deleted_at IS NULL ${includeInactive ? '' : 'AND t.active = 1'} ORDER BY t.is_default DESC, t.id`
   )
   return (rs.rows as any[]).map((r) => ({
     id: Number(r.id),
     name: r.name,
     kind: r.kind,
+    branchId: Number(r.branch_id) || 1,
+    branchName: String(r.branchName),
     openingBalance: Number(r.opening_balance),
     methods: String(r.methods || '')
       .split(',')
@@ -42,10 +50,19 @@ export async function loadTreasuryRows(includeInactive = true): Promise<Treasury
   }))
 }
 
-/** الخزينة اللي بتستقبل حركة وسيلة دفع معيّنة (أو الخزينة المحددة صراحة، أو الافتراضية) */
-export function resolveTreasury(treasuries: TreasuryRow[], method: string | null, explicitId?: number | null): number | null {
+/**
+ * الخزينة اللي بتستقبل حركة وسيلة دفع معيّنة (أو الخزينة المحددة صراحة، أو الافتراضية).
+ * لو ميزة الفروع مفعّلة وعرفنا فرع الحركة: الاختيار من خزائن الفرع ده بس.
+ */
+export function resolveTreasury(
+  treasuries: TreasuryRow[],
+  method: string | null,
+  explicitId?: number | null,
+  branchId?: number | null
+): number | null {
   if (explicitId && treasuries.some((t) => t.id === explicitId)) return explicitId
-  const active = treasuries.filter((t) => t.active)
+  const pool = branchesEnabled() && branchId != null ? treasuries.filter((t) => t.branchId === branchId) : treasuries
+  const active = pool.filter((t) => t.active)
   const byMethod = method ? active.find((t) => t.methods.includes(method)) : undefined
   return (byMethod ?? active.find((t) => t.isDefault) ?? active[0])?.id ?? null
 }
@@ -74,26 +91,30 @@ const PAY_LABELS: Record<string, string> = {
 async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMovement[]> {
   const db = getDb()
   const out: TreasuryMovement[] = []
-  const push = (m: Omit<TreasuryMovement, 'treasuryId'>, method: string | null, explicitId?: number | null): void => {
-    const treasuryId = resolveTreasury(treasuries, method, explicitId)
+  const push = (m: Omit<TreasuryMovement, 'treasuryId'>, method: string | null, explicitId?: number | null, branchId?: number | null): void => {
+    const treasuryId = resolveTreasury(treasuries, method, explicitId, branchId)
     if (treasuryId != null && (m.inAmount !== 0 || m.outAmount !== 0)) out.push({ ...m, treasuryId })
   }
 
   // مبيعات محصّلة (الآجل مالوش حركة خزينة)
   const sales = await db.execute(
-    `SELECT i.number, i.created_at, i.paid, i.total, i.payment_method, i.tip_amount, c.name AS customerName
+    `SELECT i.number, i.created_at, i.paid, i.total, i.payment_method, i.tip_amount, i.branch_id, c.name AS customerName
      FROM sales_invoices i JOIN customers c ON c.id = i.customer_id
      WHERE i.deleted_at IS NULL AND i.payment_method != 'credit'`
   )
   for (const r of sales.rows as any[]) {
     push(
       { ts: r.created_at, kind: 'مبيعات', ref: r.number, description: `فاتورة بيع — ${r.customerName} (${PAY_LABELS[r.payment_method] ?? r.payment_method})`, inAmount: Math.min(Number(r.paid), Number(r.total)), outAmount: 0 },
-      r.payment_method
+      r.payment_method,
+      null,
+      Number(r.branch_id)
     )
     if (Number(r.tip_amount) > 0) {
       push(
         { ts: r.created_at, kind: 'إكرامية', ref: r.number, description: `إكرامية (تيبس) — فاتورة ${r.number}`, inAmount: Number(r.tip_amount), outAmount: 0 },
-        r.payment_method
+        r.payment_method,
+        null,
+        Number(r.branch_id)
       )
     }
   }
@@ -120,20 +141,22 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
 
   // مرتجعات المبيعات المدفوعة (غير الآجل) بتتصرف من نفس خزينة وسيلة الدفع
   const returns = await db.execute(
-    `SELECT r.id, r.created_at, r.amount, i.number, i.payment_method
+    `SELECT r.id, r.created_at, r.amount, r.branch_id, i.number, i.payment_method
      FROM sales_returns r JOIN sales_invoices i ON i.id = r.invoice_id
      WHERE i.payment_method != 'credit'`
   )
   for (const r of returns.rows as any[]) {
     push(
       { ts: r.created_at, kind: 'مرتجع مبيعات', ref: r.number, description: 'مرتجع على فاتورة بيع', inAmount: 0, outAmount: Number(r.amount) },
-      r.payment_method
+      r.payment_method,
+      null,
+      Number(r.branch_id)
     )
   }
 
   // تحصيل من عملاء / سداد لموردين
   const payments = await db.execute(
-    `SELECT p.id, p.party_type, p.amount, p.method, p.treasury_id, p.created_at, p.note,
+    `SELECT p.id, p.party_type, p.amount, p.method, p.treasury_id, p.branch_id, p.created_at, p.note,
             COALESCE(c.name, v.name, '') AS partyName
      FROM payments p
      LEFT JOIN customers c ON p.party_type = 'customer' AND c.id = p.party_id
@@ -151,13 +174,14 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
         outAmount: isCustomer ? 0 : Number(r.amount)
       },
       r.method,
-      r.treasury_id != null ? Number(r.treasury_id) : null
+      r.treasury_id != null ? Number(r.treasury_id) : null,
+      Number(r.branch_id)
     )
   }
 
   // مشتريات مدفوعة وقت الفاتورة (اللي اتدفع بعد كده بيجي من جدول المدفوعات فمش بيتكرر)
   const purchases = await db.execute(
-    `SELECT pi.number, pi.created_at, pi.payment_method, v.name AS vendorName,
+    `SELECT pi.number, pi.created_at, pi.payment_method, pi.branch_id, v.name AS vendorName,
             pi.paid - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.invoice_id = pi.id AND p.party_type = 'vendor'), 0) AS paidNow
      FROM purchase_invoices pi JOIN vendors v ON v.id = pi.vendor_id
      WHERE pi.payment_method != 'credit'`
@@ -165,32 +189,37 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
   for (const r of purchases.rows as any[]) {
     push(
       { ts: r.created_at, kind: 'مشتريات', ref: r.number, description: `فاتورة شراء — ${r.vendorName}`, inAmount: 0, outAmount: Math.max(0, Number(r.paidNow)) },
-      r.payment_method
+      r.payment_method,
+      null,
+      Number(r.branch_id)
     )
   }
 
   // مرتجعات المشتريات المدفوعة (غير الآجل): الفلوس بترجع من المورد لنفس خزينة وسيلة دفع الفاتورة
   const purchaseReturns = await db.execute(
-    `SELECT r.id, r.created_at, r.amount, pi.number, pi.payment_method, v.name AS vendorName
+    `SELECT r.id, r.created_at, r.amount, r.branch_id, pi.number, pi.payment_method, v.name AS vendorName
      FROM purchase_returns r JOIN purchase_invoices pi ON pi.id = r.purchase_invoice_id LEFT JOIN vendors v ON v.id = pi.vendor_id
      WHERE pi.payment_method != 'credit'`
   )
   for (const r of purchaseReturns.rows as any[]) {
     push(
       { ts: r.created_at, kind: 'مرتجع مشتريات', ref: r.number, description: `مرتجع للمورد ${r.vendorName ?? ''}`.trim(), inAmount: Number(r.amount), outAmount: 0 },
-      r.payment_method
+      r.payment_method,
+      null,
+      Number(r.branch_id)
     )
   }
 
   const expenses = await db.execute(
-    `SELECT e.id, e.created_at, e.amount, e.method, e.treasury_id, e.note, ec.name AS categoryName
+    `SELECT e.id, e.created_at, e.amount, e.method, e.treasury_id, e.branch_id, e.note, ec.name AS categoryName
      FROM expenses e LEFT JOIN expense_categories ec ON ec.id = e.category_id WHERE e.deleted_at IS NULL`
   )
   for (const r of expenses.rows as any[]) {
     push(
       { ts: r.created_at, kind: 'مصروف', ref: `E-${r.id}`, description: `${r.categoryName ?? 'مصروف'}${r.note ? ` — ${r.note}` : ''}`, inAmount: 0, outAmount: Number(r.amount) },
       r.method,
-      r.treasury_id != null ? Number(r.treasury_id) : null
+      r.treasury_id != null ? Number(r.treasury_id) : null,
+      Number(r.branch_id)
     )
   }
 
@@ -239,7 +268,8 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
 export async function listTreasuries(): Promise<Treasury[]> {
   const treasuries = await loadTreasuryRows()
   const movements = await collectMovements(treasuries)
-  return treasuries.map((t) => {
+  const cur = currentBranchId()
+  return treasuries.filter((t) => cur == null || t.branchId === cur).map((t) => {
     const net = movements.filter((m) => m.treasuryId === t.id).reduce((s, m) => s + m.inAmount - m.outAmount, 0)
     return { ...t, balance: Math.round((t.openingBalance + net) * 100) / 100 }
   })
@@ -248,8 +278,8 @@ export async function listTreasuries(): Promise<Treasury[]> {
 export async function createTreasury(input: TreasuryInput): Promise<void> {
   if (!input.name.trim()) throw new Error('اسم الخزينة مطلوب')
   await getDb().execute({
-    sql: 'INSERT INTO treasuries (name, kind, opening_balance, methods, active) VALUES (?, ?, ?, ?, ?)',
-    args: [input.name.trim(), input.kind, Number(input.openingBalance) || 0, input.methods.join(','), input.active ? 1 : 0]
+    sql: 'INSERT INTO treasuries (name, kind, opening_balance, methods, active, branch_id) VALUES (?, ?, ?, ?, ?, ?)',
+    args: [input.name.trim(), input.kind, Number(input.openingBalance) || 0, input.methods.join(','), input.active ? 1 : 0, requireBranchId()]
   })
 }
 
@@ -263,7 +293,8 @@ export async function updateTreasury(id: number, input: TreasuryInput): Promise<
 
 export async function setDefaultTreasury(id: number): Promise<void> {
   const db = getDb()
-  await db.execute('UPDATE treasuries SET is_default = 0')
+  // الافتراضية لكل فرع على حدة: بنصفّر خزائن نفس فرع الخزينة دي بس
+  await db.execute({ sql: 'UPDATE treasuries SET is_default = 0 WHERE branch_id = (SELECT branch_id FROM treasuries WHERE id = ?)', args: [id] })
   await db.execute({ sql: 'UPDATE treasuries SET is_default = 1, active = 1 WHERE id = ?', args: [id] })
 }
 
@@ -288,6 +319,7 @@ export async function createVoucher(input: VoucherInput, userId: number): Promis
   const treasuries = await loadTreasuryRows()
   const treasury = treasuries.find((t) => t.id === input.treasuryId)
   if (!treasury) throw new Error('الخزينة غير موجودة')
+  assertBranchAccess(treasury.branchId, 'الخزينة')
   const method = treasury.methods[0] ?? (treasury.kind === 'cash' ? 'cash' : treasury.kind === 'bank' ? 'card' : 'wallet')
   const note = input.note?.trim() || null
 
@@ -303,8 +335,8 @@ export async function createVoucher(input: VoucherInput, userId: number): Promis
       if (!c.rows[0]) throw new Error('العميل غير موجود')
       partyName = (c.rows[0] as any).name
       const p = await tx.execute({
-        sql: `INSERT INTO payments (party_type, party_id, amount, method, note, user_id, treasury_id) VALUES ('customer', ?, ?, ?, ?, ?, ?)`,
-        args: [input.partyId, amount, method, note, userId, treasury.id]
+        sql: `INSERT INTO payments (party_type, party_id, amount, method, note, user_id, treasury_id, branch_id) VALUES ('customer', ?, ?, ?, ?, ?, ?, ?)`,
+        args: [input.partyId, amount, method, note, userId, treasury.id, treasury.branchId]
       })
       paymentId = Number(p.lastInsertRowid)
       await tx.execute({ sql: 'UPDATE customers SET balance = balance - ? WHERE id = ?', args: [amount, input.partyId] })
@@ -314,16 +346,19 @@ export async function createVoucher(input: VoucherInput, userId: number): Promis
       if (!v.rows[0]) throw new Error('المورد غير موجود')
       partyName = (v.rows[0] as any).name
       const p = await tx.execute({
-        sql: `INSERT INTO payments (party_type, party_id, amount, method, note, user_id, treasury_id) VALUES ('vendor', ?, ?, ?, ?, ?, ?)`,
-        args: [input.partyId, amount, method, note, userId, treasury.id]
+        sql: `INSERT INTO payments (party_type, party_id, amount, method, note, user_id, treasury_id, branch_id) VALUES ('vendor', ?, ?, ?, ?, ?, ?, ?)`,
+        args: [input.partyId, amount, method, note, userId, treasury.id, treasury.branchId]
       })
       paymentId = Number(p.lastInsertRowid)
       await tx.execute({ sql: 'UPDATE vendors SET balance = balance - ? WHERE id = ?', args: [amount, input.partyId] })
     } else if (input.type === 'payment' && input.partyType === 'other') {
       // سند صرف "أخرى" = مصروف عادي (بيظهر في شاشة المصروفات والتقارير)
-      const session = await tx.execute("SELECT id FROM cash_sessions WHERE status = 'open' ORDER BY id DESC LIMIT 1")
+      const session = await tx.execute({
+        sql: "SELECT id FROM cash_sessions WHERE status = 'open' AND branch_id = ? ORDER BY id DESC LIMIT 1",
+        args: [treasury.branchId]
+      })
       const e = await tx.execute({
-        sql: `INSERT INTO expenses (category_id, session_id, amount, method, note, user_id, treasury_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO expenses (category_id, session_id, amount, method, note, user_id, treasury_id, branch_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           input.categoryId ?? null,
           session.rows[0] ? Number((session.rows[0] as any).id) : null,
@@ -331,7 +366,8 @@ export async function createVoucher(input: VoucherInput, userId: number): Promis
           treasury.kind === 'cash' ? 'cash' : treasury.kind === 'wallet' ? 'wallet' : 'card',
           [partyName, note].filter(Boolean).join(' — ') || null,
           userId,
-          treasury.id
+          treasury.id,
+          treasury.branchId
         ]
       })
       expenseId = Number(e.lastInsertRowid)
@@ -343,9 +379,9 @@ export async function createVoucher(input: VoucherInput, userId: number): Promis
     }
 
     const v = await tx.execute({
-      sql: `INSERT INTO vouchers (type, treasury_id, amount, party_type, party_id, party_name, category_id, note, payment_id, expense_id, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [input.type, treasury.id, amount, input.partyType, input.partyId ?? null, partyName, input.categoryId ?? null, note, paymentId, expenseId, userId]
+      sql: `INSERT INTO vouchers (type, treasury_id, amount, party_type, party_id, party_name, category_id, note, payment_id, expense_id, user_id, branch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [input.type, treasury.id, amount, input.partyType, input.partyId ?? null, partyName, input.categoryId ?? null, note, paymentId, expenseId, userId, treasury.branchId]
     })
     await tx.commit()
     const view = await getVoucher(Number(v.lastInsertRowid))
@@ -382,8 +418,9 @@ export async function getVoucher(id: number): Promise<VoucherView | null> {
 }
 
 export async function listVouchers(filter: { type?: 'receipt' | 'payment'; from?: string; to?: string } = {}): Promise<VoucherView[]> {
-  const conditions = ['v.deleted_at IS NULL']
-  const args: unknown[] = []
+  const bf = branchFilter('v.branch_id')
+  const conditions = ['v.deleted_at IS NULL', bf.sql]
+  const args: unknown[] = [...bf.args]
   if (filter.type) {
     conditions.push('v.type = ?')
     args.push(filter.type)
@@ -406,6 +443,7 @@ export async function deleteVoucher(id: number): Promise<void> {
   const rs = await db.execute({ sql: 'SELECT * FROM vouchers WHERE id = ? AND deleted_at IS NULL', args: [id] })
   const v = rs.rows[0] as any
   if (!v) return
+  assertBranchAccess(v.branch_id, 'السند')
   const tx = await db.transaction('write')
   try {
     if (v.payment_id) {
@@ -434,6 +472,14 @@ export async function createTransfer(input: TreasuryTransferInput, userId: numbe
   const amount = Number(input.amount)
   if (!(amount > 0)) throw new Error('المبلغ لازم يكون أكبر من صفر')
   if (input.fromTreasuryId === input.toTreasuryId) throw new Error('اختار خزينتين مختلفتين')
+  // غير الأدمن مايحوّلش من/إلى خزينة فرع تاني
+  const requester = branchScope.getStore()
+  if (branchesEnabled() && requester && !requester.isAdmin) {
+    const rows = await loadTreasuryRows()
+    for (const id of [input.fromTreasuryId, input.toTreasuryId]) {
+      if (rows.find((t) => t.id === id)?.branchId !== requester.homeBranchId) throw new Error('الخزينة دي تابعة لفرع تاني')
+    }
+  }
   await getDb().execute({
     sql: 'INSERT INTO treasury_transfers (from_treasury_id, to_treasury_id, amount, note, user_id) VALUES (?, ?, ?, ?, ?)',
     args: [input.fromTreasuryId, input.toTreasuryId, amount, input.note?.trim() || null, userId]
@@ -441,11 +487,14 @@ export async function createTransfer(input: TreasuryTransferInput, userId: numbe
 }
 
 export async function listTransfers(): Promise<TreasuryTransferView[]> {
-  const rs = await getDb().execute(
-    `SELECT t.id, t.amount, t.note, t.created_at, f.name AS fromName, tt.name AS toName, u.full_name AS userName
+  const cur = currentBranchId()
+  const rs = await getDb().execute({
+    sql: `SELECT t.id, t.amount, t.note, t.created_at, f.name AS fromName, tt.name AS toName, u.full_name AS userName
      FROM treasury_transfers t JOIN treasuries f ON f.id = t.from_treasury_id JOIN treasuries tt ON tt.id = t.to_treasury_id
-     LEFT JOIN users u ON u.id = t.user_id WHERE t.deleted_at IS NULL ORDER BY t.id DESC`
-  )
+     LEFT JOIN users u ON u.id = t.user_id WHERE t.deleted_at IS NULL
+       ${cur == null ? '' : 'AND (f.branch_id = ? OR tt.branch_id = ?)'} ORDER BY t.id DESC`,
+    args: cur == null ? [] : [cur, cur]
+  })
   return (rs.rows as any[]).map((r) => ({
     id: Number(r.id),
     fromName: r.fromName,
@@ -468,7 +517,8 @@ export async function recordCashDifference(sessionId: number, expected: number, 
   const difference = Math.round((actual - expected) * 100) / 100
   if (difference === 0) return
   const treasuries = await loadTreasuryRows(false)
-  const treasuryId = resolveTreasury(treasuries, 'cash')
+  const sessionRs = await getDb().execute({ sql: 'SELECT branch_id FROM cash_sessions WHERE id = ?', args: [sessionId] })
+  const treasuryId = resolveTreasury(treasuries, 'cash', null, Number((sessionRs.rows[0] as any)?.branch_id) || 1)
   if (treasuryId == null) return
   await getDb().execute({
     sql: `INSERT OR REPLACE INTO cash_differences (session_id, treasury_id, expected, actual, difference, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -477,8 +527,9 @@ export async function recordCashDifference(sessionId: number, expected: number, 
 }
 
 export async function listCashDifferences(filter: { from?: string; to?: string } = {}): Promise<CashDifferenceRow[]> {
-  const conditions = ['1 = 1']
-  const args: unknown[] = []
+  const bf = branchFilter('t.branch_id')
+  const conditions = [bf.sql]
+  const args: unknown[] = [...bf.args]
   if (filter.from) {
     conditions.push('d.created_at >= ?')
     args.push(filter.from)
@@ -509,9 +560,9 @@ export async function listCashDifferences(filter: { from?: string; to?: string }
  * الرصيد المتوقع في درج الخزينة النقدية الافتراضية لوردية: الافتتاحي + كل حركة نقدية من وقت فتح الوردية
  * (مبيعات، تحصيلات، سندات، مصروفات، مدفوعات موردين، مشتريات، مرتجعات، تحويلات) — مش بس المبيعات والمصروفات.
  */
-export async function computeExpectedCash(openedAt: string, openingBalance: number): Promise<number> {
+export async function computeExpectedCash(openedAt: string, openingBalance: number, branchId?: number | null): Promise<number> {
   const treasuries = await loadTreasuryRows(false)
-  const cashId = resolveTreasury(treasuries, 'cash')
+  const cashId = resolveTreasury(treasuries, 'cash', null, branchId)
   const movements = await collectMovements(treasuries)
   const net = movements
     .filter((m) => m.treasuryId === cashId && m.ts >= openedAt && !m.kind.includes('خزينة'))
@@ -524,8 +575,12 @@ export async function computeExpectedCash(openedAt: string, openingBalance: numb
 /** كشف حساب خزينة (أو كل الخزائن لو treasuryId فاضي) في فترة، برصيد افتتاحي ورصيد متحرك */
 export async function getTreasuryStatement(treasuryId: number | null, from?: string, to?: string): Promise<ReportResult> {
   const treasuries = await loadTreasuryRows()
-  const movements = (await collectMovements(treasuries)).filter((m) => treasuryId == null || m.treasuryId === treasuryId)
-  const scope = treasuryId == null ? treasuries : treasuries.filter((t) => t.id === treasuryId)
+  const cur = currentBranchId()
+  const inScope = treasuries.filter((t) => cur == null || t.branchId === cur)
+  const scopeIds = new Set(inScope.map((t) => t.id))
+  if (treasuryId != null) assertBranchAccess(treasuries.find((t) => t.id === treasuryId)?.branchId, 'الخزينة')
+  const movements = (await collectMovements(treasuries)).filter((m) => (treasuryId == null ? scopeIds.has(m.treasuryId) : m.treasuryId === treasuryId))
+  const scope = treasuryId == null ? inScope : treasuries.filter((t) => t.id === treasuryId)
   const names = new Map(treasuries.map((t) => [t.id, t.name]))
   const fromTs = from ? `${from} 00:00:00` : null
   const toTs = to ? `${to} 23:59:59` : null

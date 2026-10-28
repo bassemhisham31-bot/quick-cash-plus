@@ -1,5 +1,7 @@
 import { getDb } from '../db'
 import { getDefaultWarehouseId } from '../db/seed'
+import { branchWarehouseFilter, requireBranchId } from './branchScope'
+import { assertWarehouseInScope } from './branches'
 import type {
   BulkPriceUpdateItem,
   BulkPriceUpdateResult,
@@ -41,16 +43,32 @@ export async function createUnit(name: string, factor: number): Promise<Unit> {
   return { id: Number(rs.lastInsertRowid), name, factor }
 }
 
+const WAREHOUSE_SELECT = `SELECT w.id, w.name, w.is_default AS isDefault, w.branch_id AS branchId, COALESCE(b.name, 'الفرع الرئيسي') AS branchName
+   FROM warehouses w LEFT JOIN branches b ON b.id = w.branch_id`
+
+function mapWarehouse(r: any): Warehouse {
+  return { id: Number(r.id), name: r.name, isDefault: !!r.isDefault, branchId: Number(r.branchId), branchName: String(r.branchName) }
+}
+
+/** مخازن الفرع الحالي (أو كل المخازن لو من غير نطاق فرع) */
 export async function listWarehouses(): Promise<Warehouse[]> {
   const db = getDb()
-  const rs = await db.execute('SELECT id, name, is_default AS isDefault FROM warehouses ORDER BY is_default DESC, name')
-  return rs.rows.map((r: any) => ({ id: Number(r.id), name: r.name, isDefault: !!r.isDefault }))
+  const bf = branchWarehouseFilter('w.id')
+  const rs = await db.execute({ sql: `${WAREHOUSE_SELECT} WHERE ${bf.sql} ORDER BY w.is_default DESC, w.name`, args: bf.args as any })
+  return rs.rows.map(mapWarehouse)
+}
+
+/** كل المخازن في كل الفروع — لاختيار مخزن الوجهة في نقل البضاعة بين الفروع */
+export async function listAllWarehouses(): Promise<Warehouse[]> {
+  const rs = await getDb().execute(`${WAREHOUSE_SELECT} ORDER BY w.branch_id, w.is_default DESC, w.name`)
+  return rs.rows.map(mapWarehouse)
 }
 
 export async function createWarehouse(name: string): Promise<Warehouse> {
   const db = getDb()
-  const rs = await db.execute({ sql: 'INSERT INTO warehouses (name, is_default) VALUES (?, 0)', args: [name] })
-  return { id: Number(rs.lastInsertRowid), name, isDefault: false }
+  const branchId = requireBranchId()
+  const rs = await db.execute({ sql: 'INSERT INTO warehouses (name, is_default, branch_id) VALUES (?, 0, ?)', args: [name, branchId] })
+  return { id: Number(rs.lastInsertRowid), name, isDefault: false, branchId }
 }
 
 async function nextAutoBarcode(): Promise<string> {
@@ -75,6 +93,7 @@ export async function adjustProductStock(
   userId: number
 ): Promise<number> {
   if (!Number.isFinite(qty)) throw new Error('الكمية غير صحيحة')
+  await assertWarehouseInScope(warehouseId)
   const db = getDb()
   const tx = await db.transaction('write')
   try {
@@ -113,6 +132,7 @@ export async function deleteProduct(id: number): Promise<void> {
 
 export async function listProducts(search = '', warehouseId?: number): Promise<Product[]> {
   const db = getDb()
+  await assertWarehouseInScope(warehouseId)
   const resolvedWarehouseId = warehouseId ?? (await getDefaultWarehouseId(db))
   const term = `%${search.trim()}%`
   const rs = await db.execute({
@@ -324,9 +344,11 @@ export async function bulkCreateProducts(inputs: ProductInput[]): Promise<Produc
 export async function getStockByWarehouse(productIds: number[]): Promise<{ productId: number; warehouseId: number; quantity: number }[]> {
   if (!productIds.length) return []
   const db = getDb()
+  const bf = branchWarehouseFilter('warehouse_id')
   const rs = await db.execute({
-    sql: `SELECT product_id AS productId, warehouse_id AS warehouseId, quantity FROM stock WHERE product_id IN (${productIds.map(() => '?').join(',')})`,
-    args: productIds
+    sql: `SELECT product_id AS productId, warehouse_id AS warehouseId, quantity FROM stock
+          WHERE product_id IN (${productIds.map(() => '?').join(',')}) AND ${bf.sql}`,
+    args: [...productIds, ...bf.args] as any
   })
   return (rs.rows as any[]).map((r) => ({ productId: Number(r.productId), warehouseId: Number(r.warehouseId), quantity: Number(r.quantity) }))
 }

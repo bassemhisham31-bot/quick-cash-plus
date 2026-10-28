@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { assertBranchAccess, branchesEnabled, branchFilter, currentBranchId, requireBranchId } from './branchScope'
 import { computeExpectedCash, recordCashDifference } from './treasuries'
 import { getSessionEventTotals } from './events'
 import type { CashSessionSummary, ExpenseMethod, PaymentMethod, ShiftListRow, ShiftSummaryReport } from '../../shared/types'
@@ -8,32 +9,39 @@ export interface CashSessionView {
   openedAt: string
   openingBalance: number
   status: 'open' | 'closed'
+  branchId: number
 }
 
+/** اليوم المفتوح للفرع الحالي. الأدمن على "كل الفروع" مالوش يوم (اليوم تابع لفرع بعينه). */
 export async function getOpenSession(): Promise<CashSessionView | null> {
   const db = getDb()
-  const rs = await db.execute(
-    `SELECT id, opened_at AS openedAt, opening_balance AS openingBalance, status
-     FROM cash_sessions WHERE status = 'open' ORDER BY id DESC LIMIT 1`
-  )
+  if (branchesEnabled() && currentBranchId() == null) return null
+  const bf = branchFilter('branch_id')
+  const rs = await db.execute({
+    sql: `SELECT id, opened_at AS openedAt, opening_balance AS openingBalance, status, branch_id AS branchId
+          FROM cash_sessions WHERE status = 'open' AND ${bf.sql} ORDER BY id DESC LIMIT 1`,
+    args: bf.args as any
+  })
   const row = rs.rows[0] as any
   if (!row) return null
   return {
     id: Number(row.id),
     openedAt: row.openedAt,
     openingBalance: Number(row.openingBalance),
-    status: row.status
+    status: row.status,
+    branchId: Number(row.branchId) || 1
   }
 }
 
 export async function openDay(userId: number, openingBalance: number): Promise<CashSessionView> {
   const db = getDb()
+  const branchId = requireBranchId()
   const existing = await getOpenSession()
   if (existing) return existing
 
   await db.execute({
-    sql: 'INSERT INTO cash_sessions (opened_by, opening_balance) VALUES (?, ?)',
-    args: [userId, openingBalance]
+    sql: 'INSERT INTO cash_sessions (opened_by, opening_balance, branch_id) VALUES (?, ?, ?)',
+    args: [userId, openingBalance, branchId]
   })
 
   const created = await getOpenSession()
@@ -89,7 +97,7 @@ export async function getCurrentSessionSummary(): Promise<CashSessionSummary | n
     tips,
     eventPayments,
     eventCashPayments,
-    expectedCash: await computeExpectedCash(session.openedAt, session.openingBalance)
+    expectedCash: await computeExpectedCash(session.openedAt, session.openingBalance, session.branchId)
   }
 }
 
@@ -98,7 +106,7 @@ export async function closeDay(userId: number, actualCash: number): Promise<Shif
   const session = await getOpenSession()
   if (!session) return null
 
-  const expected = await computeExpectedCash(session.openedAt, session.openingBalance)
+  const expected = await computeExpectedCash(session.openedAt, session.openingBalance, session.branchId)
 
   await db.execute({
     sql: `UPDATE cash_sessions
@@ -116,8 +124,9 @@ export async function closeDay(userId: number, actualCash: number): Promise<Shif
 /** قائمة كل الورديات (مفتوحة ومقفولة) — لسجل/تقرير الورديات، بفلتر تاريخ اختياري على وقت الفتح. */
 export async function listShifts(filter: { from?: string; to?: string } = {}): Promise<ShiftListRow[]> {
   const db = getDb()
-  const conditions: string[] = []
-  const args: unknown[] = []
+  const bf = branchFilter('cs.branch_id')
+  const conditions: string[] = [bf.sql]
+  const args: unknown[] = [...bf.args]
   if (filter.from) {
     conditions.push('cs.opened_at >= ?')
     args.push(filter.from)
@@ -159,7 +168,7 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
 
   const sessionRs = await db.execute({
     sql: `SELECT cs.opened_at AS openedAt, cs.closed_at AS closedAt, cs.opening_balance AS openingBalance,
-                 cs.expected_cash AS expectedCash, cs.actual_cash AS actualCash,
+                 cs.expected_cash AS expectedCash, cs.actual_cash AS actualCash, cs.branch_id AS branchId,
                  opener.full_name AS cashierName, closer.full_name AS closedByName
           FROM cash_sessions cs
           JOIN users opener ON opener.id = cs.opened_by
@@ -169,6 +178,10 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
   })
   const session = sessionRs.rows[0] as any
   if (!session) throw new Error('الوردية غير موجودة')
+  assertBranchAccess(session.branchId, 'الوردية')
+  // المشتريات والمرتجعات مالهاش session_id، فبنحسبها بالوقت — وبنفلترها بفرع الوردية لو الفروع مفعّلة
+  const brSql = branchesEnabled() ? ' AND branch_id = ?' : ''
+  const brArgs = branchesEnabled() ? [Number(session.branchId) || 1] : []
 
   const salesRs = await db.execute({
     sql: `SELECT payment_method AS method, COUNT(*) AS invoiceCount, COALESCE(SUM(total), 0) AS total
@@ -217,8 +230,8 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
   const rangeEnd = session.closedAt ?? "datetime('now')"
   const purchasesRs = await db.execute({
     sql: `SELECT COUNT(*) AS cnt, COALESCE(SUM(total), 0) AS total
-          FROM purchase_invoices WHERE created_at >= ? AND created_at <= ${session.closedAt ? '?' : rangeEnd}`,
-    args: session.closedAt ? [session.openedAt, session.closedAt] : [session.openedAt]
+          FROM purchase_invoices WHERE created_at >= ? AND created_at <= ${session.closedAt ? '?' : rangeEnd}${brSql}`,
+    args: [...(session.closedAt ? [session.openedAt, session.closedAt] : [session.openedAt]), ...brArgs]
   })
   const totalPurchases = Number((purchasesRs.rows[0] as any).total)
   const purchaseInvoiceCount = Number((purchasesRs.rows[0] as any).cnt)
@@ -226,8 +239,8 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
   // المرتجعات كمان بنفس المنطق: مرتجعات حصلت فعليًا خلال وقت الوردية، بغض النظر عن وردية الفاتورة الأصلية
   const returnsRs = await db.execute({
     sql: `SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS total
-          FROM sales_returns WHERE created_at >= ? AND created_at <= ${session.closedAt ? '?' : rangeEnd}`,
-    args: session.closedAt ? [session.openedAt, session.closedAt] : [session.openedAt]
+          FROM sales_returns WHERE created_at >= ? AND created_at <= ${session.closedAt ? '?' : rangeEnd}${brSql}`,
+    args: [...(session.closedAt ? [session.openedAt, session.closedAt] : [session.openedAt]), ...brArgs]
   })
   const totalReturns = Number((returnsRs.rows[0] as any).total)
   const returnCount = Number((returnsRs.rows[0] as any).cnt)

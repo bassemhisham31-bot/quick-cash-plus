@@ -25,6 +25,9 @@
 
 - `db/seed.ts`: سطر الـhash بيقرا `QCP_ADMIN_PASSWORD` من البيئة (باسورد admin الأولي لكل عميل)
 
+## 2026-10-28 — تعديلات ويب فقط (مش في الأوفلاين): نسخة retail + الفروع
+`services/edition.ts` (QCP_EDITION)، `services/branchScope.ts` + `branches.ts` + migration 070 (QCP_BRANCHES) وتعديلات في معظم الـservices والتقارير ودفتر القيود، `scripts/branches-test.ts`. الواجهة: `appStore` (الفرع المختار) + `webApi.ts` (هيدر `x-qcp-branch` وقنوات `branches:*` و`catalog:listAllWarehouses` — **مضافة يدويًا، `gen-webapi.cjs` هيمسحها فلازم تتنقل لـ`prelude.txt`/`web-tail.txt` قبل أي توليد**)، ومبدّل الفرع في الـTopbar وقسم الفروع في الإعدادات. أي مزامنة من الأوفلاين لازم تحافظ على: `branchFilter/currentBranchId` في الاستعلامات و`branch_id` في الـINSERTs و`getDefaultWarehouseId` (بيعتمد على الفرع).
+
 ## 2026-10-24 — مزامنة جزئية (7 تعديلات من الأوفلاين)
 نُسخت يدويًا: `shared/types.ts` + `mutatingChannels.ts` (backend + frontend)، services (`expenses/employees/restaurant/reports`)، و4 شاشات (`ExpenseLogTab`, `EmployeesTab`, `OrderScreen`, `ReportsPage`)، وأُعيد توليد `handlers.ts` و`webApi.ts`. الجديد: تقريرا `item_sales`/`sales_by_captain`، تعديل/حذف موظف، حذف مصروف بباسورد الأدمن، دمج/نقل لترابيزة مشغولة. اتجرّب على DB مؤقتة (دمج/نقل/موظفين/تقارير) + `npm test`. **لم يُنشر على السيرفر بعد.**
 

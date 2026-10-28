@@ -1,5 +1,6 @@
 import { getDb } from '../db'
 import { getDefaultWarehouseId } from '../db/seed'
+import { branchFilter } from './branchScope'
 import { getOpenSession } from './cashSession'
 import type {
   CategorySalesItem,
@@ -16,15 +17,17 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   const db = getDb()
   const warehouseId = await getDefaultWarehouseId(db)
   const session = await getOpenSession()
+  const bf = branchFilter('branch_id')
 
-  const salesRs = await db.execute(
-    `SELECT COALESCE(SUM(total), 0) AS totalSales, COUNT(*) AS cnt,
+  const salesRs = await db.execute({
+    sql: `SELECT COALESCE(SUM(total), 0) AS totalSales, COUNT(*) AS cnt,
             COALESCE(SUM(total - (SELECT COALESCE(SUM(si.qty * p.cost_price), 0)
                                    FROM sales_items si JOIN products p ON p.id = si.product_id
                                    WHERE si.invoice_id = sales_invoices.id)), 0) AS profit
      FROM sales_invoices
-     WHERE date(created_at) = date('now', 'localtime') AND deleted_at IS NULL`
-  )
+     WHERE date(created_at) = date('now', 'localtime') AND deleted_at IS NULL AND ${bf.sql}`,
+    args: bf.args as any
+  })
   const salesRow = salesRs.rows[0] as any
 
   const lowStockRs = await db.execute({
@@ -55,16 +58,17 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
 
 export async function getTopSellingProducts(limit = 5): Promise<TopProductItem[]> {
   const db = getDb()
+  const bf = branchFilter('i.branch_id')
   const rs = await db.execute({
     sql: `SELECT si.product_id AS productId, si.product_name AS name,
                  SUM(si.qty) AS qty, SUM(si.total) AS revenue
           FROM sales_items si
           JOIN sales_invoices i ON i.id = si.invoice_id
-          WHERE i.deleted_at IS NULL AND date(i.created_at) = date('now', 'localtime')
+          WHERE i.deleted_at IS NULL AND date(i.created_at) = date('now', 'localtime') AND ${bf.sql}
           GROUP BY si.product_id, si.product_name
           ORDER BY revenue DESC
           LIMIT ?`,
-    args: [limit]
+    args: [...bf.args, limit] as any
   })
   return rs.rows.map((r: any) => ({
     productId: Number(r.productId),
@@ -76,29 +80,33 @@ export async function getTopSellingProducts(limit = 5): Promise<TopProductItem[]
 
 export async function getPaymentMethodsBreakdown(): Promise<PaymentMethodBreakdownItem[]> {
   const db = getDb()
-  const rs = await db.execute(
-    `SELECT payment_method AS method, COALESCE(SUM(total), 0) AS total
+  const bf = branchFilter('branch_id')
+  const rs = await db.execute({
+    sql: `SELECT payment_method AS method, COALESCE(SUM(total), 0) AS total
      FROM sales_invoices
-     WHERE deleted_at IS NULL AND date(created_at) = date('now', 'localtime')
+     WHERE deleted_at IS NULL AND date(created_at) = date('now', 'localtime') AND ${bf.sql}
      GROUP BY payment_method
-     ORDER BY total DESC`
-  )
+     ORDER BY total DESC`,
+    args: bf.args as any
+  })
   return rs.rows.map((r: any) => ({ method: r.method as PaymentMethod, total: Number(r.total) }))
 }
 
 export async function getSalesByCategory(): Promise<CategorySalesItem[]> {
   const db = getDb()
-  const rs = await db.execute(
-    `SELECT c.id AS categoryId, COALESCE(c.name, 'بدون تصنيف') AS categoryName,
+  const bf = branchFilter('i.branch_id')
+  const rs = await db.execute({
+    sql: `SELECT c.id AS categoryId, COALESCE(c.name, 'بدون تصنيف') AS categoryName,
             COALESCE(SUM(si.total), 0) AS total
      FROM sales_items si
      JOIN sales_invoices i ON i.id = si.invoice_id
      LEFT JOIN products p ON p.id = si.product_id
      LEFT JOIN categories c ON c.id = p.category_id
-     WHERE i.deleted_at IS NULL AND date(i.created_at) = date('now', 'localtime')
+     WHERE i.deleted_at IS NULL AND date(i.created_at) = date('now', 'localtime') AND ${bf.sql}
      GROUP BY c.id
-     ORDER BY total DESC`
-  )
+     ORDER BY total DESC`,
+    args: bf.args as any
+  })
   return rs.rows.map((r: any) => ({
     categoryId: r.categoryId != null ? Number(r.categoryId) : null,
     categoryName: r.categoryName,

@@ -13,6 +13,9 @@ interface Props {
 export function TransferModal({ warehouses, defaultWarehouseId, onClose, onSaved }: Props): JSX.Element {
   const { t } = useTranslation()
   const user = useAppStore((s) => s.user)
+  const branchesEnabled = useAppStore((s) => s.branchesEnabled)
+  // مع الفروع: المصدر من مخازن الفرع الحالي، والوجهة أي مخزن في أي فرع (نقل بين الفروع)
+  const [allWarehouses, setAllWarehouses] = useState<Warehouse[]>(warehouses)
 
   const otherWarehouse = warehouses.find((w) => w.id !== defaultWarehouseId)
   const [fromWarehouseId, setFromWarehouseId] = useState(defaultWarehouseId)
@@ -23,6 +26,18 @@ export function TransferModal({ warehouses, defaultWarehouseId, onClose, onSaved
   const [lines, setLines] = useState<(TransferLineInput & { name: string })[]>([])
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!branchesEnabled) return
+    window.api.catalog
+      .listAllWarehouses()
+      .then((list) => {
+        setAllWarehouses(list)
+        setToWarehouseId((cur) => (cur === fromWarehouseId ? (list.find((w) => w.id !== fromWarehouseId)?.id ?? cur) : cur))
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchesEnabled])
 
   useEffect(() => {
     if (!search.trim()) {
@@ -75,7 +90,7 @@ export function TransferModal({ warehouses, defaultWarehouseId, onClose, onSaved
   return (
     <div className="qcp-modal-backdrop" onClick={onClose}>
       <div className="qcp-modal" style={{ width: 'min(620px, 96vw)' }} onClick={(e) => e.stopPropagation()}>
-        <h2 style={{ marginTop: 0 }}>نقل بين المخازن</h2>
+        <h2 style={{ marginTop: 0 }}>{branchesEnabled ? 'نقل بين المخازن والفروع' : 'نقل بين المخازن'}</h2>
 
         <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
           <select className="qcp-select" style={{ flex: 1 }} value={fromWarehouseId} onChange={(e) => setFromWarehouseId(Number(e.target.value))}>
@@ -87,9 +102,10 @@ export function TransferModal({ warehouses, defaultWarehouseId, onClose, onSaved
           </select>
           <span>←</span>
           <select className="qcp-select" style={{ flex: 1 }} value={toWarehouseId} onChange={(e) => setToWarehouseId(Number(e.target.value))}>
-            {warehouses.map((w) => (
+            {(branchesEnabled ? allWarehouses : warehouses).map((w) => (
               <option key={w.id} value={w.id}>
                 {w.name}
+                {branchesEnabled && w.branchName ? ` — ${w.branchName}` : ''}
               </option>
             ))}
           </select>

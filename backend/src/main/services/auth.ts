@@ -3,6 +3,8 @@ import { getDb } from '../db'
 import { PERMISSIONS } from '../../shared/types'
 import type { LoginResult, SessionUser } from '../../shared/types'
 import { logUserActivity } from './users'
+import { branchesEnabled, DEFAULT_BRANCH_ID } from './branchScope'
+import { getBranch } from './branches'
 
 export async function login(username: string, password: string): Promise<LoginResult> {
   const db = getDb()
@@ -28,12 +30,21 @@ export async function login(username: string, password: string): Promise<LoginRe
     permissions = permRs.rows.map((p: any) => p.permission_code as string)
   }
 
+  const branchId = Number(row.branch_id) || DEFAULT_BRANCH_ID
+  const branch = await getBranch(branchId)
+  // مستخدم عادي تابع لفرع متوقف مايقدرش يدخل (الأدمن بيدخل ويبدّل لفرع تاني)
+  if (branchesEnabled() && row.role !== 'admin' && branch && !branch.active) {
+    return { ok: false, error: 'الفرع الخاص بيك متوقف — تواصل مع الإدارة' }
+  }
+
   const user: SessionUser = {
     id: Number(row.id),
     username: row.username,
     fullName: row.full_name,
     role: row.role,
-    permissions
+    permissions,
+    branchId,
+    branchName: branch?.name ?? 'الفرع الرئيسي'
   }
 
   await logUserActivity(user.id, user.username, 'login')

@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { assertWarehouseInScope } from './branches'
 import type { TransferInput, TransferResult } from '../../shared/types'
 
 export async function transferStock(input: TransferInput, userId: number): Promise<TransferResult> {
@@ -10,6 +11,11 @@ export async function transferStock(input: TransferInput, userId: number): Promi
   }
 
   const db = getDb()
+  try {
+    await assertWarehouseInScope(input.fromWarehouseId)
+  } catch (err: any) {
+    return { ok: false, error: err.message }
+  }
   const tx = await db.transaction('write')
   try {
     const productNames = new Map<number, string>()

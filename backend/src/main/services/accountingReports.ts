@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { branchFilter } from './branchScope'
 import { listTreasuries, getTreasuryStatement } from './treasuries'
 import { accountLedgerReport, balanceSheetReport, incomeStatementReport, journalReport, trialBalanceReport } from './ledger'
 import type { ReportResult } from '../../shared/types'
@@ -51,8 +52,16 @@ export interface AccountingReportFilter {
 
 const n = (v: unknown): number => Math.round((Number(v) || 0) * 100) / 100
 
-function dateCond(col: string, f: AccountingReportFilter, args: unknown[]): string {
+/** شرط التاريخ + (لو اتمرّر branchCol والفروع مفعّلة وفيه فرع محدد) شرط الفرع — بيدفع الـargs بنفس ترتيب الـplaceholders */
+function dateCond(col: string, f: AccountingReportFilter, args: unknown[], branchCol?: string): string {
   const parts: string[] = []
+  if (branchCol) {
+    const bf = branchFilter(branchCol)
+    if (bf.args.length) {
+      parts.push(bf.sql)
+      args.push(...bf.args)
+    }
+  }
   if (f.from) {
     parts.push(`date(${col}) >= ?`)
     args.push(f.from)
@@ -101,7 +110,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
                      SUM(CASE WHEN i.payment_method IN ('card') THEN i.total ELSE 0 END) AS card,
                      SUM(CASE WHEN i.payment_method IN ('wallet','vodafone_cash','instapay') THEN i.total ELSE 0 END) AS wallet,
                      SUM(CASE WHEN i.payment_method = 'credit' THEN i.total ELSE 0 END) AS credit
-              FROM sales_invoices i WHERE i.deleted_at IS NULL AND ${dateCond('i.created_at', f, args)}
+              FROM sales_invoices i WHERE i.deleted_at IS NULL AND ${dateCond('i.created_at', f, args, 'i.branch_id')}
               GROUP BY date(i.created_at) ORDER BY day`,
         args: args as any
       })
@@ -146,7 +155,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
       const rs = await db.execute({
         sql: `SELECT r.id, r.created_at, r.type, r.amount, i.number, c.name AS customerName, i.payment_method, u.full_name AS userName
               FROM sales_returns r JOIN sales_invoices i ON i.id = r.invoice_id JOIN customers c ON c.id = i.customer_id
-              LEFT JOIN users u ON u.id = r.user_id WHERE ${dateCond('r.created_at', f, args)} ORDER BY r.id`,
+              LEFT JOIN users u ON u.id = r.user_id WHERE ${dateCond('r.created_at', f, args, 'r.branch_id')} ORDER BY r.id`,
         args: args as any
       })
       const rows = (rs.rows as any[]).map((r) => ({
@@ -178,7 +187,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
       const rs = await db.execute({
         sql: `SELECT r.id, r.created_at, r.type, r.amount, pi.number, v.name AS vendorName, u.full_name AS userName
               FROM purchase_returns r JOIN purchase_invoices pi ON pi.id = r.purchase_invoice_id LEFT JOIN vendors v ON v.id = pi.vendor_id
-              LEFT JOIN users u ON u.id = r.user_id WHERE ${dateCond('r.created_at', f, args)} ORDER BY r.id`,
+              LEFT JOIN users u ON u.id = r.user_id WHERE ${dateCond('r.created_at', f, args, 'r.branch_id')} ORDER BY r.id`,
         args: args as any
       })
       const rows = (rs.rows as any[]).map((r) => ({
@@ -210,7 +219,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
                      i.subtotal, i.discount_total AS invoiceDiscount,
                      COALESCE((SELECT SUM(si.discount) FROM sales_items si WHERE si.invoice_id = i.id), 0) AS itemsDiscount, i.total
               FROM sales_invoices i JOIN customers c ON c.id = i.customer_id JOIN users u ON u.id = i.cashier_id
-              WHERE i.deleted_at IS NULL AND ${dateCond('i.created_at', f, args)}
+              WHERE i.deleted_at IS NULL AND ${dateCond('i.created_at', f, args, 'i.branch_id')}
                 AND (i.discount_total > 0 OR EXISTS (SELECT 1 FROM sales_items si WHERE si.invoice_id = i.id AND si.discount > 0))
               ORDER BY i.id`,
         args: args as any
@@ -247,7 +256,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
         sql: `SELECT COALESCE(ec.name, 'بدون تصنيف') AS category, COUNT(*) AS cnt, SUM(e.amount) AS total,
                      SUM(CASE WHEN e.method = 'cash' THEN e.amount ELSE 0 END) AS cash
               FROM expenses e LEFT JOIN expense_categories ec ON ec.id = e.category_id
-              WHERE e.deleted_at IS NULL AND ${dateCond('e.created_at', f, args)}
+              WHERE e.deleted_at IS NULL AND ${dateCond('e.created_at', f, args, 'e.branch_id')}
               GROUP BY ec.id ORDER BY total DESC`,
         args: args as any
       })
@@ -264,7 +273,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
       const rs = await db.execute({
         sql: `SELECT v.id, v.type, v.created_at, v.amount, v.party_name, v.note, t.name AS treasuryName, u.full_name AS userName
               FROM vouchers v JOIN treasuries t ON t.id = v.treasury_id LEFT JOIN users u ON u.id = v.user_id
-              WHERE v.deleted_at IS NULL AND ${dateCond('v.created_at', f, args)} ORDER BY v.id`,
+              WHERE v.deleted_at IS NULL AND ${dateCond('v.created_at', f, args, 'v.branch_id')} ORDER BY v.id`,
         args: args as any
       })
       const rows = (rs.rows as any[]).map((r) => ({

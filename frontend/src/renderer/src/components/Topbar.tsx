@@ -43,6 +43,44 @@ function HeldInvoicesButton(): JSX.Element | null {
   )
 }
 
+/** مبدّل الفرع: الأدمن بيختار فرع أو "كل الفروع"، وغير الأدمن بيشوف اسم فرعه بس */
+function BranchSwitcher(): JSX.Element | null {
+  const user = useAppStore((s) => s.user)
+  const enabled = useAppStore((s) => s.branchesEnabled)
+  const branches = useAppStore((s) => s.branches)
+  const activeBranch = useAppStore((s) => s.activeBranch)
+  const setActiveBranch = useAppStore((s) => s.setActiveBranch)
+  if (!enabled || !user) return null
+
+  if (user.role !== 'admin') {
+    return (
+      <span className="qcp-pill accent" title="الفرع">
+        🏬 {user.branchName}
+      </span>
+    )
+  }
+  const current = activeBranch ?? String(user.branchId)
+  return (
+    <select
+      className="qcp-select"
+      style={{ minWidth: 150, fontWeight: 700 }}
+      value={current}
+      title="الفرع الحالي — كل الشاشات والتقارير بتتعرض بنطاقه"
+      onChange={(e) => setActiveBranch(e.target.value)}
+    >
+      <option value="all">🏬 كل الفروع</option>
+      {branches
+        .filter((b) => b.active || String(b.id) === current)
+        .map((b) => (
+          <option key={b.id} value={String(b.id)}>
+            {b.name}
+            {b.active ? '' : ' (متوقف)'}
+          </option>
+        ))}
+    </select>
+  )
+}
+
 export function Topbar(): JSX.Element {
   const { t, i18n } = useTranslation()
   const user = useAppStore((s) => s.user)
@@ -57,7 +95,8 @@ export function Topbar(): JSX.Element {
   const [kitchenNotifyMode, setKitchenNotifyMode] = useState<KitchenNotifyMode | null>(null)
   const [deviceRole, setDeviceRole] = useState<DeviceRole | null>(null)
   // زرار المطبخ لأي حد شغال في المطعم (لوحة الطلبات أو الترابيزات أو التوصيل)
-  const restaurantAllowed = (['restaurant', 'restaurantTables', 'delivery'] as const).some((v) => isViewAllowed(user, v, disabledFeatures))
+  const licenseLoaded = useAppStore((s) => s.licenseLoaded)
+  const restaurantAllowed = licenseLoaded && (['restaurant', 'restaurantTables', 'delivery'] as const).some((v) => isViewAllowed(user, v, disabledFeatures))
 
   useEffect(() => {
     if (!restaurantAllowed) return
@@ -104,6 +143,7 @@ export function Topbar(): JSX.Element {
         </div>
       )}
       <div className="qcp-topbar-controls">
+        <BranchSwitcher />
         <NetworkStatusIcon />
         <HeldInvoicesButton />
         <NotificationsBell dataVersion={dataVersion} onNavigate={setView} />

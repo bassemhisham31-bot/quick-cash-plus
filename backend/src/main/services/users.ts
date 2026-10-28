@@ -1,6 +1,8 @@
 import bcrypt from 'bcryptjs'
 import { getDb } from '../db'
 import { PERMISSIONS } from '../../shared/types'
+import { branchScope, branchesEnabled, DEFAULT_BRANCH_ID } from './branchScope'
+import { resolveUserBranchId } from './branches'
 import type {
   DeleteUserResult,
   UserActivityEntry,
@@ -27,12 +29,20 @@ function normalizeEmail(raw: string | null | undefined): string | null {
 
 export async function listUsers(): Promise<UserListItem[]> {
   const db = getDb()
-  const rs = await db.execute(`
-    SELECT u.id, u.username, u.full_name AS fullName, u.role, u.active, u.email,
+  // مستخدم عادي عنده صلاحية إدارة المستخدمين (ميزة الفروع مفعّلة) بيشوف مستخدمي فرعه بس؛ الأدمن بيشوف الكل
+  const store = branchScope.getStore()
+  const ownBranchOnly = branchesEnabled() && store && !store.isAdmin
+  const rs = await db.execute({
+    sql: `
+    SELECT u.id, u.username, u.full_name AS fullName, u.role, u.active, u.email, u.branch_id AS branchId,
+           COALESCE(b.name, 'الفرع الرئيسي') AS branchName,
            (SELECT COUNT(*) FROM user_permissions WHERE user_id = u.id) AS permissionCount
-    FROM users u
+    FROM users u LEFT JOIN branches b ON b.id = u.branch_id
+    ${ownBranchOnly ? 'WHERE u.branch_id = ?' : ''}
     ORDER BY u.id
-  `)
+  `,
+    args: ownBranchOnly ? [store!.homeBranchId] : []
+  })
   return rs.rows.map((r: any) => ({
     id: Number(r.id),
     username: r.username,
@@ -40,6 +50,8 @@ export async function listUsers(): Promise<UserListItem[]> {
     role: r.role,
     active: !!r.active,
     email: r.email ? String(r.email) : null,
+    branchId: Number(r.branchId) || DEFAULT_BRANCH_ID,
+    branchName: String(r.branchName),
     permissionCount: r.role === 'admin' ? PERMISSIONS.length : Number(r.permissionCount)
   }))
 }
@@ -69,13 +81,16 @@ export async function createUser(input: UserInput): Promise<UserListItem> {
   if (existing.rows.length > 0) throw new Error('اسم المستخدم مستخدم بالفعل')
 
   const email = normalizeEmail(input.email)
+  // مستخدم عادي مش أدمن مايقدرش يعمل مستخدم في فرع تاني — بيتثبّت على فرعه
+  const requester = branchScope.getStore()
+  const branchId = await resolveUserBranchId(requester && !requester.isAdmin ? requester.homeBranchId : input.branchId)
   const hash = bcrypt.hashSync(input.password, 10)
   const tx = await db.transaction('write')
   let userId: number
   try {
     const info = await tx.execute({
-      sql: `INSERT INTO users (username, password_hash, full_name, role, active, email) VALUES (?, ?, ?, ?, 1, ?)`,
-      args: [username, hash, input.fullName.trim() || username, input.role, email]
+      sql: `INSERT INTO users (username, password_hash, full_name, role, active, email, branch_id) VALUES (?, ?, ?, ?, 1, ?, ?)`,
+      args: [username, hash, input.fullName.trim() || username, input.role, email, branchId]
     })
     userId = Number(info.lastInsertRowid)
 
@@ -114,19 +129,26 @@ export async function updateUser(id: number, input: UserUpdateInput): Promise<Us
 
   // undefined = الواجهة ماسابتش الخانة (ما نمسحش الإيميل الحالي)
   const email = input.email === undefined ? (row.email ? String(row.email) : null) : normalizeEmail(input.email)
+  // الفرع: مبيتغيّرش إلا من الأدمن (وبفرع موجود ونشط)؛ غير كده بيفضل زي ما هو
+  const requester = branchScope.getStore()
+  const currentBranch = Number(row.branch_id) || DEFAULT_BRANCH_ID
+  const branchId =
+    input.branchId !== undefined && input.branchId !== currentBranch && (!branchesEnabled() || requester?.isAdmin)
+      ? await resolveUserBranchId(input.branchId)
+      : currentBranch
 
   const tx = await db.transaction('write')
   try {
     if (input.password && input.password.trim()) {
       const hash = bcrypt.hashSync(input.password.trim(), 10)
       await tx.execute({
-        sql: 'UPDATE users SET full_name = ?, role = ?, active = ?, password_hash = ?, email = ? WHERE id = ?',
-        args: [input.fullName.trim() || row.username, input.role, input.active ? 1 : 0, hash, email, id]
+        sql: 'UPDATE users SET full_name = ?, role = ?, active = ?, password_hash = ?, email = ?, branch_id = ? WHERE id = ?',
+        args: [input.fullName.trim() || row.username, input.role, input.active ? 1 : 0, hash, email, branchId, id]
       })
     } else {
       await tx.execute({
-        sql: 'UPDATE users SET full_name = ?, role = ?, active = ?, email = ? WHERE id = ?',
-        args: [input.fullName.trim() || row.username, input.role, input.active ? 1 : 0, email, id]
+        sql: 'UPDATE users SET full_name = ?, role = ?, active = ?, email = ?, branch_id = ? WHERE id = ?',
+        args: [input.fullName.trim() || row.username, input.role, input.active ? 1 : 0, email, branchId, id]
       })
     }
 
