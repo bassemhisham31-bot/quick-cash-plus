@@ -29,6 +29,34 @@ bash /opt/qcp/app/deploy/add-client.sh acme acme.qcplus.app
 
 أول تشغيل بيعمل الجداول وبيانات البداية ويعرض **باسورد admin الأولي** مرة واحدة — غيّره بعد أول دخول.
 
+### نسخة العميل (`--edition`)
+كل عميل له قاعدة بيانات منفصلة بالفعل (مجلد + SQLite + منفذ خاص بيه). والنسخة بتحدد الميزات اللي ظاهرة له:
+
+| النسخة | المحتوى |
+|---|---|
+| `full` (الافتراضي) | كل الميزات |
+| `retail` | من غير أي حاجة تخص المطاعم: المطاعم/الترابيزات/الكباتن/التوصيل/حجوزات المناسبات، الوصفات، تقارير المطاعم، قسم إعدادات المطاعم، وصلاحياتها |
+
+```bash
+bash /opt/qcp/app/deploy/add-client.sh shop shop.qcplus.app --edition retail
+```
+- بتتحفظ في `.env` الخاص بالعميل كـ`QCP_EDITION=retail` وبتفضل ثابتة حتى لو اتجدد الترخيص بـ`set-license.sh` (الميزات الموقوفة بالنسخة بتتدمج مع اللي بتوقفه بالترخيص).
+- الإخفاء بيتم في الواجهة **والسيرفر كمان بيرفض قنوات المطاعم** (`restaurant:` `recipes:` `delivery:` `reservations:` `events:` وتقاريرها).
+- جداول المطاعم بتفضل موجودة فاضية في قاعدة العميل (الـmigrations واحدة لكل العملاء عشان `update.sh` يحدّث الكل بنفس الكود).
+- لتغيير نسخة عميل موجود: عدّل `QCP_EDITION` في `/opt/qcp/clients/<name>/.env` ثم `sudo -u qcp pm2 restart qcp-<name> --update-env`. العملاء اللي ملهمش القيمة دي (زي `quickcash`) بيشتغلوا `full`.
+- القائمة نفسها في `backend/src/main/services/edition.ts`.
+
+### عميل بنسخة كود منفصلة (من غير ما نلمس باقي العملاء)
+`update.sh` بيعمل `git pull` وبيعيد تشغيل عملاء المجلد ده كلهم + بيطبّق الـmigrations الجديدة على قواعدهم. لو عايز عميل جديد يشتغل بكود أحدث والعملاء الشغالين يفضلوا زي ما هم بالظبط:
+```bash
+sudo -u qcp git clone --branch <branch> https://github.com/bassemhisham31-bot/quick-cash-plus.git /opt/qcp/app-shop
+cd /opt/qcp/app-shop && (cd backend && sudo -u qcp npm ci --omit=dev) && (cd frontend && sudo -u qcp npm ci && sudo -u qcp npm run build)
+QCP_APP_DIR=/opt/qcp/app-shop bash /opt/qcp/app-shop/deploy/add-client.sh shop shop.qcplus.app --edition retail
+# لاحقًا لتحديث العميل ده بس:
+QCP_APP_DIR=/opt/qcp/app-shop bash /opt/qcp/app-shop/deploy/update.sh
+```
+كل مجلد بيعمل restart لعملائه هو بس (بيتعرفوا من `pm_cwd` في pm2). Caddy بيقدّم واجهة العميل من `frontend/dist` بتاع مجلده.
+
 ## 3) النسخ الاحتياطي (SQLite المحلية)
 - **داخل البرنامج:** كل عميل بيعمل نسخة تلقائيًا كل 24 ساعة (قابلة للتعديل من الإعدادات ← النسخ الاحتياطي)، وأول ما يقوم لو آخر نسخة أقدم من كده. بتتحفظ في `/opt/qcp/clients/<name>/backups` (آخر 10). النسخة بتتعمل بـ`VACUUM INTO` من نفس اتصال البرنامج. **ماتفتحش القاعدة الحية من أي عملية تانية أبدًا** (ده بيسبب تلف في البيانات).
 - **خارج السيرفر:** `offsite-backup.sh` بينسخ ملفات النسخ (مش القاعدة الحية) لـCloudflare R2 عبر rclone:

@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
 import { formatCurrency as currency } from '../../lib/currency'
+import { requestSupervisorApproval } from '../../components/ConfirmDialogHost'
 import type { ExpenseCategory, ExpenseInput, ExpensesByMethodSummary, ExpenseView } from '../../../../shared/types'
 
 const emptyForm = { categoryId: '' as number | '', amount: '', method: 'cash' as ExpenseInput['method'], note: '' }
@@ -78,6 +79,17 @@ export function ExpenseLogTab(): JSX.Element {
     refresh()
   }
 
+  async function handleDelete(e: ExpenseView): Promise<void> {
+    const ok = await requestSupervisorApproval(
+      `حذف مصروف "${e.categoryName}" بمبلغ ${currency(e.amount)}؟ هيتشال من الخزينة والتقارير.`,
+      `حذف مصروف #${e.id} (${e.categoryName} - ${e.amount})`,
+      user ? user.fullName || user.username : null
+    )
+    if (!ok) return
+    await window.api.expenses.delete(e.id)
+    refresh()
+  }
+
   const total = expenses.reduce((sum, e) => sum + e.amount, 0)
 
   return (
@@ -117,6 +129,7 @@ export function ExpenseLogTab(): JSX.Element {
               <th>{t('expenses.attachment')}</th>
               <th>{t('expenses.cashier')}</th>
               <th>{t('expenses.date')}</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -142,11 +155,16 @@ export function ExpenseLogTab(): JSX.Element {
                 </td>
                 <td>{e.cashierName}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>{e.createdAt}</td>
+                <td>
+                  <button type="button" className="qcp-btn qcp-btn-secondary" style={{ padding: '2px 8px', fontSize: 12 }} onClick={() => handleDelete(e)}>
+                    🗑 حذف
+                  </button>
+                </td>
               </tr>
             ))}
             {expenses.length === 0 && (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                <td colSpan={8} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                   —
                 </td>
               </tr>

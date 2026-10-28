@@ -172,6 +172,7 @@ const emptyUserForm = {
   username: '',
   password: '',
   fullName: '',
+  email: '',
   role: 'cashier' as 'admin' | 'cashier',
   active: true,
   permissions: [] as string[]
@@ -212,6 +213,7 @@ function UsersSection(): JSX.Element {
       username: u.username,
       password: '',
       fullName: u.fullName,
+      email: u.email ?? '',
       role: u.role,
       active: u.active,
       permissions
@@ -238,6 +240,7 @@ function UsersSection(): JSX.Element {
           password: form.password,
           fullName: form.fullName.trim(),
           role: form.role,
+          email: form.email.trim() || null,
           permissions: form.permissions
         })
         setMessage(t('settings.userCreated') ?? '')
@@ -247,6 +250,7 @@ function UsersSection(): JSX.Element {
           role: form.role,
           active: form.active,
           password: form.password.trim() || null,
+          email: form.email.trim() || null,
           permissions: form.permissions
         }
         await window.api.users.update(form.id, input)
@@ -317,6 +321,7 @@ function UsersSection(): JSX.Element {
                   <div style={{ fontSize: 12, color: 'var(--qcp-ink-faint)' }}>
                     {u.role === 'admin' ? t('settings.roleAdmin') : t('settings.roleCashier')}
                     {!u.active && ` · ${t('settings.userInactive')}`}
+                    {!u.email && ' · بدون إيميل'}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
@@ -378,6 +383,18 @@ function UsersSection(): JSX.Element {
                   <option value="admin">{t('settings.roleAdmin')}</option>
                 </select>
               </div>
+            </div>
+
+            <div className="qcp-field">
+              <label>📧 الإيميل (لاستعادة كلمة المرور — اختياري)</label>
+              <input
+                className="qcp-input"
+                type="email"
+                dir="ltr"
+                placeholder="name@example.com"
+                value={form.email}
+                onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+              />
             </div>
 
             {form.id !== null && (

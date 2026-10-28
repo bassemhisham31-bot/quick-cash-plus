@@ -1,5 +1,6 @@
 import { getDb } from '../db'
 import { getLicenseStatus, invalidateLicenseCache } from './license'
+import { editionDisabledFeatures } from './edition'
 import type { LicensePlan, LicenseStatus } from '../../shared/types'
 
 /**
@@ -13,8 +14,16 @@ const DAY = 24 * 3600 * 1000
 
 export type WebLicenseStatus = LicenseStatus & { graceDaysLeft?: number }
 
-/** حالة الترخيص مع فترة السماح: أثناء السماح بنرجّع active/trial مع graceDaysLeft بدل expired عشان الواجهة ماتتقفلش */
+/** حالة الترخيص بعد دمج ميزات نسخة العميل الموقوفة (QCP_EDITION) مع الميزات الموقوفة بالترخيص */
 export async function getWebLicenseStatus(): Promise<WebLicenseStatus> {
+  const s = await computeWebLicenseStatus()
+  const fromEdition = editionDisabledFeatures()
+  if (fromEdition.length === 0) return s
+  return { ...s, disabledFeatures: [...new Set([...s.disabledFeatures, ...fromEdition])] }
+}
+
+/** حالة الترخيص مع فترة السماح: أثناء السماح بنرجّع active/trial مع graceDaysLeft بدل expired عشان الواجهة ماتتقفلش */
+async function computeWebLicenseStatus(): Promise<WebLicenseStatus> {
   const s = await getLicenseStatus()
   if (s.status !== 'expired' || s.clockTampered) return s
 

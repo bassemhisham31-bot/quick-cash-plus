@@ -24,3 +24,9 @@
 - `web-tail.txt`: network/system/onDataChanged الخاصين بالويب في `webApi.ts`
 
 - `db/seed.ts`: سطر الـhash بيقرا `QCP_ADMIN_PASSWORD` من البيئة (باسورد admin الأولي لكل عميل)
+
+## 2026-10-24 — مزامنة جزئية (7 تعديلات من الأوفلاين)
+نُسخت يدويًا: `shared/types.ts` + `mutatingChannels.ts` (backend + frontend)، services (`expenses/employees/restaurant/reports`)، و4 شاشات (`ExpenseLogTab`, `EmployeesTab`, `OrderScreen`, `ReportsPage`)، وأُعيد توليد `handlers.ts` و`webApi.ts`. الجديد: تقريرا `item_sales`/`sales_by_captain`، تعديل/حذف موظف، حذف مصروف بباسورد الأدمن، دمج/نقل لترابيزة مشغولة. اتجرّب على DB مؤقتة (دمج/نقل/موظفين/تقارير) + `npm test`. **لم يُنشر على السيرفر بعد.**
+
+## 2026-10-25 — تقسيم الشيك بالوحدة
+نُسخ: `services/restaurant.ts` (`moveOrderItemToGroup`)، `OrderScreen.tsx`، `restaurant.css`، `mutatingChannels.ts` (backend + frontend)، وأُعيد توليد `handlers.ts`. **`webApi.ts` اتعدّل يدويًا (سطر `moveItem` بس) لأن `gen-webapi.cjs` بيمسح `forgotPassword`/`resetPassword` المضافين يدويًا في جلسة 2026-10-24b — لا تشغّله قبل ما تتضاف لـ`prelude.txt`/`web-tail.txt`.** اتجرّب على DB مؤقتة + `npm test` 62/0. **لم يُنشر على السيرفر.**

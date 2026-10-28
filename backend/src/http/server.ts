@@ -10,14 +10,32 @@ import { logUserActivity } from '../main/services/users'
 import { statfsSync } from 'fs'
 import { getDb, getDbPath } from '../main/db'
 import { getWebLicenseStatus, setLicenseFromOwner, webLicenseBlockReason } from '../main/services/licenseWeb'
+import { editionBlockReason, getEdition } from '../main/services/edition'
 import { timingSafeEqual } from 'crypto'
 import { printCapture, type DevicePrintProfile, type PrintJob } from '../main/services/printContext'
 import { triggerDebouncedSync } from '../main/services/priceCheckerSync'
 import { signToken, requireAuth, verifyToken, type AuthedRequest } from './auth'
+import { FORGOT_PASSWORD_REPLY, requestPasswordReset, resetPasswordWithToken } from '../main/services/passwordReset'
 
 const handlers = buildHandlerMap()
 
 const wsClients = new Set<WebSocket>()
+
+/** حد محاولات بسيط في الذاكرة (بيتصفّر مع إعادة تشغيل السيرفر) — لمسارات استعادة كلمة المرور العامة. */
+const rateBuckets = new Map<string, { count: number; resetAt: number }>()
+function rateLimited(key: string, max: number, windowMs: number): boolean {
+  const now = Date.now()
+  if (rateBuckets.size > 5000) {
+    for (const [k, b] of rateBuckets) if (b.resetAt < now) rateBuckets.delete(k)
+  }
+  const bucket = rateBuckets.get(key)
+  if (!bucket || bucket.resetAt < now) {
+    rateBuckets.set(key, { count: 1, resetAt: now + windowMs })
+    return false
+  }
+  bucket.count++
+  return bucket.count > max
+}
 
 function broadcastChanged(channel?: string): void {
   const payload = JSON.stringify({ type: 'changed', channel })
@@ -41,6 +59,8 @@ async function afterMutation(channel: string, actor: ActorMeta): Promise<void> {
 
 export function createApp(): express.Express {
   const app = express()
+  // Caddy على نفس الجهاز بيبعت IP الزائر الحقيقي في X-Forwarded-For — لازم عشان حد المحاولات يبقى لكل زائر مش للسيرفر كله
+  app.set('trust proxy', 'loopback')
   app.use(cors())
   // الواجهة بتبعت undefined كعلامة {__undef:true} (JSON مابيفرّقش بين undefined وnull وقنوات كتير بتعتمد على الفرق، مثلاً LIMIT null بيفشل)
   app.use(express.json({ limit: '25mb', reviver: (_k, v) => (v && typeof v === 'object' && (v as any).__undef === true ? undefined : v) }))
@@ -116,6 +136,30 @@ export function createApp(): express.Express {
     res.json({ ok: true, token, user: result.user })
   })
 
+  /** استعادة كلمة المرور بالإيميل — مسارات عامة (قبل بوابة المصادقة). الرد ثابت سواء المستخدم موجود أو لأ، والإرسال في الخلفية. */
+  app.post('/api/auth/forgot-password', (req, res) => {
+    if (rateLimited(`forgot:${req.ip}`, 5, 15 * 60 * 1000)) {
+      res.status(429).json({ ok: false, error: 'محاولات كتير، جرّب بعد شوية' })
+      return
+    }
+    const identifier = typeof req.body?.identifier === 'string' ? req.body.identifier : ''
+    requestPasswordReset(identifier).catch((err) => console.error('[password-reset]', err?.message ?? err))
+    res.json({ ok: true, message: FORGOT_PASSWORD_REPLY })
+  })
+
+  app.post('/api/auth/reset-password', async (req, res) => {
+    if (rateLimited(`reset:${req.ip}`, 10, 15 * 60 * 1000)) {
+      res.status(429).json({ ok: false, error: 'محاولات كتير، جرّب بعد شوية' })
+      return
+    }
+    try {
+      await resetPasswordWithToken(String(req.body?.token ?? ''), String(req.body?.password ?? ''))
+      res.json({ ok: true })
+    } catch (err: any) {
+      res.status(400).json({ ok: false, error: err?.message ?? 'حدث خطأ' })
+    }
+  })
+
   /**
    * استثناء واحد قبل بوابة المصادقة: شاشة تسجيل الدخول نفسها محتاجة بيانات المتجر (الاسم/الشعار/الهاتف)
    * للعرض قبل ما يكون فيه توكن أصلاً — نفس القناة (settings:getStore) بترجع بيانات عرض فقط، مش حساسة.
@@ -165,7 +209,7 @@ export function createApp(): express.Express {
     const callArgs = isMutating ? [...args, actor] : args
 
     try {
-      const blocked = await webLicenseBlockReason(channel)
+      const blocked = editionBlockReason(channel) ?? (await webLicenseBlockReason(channel))
       if (blocked) {
         res.status(403).json({ ok: false, error: blocked })
         return
@@ -208,7 +252,7 @@ export function startHttpServer(port: number): ReturnType<typeof createServer> {
   const httpServer = createServer(app)
   attachWebSocketServer(httpServer)
   httpServer.listen(port, () => {
-    console.log(`✅ QCP web backend شغال على المنفذ ${port}`)
+    console.log(`✅ QCP web backend شغال على المنفذ ${port} (نسخة: ${getEdition()})`)
   })
   return httpServer
 }

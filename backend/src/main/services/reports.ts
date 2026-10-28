@@ -2,6 +2,7 @@ import { getDb } from '../db'
 import { getDefaultWarehouseId } from '../db/seed'
 import { getCustomerStatement } from './customers'
 import { getVendorStatement } from './vendors'
+import { assertReportInEdition } from './edition'
 import type { OverviewMetric, OverviewSummary, ReportFilter, ReportResult, ReportType } from '../../shared/types'
 
 function dateConditions(filter: ReportFilter, column: string): { sql: string; args: unknown[] } {
@@ -19,6 +20,7 @@ function dateConditions(filter: ReportFilter, column: string): { sql: string; ar
 }
 
 export async function runReport(type: ReportType, filter: ReportFilter): Promise<ReportResult> {
+  assertReportInEdition(type)
   switch (type) {
     case 'inventory_status':
       return inventoryStatus(filter)
@@ -72,6 +74,10 @@ export async function runReport(type: ReportType, filter: ReportFilter): Promise
       return restaurantTableActivity(filter)
     case 'category_sales_daily':
       return categorySalesDaily(filter)
+    case 'item_sales':
+      return itemSales(filter)
+    case 'sales_by_captain':
+      return salesByCaptain(filter)
     default:
       throw new Error('نوع تقرير غير معروف')
   }
@@ -656,6 +662,99 @@ async function categorySalesDaily(filter: ReportFilter): Promise<ReportResult> {
     ],
     rows,
     totals: { qtySold: rows.reduce((s, r) => s + r.qtySold, 0), revenue: rows.reduce((s, r) => s + r.revenue, 0) }
+  }
+}
+
+/** مبيعات كل صنف لوحده (كمية، عدد الفواتير، متوسط السعر، إجمالي المبيعات) — فلتر التصنيف اختياري */
+async function itemSales(filter: ReportFilter): Promise<ReportResult> {
+  const db = getDb()
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
+  const catSql = filter.categoryId
+    ? `AND p.category_id IN (WITH RECURSIVE sub(id) AS (SELECT ? UNION ALL SELECT c.id FROM categories c JOIN sub ON c.parent_id = sub.id) SELECT id FROM sub)`
+    : ''
+  const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : []), ...(filter.categoryId ? [filter.categoryId] : [])]
+  const rs = await db.execute({
+    sql: `SELECT p.name AS item, COALESCE(c.name, 'بدون تصنيف') AS category,
+                 SUM(si.qty) AS qtySold, COUNT(DISTINCT i.id) AS invoiceCount, SUM(si.total) AS revenue
+          FROM sales_items si
+          JOIN sales_invoices i ON i.id = si.invoice_id
+          JOIN products p ON p.id = si.product_id
+          LEFT JOIN categories c ON c.id = p.category_id
+          WHERE i.deleted_at IS NULL ${dateSql} ${warehouseSql} ${catSql}
+          GROUP BY p.id
+          ORDER BY revenue DESC`,
+    args
+  })
+  const rows = rs.rows.map((r: any) => {
+    const qtySold = Number(r.qtySold)
+    const revenue = Number(r.revenue)
+    return {
+      item: r.item,
+      category: r.category,
+      qtySold,
+      invoiceCount: Number(r.invoiceCount),
+      avgPrice: qtySold ? revenue / qtySold : 0,
+      revenue
+    }
+  })
+  return {
+    title: 'مبيعات كل صنف',
+    columns: [
+      { key: 'item', label: 'الصنف' },
+      { key: 'category', label: 'التصنيف' },
+      { key: 'qtySold', label: 'الكمية المباعة', align: 'end' },
+      { key: 'invoiceCount', label: 'عدد الفواتير', align: 'end' },
+      { key: 'avgPrice', label: 'متوسط السعر', align: 'end', format: 'currency' },
+      { key: 'revenue', label: 'إجمالي المبيعات', align: 'end' }
+    ],
+    rows,
+    totals: { qtySold: rows.reduce((s, r) => s + r.qtySold, 0), revenue: rows.reduce((s, r) => s + r.revenue, 0) }
+  }
+}
+
+/** مبيعات كل كابتن (فواتير المطعم المرتبطة بكابتن) — الفواتير من غير كابتن بتظهر في سطر "بدون كابتن" */
+async function salesByCaptain(filter: ReportFilter): Promise<ReportResult> {
+  const db = getDb()
+  const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'i.created_at')
+  const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
+  const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
+  const rs = await db.execute({
+    sql: `SELECT COALESCE(cap.name, 'بدون كابتن') AS captain, COUNT(i.id) AS invoiceCount,
+                 COALESCE(SUM(i.service_charge_total), 0) AS serviceCharge, COALESCE(SUM(i.total), 0) AS total
+          FROM sales_invoices i
+          LEFT JOIN captains cap ON cap.id = i.captain_id
+          WHERE i.deleted_at IS NULL ${dateSql} ${warehouseSql}
+          GROUP BY i.captain_id
+          ORDER BY total DESC`,
+    args
+  })
+  const rows = rs.rows.map((r: any) => {
+    const invoiceCount = Number(r.invoiceCount)
+    const total = Number(r.total)
+    return {
+      captain: r.captain,
+      invoiceCount,
+      avgInvoice: invoiceCount ? total / invoiceCount : 0,
+      serviceCharge: Number(r.serviceCharge),
+      total
+    }
+  })
+  return {
+    title: 'مبيعات كل كابتن',
+    columns: [
+      { key: 'captain', label: 'الكابتن' },
+      { key: 'invoiceCount', label: 'عدد الفواتير', align: 'end' },
+      { key: 'avgInvoice', label: 'متوسط الفاتورة', align: 'end', format: 'currency' },
+      { key: 'serviceCharge', label: 'رسوم الخدمة', align: 'end' },
+      { key: 'total', label: 'إجمالي المبيعات', align: 'end' }
+    ],
+    rows,
+    totals: {
+      invoiceCount: rows.reduce((s, r) => s + r.invoiceCount, 0),
+      serviceCharge: rows.reduce((s, r) => s + r.serviceCharge, 0),
+      total: rows.reduce((s, r) => s + r.total, 0)
+    }
   }
 }
 

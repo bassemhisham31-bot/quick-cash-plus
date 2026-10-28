@@ -144,11 +144,24 @@ export function PosPage(): JSX.Element {
       const defaultId = list.find((w) => w.isDefault)?.id ?? list[0]?.id ?? null
       setWarehouseId(defaultId)
     })
-    window.api.settings.getRestaurant().then((s) => setDineInEnabled(s.dineInEnabled))
-    window.api.restaurant.listTables().then(setRestaurantTables)
     window.api.settings.listDeliveryDrivers().then(setDrivers)
-    window.api.delivery.listZones().then(setZones)
   }, [])
+
+  // الطاولات ومناطق التوصيل مش موجودة في النسخ اللي من غير مطاعم (السيرفر بيرفض قنواتها) — منناديهاش أصلًا هناك
+  const tablesAllowed = isViewLicensed('restaurantTables', disabledFeatures)
+  useEffect(() => {
+    if (tablesAllowed) {
+      window.api.settings.getRestaurant().then((s) => setDineInEnabled(s.dineInEnabled)).catch(() => {})
+      window.api.restaurant.listTables().then(setRestaurantTables).catch(() => {})
+    } else {
+      setDineInEnabled(false)
+      setRestaurantTables([])
+    }
+  }, [tablesAllowed])
+  useEffect(() => {
+    if (deliveryAllowed) window.api.delivery.listZones().then(setZones).catch(() => {})
+    else setZones([])
+  }, [deliveryAllowed])
 
   useEffect(() => {
     // يحدّث كميات المخزون المعروضة فورًا لو جهاز تاني باع نفس الصنف، من غير ما يمس السلة الحالية

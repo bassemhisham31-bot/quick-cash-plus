@@ -45,7 +45,7 @@
 }
 
 .rst-seg {
-  display: inline-flex;
+  display: flex;
   background: var(--qcp-bg-sunken);
   border: 1px solid var(--qcp-border);
   border-radius: 999px;

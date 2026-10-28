@@ -232,7 +232,31 @@ export async function deleteTable(id: number): Promise<{ ok: boolean; error?: st
   return { ok: true }
 }
 
-/** يدمج مجموعة ترابيزات تحت نفس الطلب المفتوح — لازم كل ترابيزة تكون متاحة أو من غير طلب مفتوح مختلف. */
+/** يضم طلب تاني (fromId) جوه الطلب keepId: الأصناف + الترابيزات + إشعارات المطبخ، ويلغي الطلب المضموم. */
+async function absorbOrder(tx: any, keepId: number, fromId: number): Promise<void> {
+  await tx.execute({ sql: 'UPDATE restaurant_order_items SET order_id = ? WHERE order_id = ?', args: [keepId, fromId] })
+  await tx.execute({ sql: 'UPDATE kitchen_notifications SET order_id = ? WHERE order_id = ?', args: [keepId, fromId] })
+  const tablesRs = await tx.execute({ sql: 'SELECT table_id FROM restaurant_order_tables WHERE order_id = ?', args: [fromId] })
+  for (const row of tablesRs.rows as any[]) {
+    await tx.execute({
+      sql: `INSERT INTO restaurant_order_tables (order_id, table_id) VALUES (?, ?) ON CONFLICT(order_id, table_id) DO NOTHING`,
+      args: [keepId, Number(row.table_id)]
+    })
+    await tx.execute({
+      sql: "UPDATE restaurant_tables SET status = 'occupied', current_order_id = ? WHERE id = ?",
+      args: [keepId, Number(row.table_id)]
+    })
+  }
+  await tx.execute({ sql: 'DELETE FROM restaurant_order_tables WHERE order_id = ?', args: [fromId] })
+  await tx.execute({
+    sql: "UPDATE restaurant_orders SET status = 'cancelled', closed_at = datetime('now'), order_note = COALESCE(order_note || ' | ', '') || ? WHERE id = ?",
+    args: [`اندمج في الطلب #${keepId}`, fromId]
+  })
+  // الإجمالي اتغيّر — الشيك اللي اتطبع قبل كده مابقاش صحيح
+  await tx.execute({ sql: 'UPDATE restaurant_orders SET check_printed_at = NULL WHERE id = ?', args: [keepId] })
+}
+
+/** يدمج مجموعة ترابيزات تحت نفس الطلب المفتوح — لو الترابيزة مشغولة بطلب تاني، الطلبين بيتدمجوا في طلب واحد. */
 export async function mergeTables(orderId: number, tableIds: number[]): Promise<RestaurantOrderResult> {
   const db = getDb()
   const tx = await db.transaction('write')
@@ -241,8 +265,9 @@ export async function mergeTables(orderId: number, tableIds: number[]): Promise<
       const rs = await tx.execute({ sql: 'SELECT status, current_order_id FROM restaurant_tables WHERE id = ?', args: [tableId] })
       const table = rs.rows[0] as any
       if (!table) throw new Error('ترابيزة غير موجودة')
-      if (table.status === 'occupied' && Number(table.current_order_id) !== orderId) {
-        throw new Error('في ترابيزة مشغولة بطلب تاني، لازم تنقل أو تقفل طلبها الأول')
+      if (table.status === 'occupied' && table.current_order_id != null && Number(table.current_order_id) !== orderId) {
+        await absorbOrder(tx, orderId, Number(table.current_order_id))
+        continue
       }
       await tx.execute({
         sql: `INSERT INTO restaurant_order_tables (order_id, table_id) VALUES (?, ?)
@@ -262,13 +287,25 @@ export async function mergeTables(orderId: number, tableIds: number[]): Promise<
   }
 }
 
-/** ينقل الطلب بالكامل لترابيزة تانية، وبيفرّغ كل الترابيزات القديمة المرتبطة بيه (بما فيها المدموجة). */
+/**
+ * ينقل الطلب بالكامل لترابيزة تانية، وبيفرّغ كل الترابيزات القديمة المرتبطة بيه (بما فيها المدموجة).
+ * لو الترابيزة الجديدة مشغولة بطلب تاني، الطلب بيتضم جوه طلبها (والنتيجة بترجّع رقم الطلب اللي فضل).
+ */
 export async function transferTable(orderId: number, newTableId: number): Promise<RestaurantOrderResult> {
   const db = getDb()
   const tx = await db.transaction('write')
   try {
-    const newTableRs = await tx.execute({ sql: 'SELECT status FROM restaurant_tables WHERE id = ?', args: [newTableId] })
-    if ((newTableRs.rows[0] as any)?.status === 'occupied') throw new Error('الترابيزة الجديدة مشغولة')
+    const newTableRs = await tx.execute({ sql: 'SELECT status, current_order_id FROM restaurant_tables WHERE id = ?', args: [newTableId] })
+    const target = newTableRs.rows[0] as any
+    if (!target) throw new Error('ترابيزة غير موجودة')
+    const targetOrderId = target.status === 'occupied' && target.current_order_id != null ? Number(target.current_order_id) : null
+
+    if (targetOrderId != null && targetOrderId !== orderId) {
+      await absorbOrder(tx, targetOrderId, orderId)
+      await tx.commit()
+      return { ok: true, orderId: targetOrderId }
+    }
+    if (targetOrderId === orderId) throw new Error('الطلب أصلاً على الترابيزة دي')
 
     const oldRs = await tx.execute({ sql: 'SELECT table_id FROM restaurant_order_tables WHERE order_id = ?', args: [orderId] })
     for (const row of oldRs.rows as any[]) {
@@ -448,6 +485,83 @@ export async function updateOrderItem(
       sql: 'UPDATE restaurant_order_items SET discount_type = ?, discount_value = ? WHERE id = ?',
       args: [type, type === 'percent' ? Math.min(value, 100) : value, itemId]
     })
+  }
+}
+
+/**
+ * تقسيم الشيك: نقل الصنف (أو جزء من كميته) لفاتورة تانية.
+ * لو qty أقل من كمية السطر بنقسم السطر: الباقي يفضل في فاتورته، والمنقول يتضاف لسطر مطابق في الفاتورة الجديدة (أو سطر جديد).
+ * لو السطر كله اتنقل وفي سطر مطابق في الفاتورة الجديدة بيتدمجوا. خصم الصنف بالقيمة بيتوزع بالنسبة على الوحدات.
+ */
+export async function moveOrderItemToGroup(itemId: number, group: number, qty?: number): Promise<void> {
+  const db = getDb()
+  const tx = await db.transaction('write')
+  try {
+    const itemRs = await tx.execute({
+      sql: `SELECT id, order_id, product_id, product_name, qty, unit_price, note, split_group, kitchen_sent, kitchen_sent_at,
+                   discount_type, discount_value
+            FROM restaurant_order_items WHERE id = ?`,
+      args: [itemId]
+    })
+    const item = itemRs.rows[0] as any
+    const total = item ? Number(item.qty) : 0
+    const moveQty = qty === undefined ? total : Math.min(Math.max(Number(qty) || 0, 0), total)
+    if (!item || moveQty <= 0 || Number(item.split_group) === group) {
+      await tx.rollback()
+      return
+    }
+
+    const whole = moveQty >= total
+    const discType: 'percent' | 'value' = item.discount_type === 'percent' ? 'percent' : 'value'
+    const discValue = Number(item.discount_value) || 0
+    const movedDisc = discType === 'percent' || whole ? discValue : Math.round(discValue * (moveQty / total) * 100) / 100
+
+    const candidatesRs = await tx.execute({
+      sql: `SELECT id, qty, discount_type, discount_value FROM restaurant_order_items
+            WHERE order_id = ? AND id <> ? AND split_group = ? AND product_id = ? AND unit_price = ?
+              AND kitchen_sent = ? AND COALESCE(note, '') = ?`,
+      args: [item.order_id, itemId, group, item.product_id, item.unit_price, item.kitchen_sent, item.note ?? '']
+    })
+    const twin = (candidatesRs.rows as any[]).find((c) => {
+      const cv = Number(c.discount_value) || 0
+      if (cv <= 0 && movedDisc <= 0) return true
+      if (c.discount_type !== discType) return false
+      return discType === 'value' || cv === movedDisc
+    })
+
+    if (twin) {
+      const twinDisc = Number(twin.discount_value) || 0
+      const mergedDisc = discType === 'value' && movedDisc > 0 ? Math.round((twinDisc + movedDisc) * 100) / 100 : twinDisc
+      await tx.execute({
+        sql: 'UPDATE restaurant_order_items SET qty = ?, discount_value = ? WHERE id = ?',
+        args: [Number(twin.qty) + moveQty, mergedDisc, twin.id]
+      })
+    } else if (!whole) {
+      await tx.execute({
+        sql: `INSERT INTO restaurant_order_items
+                (order_id, product_id, product_name, qty, unit_price, note, split_group, kitchen_sent, kitchen_sent_at, discount_type, discount_value)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          item.order_id, item.product_id, item.product_name, moveQty, item.unit_price, item.note ?? null,
+          group, item.kitchen_sent, item.kitchen_sent_at ?? null, discType, movedDisc
+        ]
+      })
+    }
+
+    if (!whole) {
+      await tx.execute({
+        sql: 'UPDATE restaurant_order_items SET qty = ?, discount_value = ? WHERE id = ?',
+        args: [total - moveQty, discType === 'percent' ? discValue : Math.round((discValue - movedDisc) * 100) / 100, itemId]
+      })
+    } else if (twin) {
+      await tx.execute({ sql: 'DELETE FROM restaurant_order_items WHERE id = ?', args: [itemId] })
+    } else {
+      await tx.execute({ sql: 'UPDATE restaurant_order_items SET split_group = ? WHERE id = ?', args: [group, itemId] })
+    }
+    await tx.commit()
+  } catch (err) {
+    await tx.rollback()
+    throw err
   }
 }
 

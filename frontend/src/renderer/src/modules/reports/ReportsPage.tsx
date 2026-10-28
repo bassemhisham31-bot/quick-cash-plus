@@ -31,7 +31,9 @@ const REPORT_OPTIONS: { type: ReportType; icon: string; label: string }[] = [
   { type: 'restaurant_sales_by_order_type', icon: '🍽️', label: 'مبيعات المطاعم حسب نوع الطلب' },
   { type: 'restaurant_recipe_consumption', icon: '🧂', label: 'استهلاك الخامات (الوصفات)' },
   { type: 'restaurant_table_activity', icon: '🪑', label: 'نشاط الترابيزات' },
-  { type: 'category_sales_daily', icon: '🗂️', label: 'مبيعات التصنيف اليومية' }
+  { type: 'category_sales_daily', icon: '🗂️', label: 'مبيعات التصنيف اليومية' },
+  { type: 'item_sales', icon: '📦', label: 'مبيعات كل صنف' },
+  { type: 'sales_by_captain', icon: '🧑‍🍳', label: 'مبيعات كل كابتن' }
 ]
 
 const plainNumber = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 3 })
@@ -137,7 +139,7 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
         serial: type === 'sales_detailed' ? serial : undefined,
         partyType: type === 'account_statement' ? partyType : undefined,
         partyId: type === 'account_statement' ? (partyId ?? undefined) : undefined,
-        categoryId: type === 'category_sales_daily' ? (categoryId ?? undefined) : undefined
+        categoryId: type === 'category_sales_daily' || type === 'item_sales' ? (categoryId ?? undefined) : undefined
       })
       setResult(r)
     } finally {
@@ -222,7 +224,7 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
             </select>
           </>
         )}
-        {selectedType === 'category_sales_daily' && (
+        {(selectedType === 'category_sales_daily' || selectedType === 'item_sales') && (
           <select
             className="qcp-select"
             style={{ minWidth: 180 }}

@@ -566,6 +566,23 @@ const api = {
       }
       return { ok: true, user: payload.user }
     },
+    /** استعادة كلمة المرور بالإيميل: الرد ثابت سواء الحساب موجود أو لأ (مفيش كشف لمين مسجّل). */
+    forgotPassword: async (identifier: string): Promise<{ ok: boolean; message?: string; error?: string }> => {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier })
+      })
+      return res.json()
+    },
+    resetPassword: async (token: string, password: string): Promise<{ ok: boolean; error?: string }> => {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, password })
+      })
+      return res.json()
+    },
     /** قبل تسجيل الدخول مفيش توكن — على الإنترنت مش هنكشف قايمة المستخدمين، فالشاشة بتكتب الاسم يدويًا. */
     listLoginUsers: (): Promise<{ username: string; fullName: string }[]> =>
       authToken ? invoke('auth:listLoginUsers') : Promise.resolve([]),
@@ -734,11 +751,14 @@ const api = {
     list: (limit?: number): Promise<ExpenseView[]> => invoke('expenses:list', limit),
     create: (input: ExpenseInput, userId: number): Promise<ExpenseResult> =>
       invoke('expenses:create', input, userId),
+    delete: (expenseId: number): Promise<void> => invoke('expenses:delete', expenseId),
     byMethodSummary: (): Promise<ExpensesByMethodSummary> => invoke('expenses:byMethodSummary')
   },
   employees: {
     list: (): Promise<Employee[]> => invoke('employees:list'),
     create: (input: EmployeeInput): Promise<Employee> => invoke('employees:create', input),
+    update: (employeeId: number, input: EmployeeInput): Promise<Employee> => invoke('employees:update', employeeId, input),
+    delete: (employeeId: number): Promise<void> => invoke('employees:delete', employeeId),
     recordTransaction: (input: EmployeeTransactionInput, userId: number): Promise<EmployeeTransactionView> =>
       invoke('employees:recordTransaction', input, userId),
     updateTransaction: (transactionId: number, input: { amount: number; note: string }): Promise<EmployeeTransactionView> =>
@@ -797,6 +817,8 @@ const api = {
       invoke('restaurant:addItems', orderId, items),
     updateItem: (itemId: number, patch: { qty?: number; note?: string; splitGroup?: number; discountType?: 'percent' | 'value'; discountValue?: number }): Promise<void> =>
       invoke('restaurant:updateItem', itemId, patch),
+    moveItem: (itemId: number, group: number, qty?: number): Promise<void> =>
+      invoke('restaurant:moveItem', itemId, group, qty),
     updateOrderMeta: (
       orderId: number,
       patch: {

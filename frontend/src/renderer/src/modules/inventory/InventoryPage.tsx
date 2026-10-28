@@ -15,6 +15,8 @@ import { RecipeEditorModal } from '../restaurant/RecipeEditorModal'
 import { QuickStockModal } from './QuickStockModal'
 import { formatCurrency as currency } from '../../lib/currency'
 import { playSound } from '../../lib/sounds'
+import { isViewLicensed } from '../../lib/permissions'
+import { useAppStore } from '../../store/appStore'
 import { confirmDialog } from '../../components/ConfirmDialogHost'
 
 const emptyForm = {
@@ -64,6 +66,9 @@ export function InventoryPage(): JSX.Element {
   const [importing, setImporting] = useState(false)
   const [posUiSettings, setPosUiSettings] = useState<PosUiSettings | null>(null)
   const [recipeProduct, setRecipeProduct] = useState<Product | null>(null)
+  // الوصفات خاصة بالمطاعم — مخفية في النسخ اللي من غيرها
+  const disabledFeatures = useAppStore((s) => s.disabledFeatures)
+  const recipesAllowed = isViewLicensed('restaurant', disabledFeatures)
   const [stockProduct, setStockProduct] = useState<Product | null>(null)
 
   useEffect(() => {
@@ -401,9 +406,11 @@ export function InventoryPage(): JSX.Element {
                     >
                       🏷️ <span className="qcp-btn-label">{t('inventory.printBarcode')}</span>
                     </button>
-                    <button className="qcp-btn qcp-btn-secondary" title="الوصفة" onClick={() => setRecipeProduct(p)}>
-                      🧾 <span className="qcp-btn-label">الوصفة</span>
-                    </button>
+                    {recipesAllowed && (
+                      <button className="qcp-btn qcp-btn-secondary" title="الوصفة" onClick={() => setRecipeProduct(p)}>
+                        🧾 <span className="qcp-btn-label">الوصفة</span>
+                      </button>
+                    )}
                     <button className="qcp-btn qcp-btn-secondary" title="الكمية" onClick={() => setStockProduct(p)}>
                       🔢 <span className="qcp-btn-label">الكمية</span>
                     </button>

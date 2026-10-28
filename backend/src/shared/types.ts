@@ -1067,7 +1067,9 @@ export const REPORT_TYPES = [
   'restaurant_sales_by_order_type',
   'restaurant_recipe_consumption',
   'restaurant_table_activity',
-  'category_sales_daily'
+  'category_sales_daily',
+  'item_sales',
+  'sales_by_captain'
 ] as const
 
 export type ReportType = (typeof REPORT_TYPES)[number]
@@ -1481,6 +1483,7 @@ export interface UserListItem {
   fullName: string
   role: 'admin' | 'cashier'
   active: boolean
+  email: string | null
   permissionCount: number
 }
 
@@ -1489,6 +1492,7 @@ export interface UserInput {
   password: string
   fullName: string
   role: 'admin' | 'cashier'
+  email?: string | null
   permissions: string[]
 }
 
@@ -1497,6 +1501,7 @@ export interface UserUpdateInput {
   role: 'admin' | 'cashier'
   active: boolean
   password: string | null
+  email?: string | null
   permissions: string[]
 }
 

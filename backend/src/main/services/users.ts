@@ -17,10 +17,18 @@ async function logActivity(userId: number | null, username: string, action: stri
   })
 }
 
+/** إيميل اختياري (لاستعادة كلمة المرور): فاضي = بدون إيميل، وغير كده لازم شكل إيميل صحيح. */
+function normalizeEmail(raw: string | null | undefined): string | null {
+  const email = (raw ?? '').trim().toLowerCase()
+  if (!email) return null
+  if (email.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('الإيميل غير صحيح')
+  return email
+}
+
 export async function listUsers(): Promise<UserListItem[]> {
   const db = getDb()
   const rs = await db.execute(`
-    SELECT u.id, u.username, u.full_name AS fullName, u.role, u.active,
+    SELECT u.id, u.username, u.full_name AS fullName, u.role, u.active, u.email,
            (SELECT COUNT(*) FROM user_permissions WHERE user_id = u.id) AS permissionCount
     FROM users u
     ORDER BY u.id
@@ -31,6 +39,7 @@ export async function listUsers(): Promise<UserListItem[]> {
     fullName: r.fullName,
     role: r.role,
     active: !!r.active,
+    email: r.email ? String(r.email) : null,
     permissionCount: r.role === 'admin' ? PERMISSIONS.length : Number(r.permissionCount)
   }))
 }
@@ -59,13 +68,14 @@ export async function createUser(input: UserInput): Promise<UserListItem> {
   const existing = await db.execute({ sql: 'SELECT id FROM users WHERE username = ?', args: [username] })
   if (existing.rows.length > 0) throw new Error('اسم المستخدم مستخدم بالفعل')
 
+  const email = normalizeEmail(input.email)
   const hash = bcrypt.hashSync(input.password, 10)
   const tx = await db.transaction('write')
   let userId: number
   try {
     const info = await tx.execute({
-      sql: `INSERT INTO users (username, password_hash, full_name, role, active) VALUES (?, ?, ?, ?, 1)`,
-      args: [username, hash, input.fullName.trim() || username, input.role]
+      sql: `INSERT INTO users (username, password_hash, full_name, role, active, email) VALUES (?, ?, ?, ?, 1, ?)`,
+      args: [username, hash, input.fullName.trim() || username, input.role, email]
     })
     userId = Number(info.lastInsertRowid)
 
@@ -102,18 +112,21 @@ export async function updateUser(id: number, input: UserUpdateInput): Promise<Us
     if (remaining === 0) throw new Error('لازم يفضل مدير واحد نشط على الأقل في النظام')
   }
 
+  // undefined = الواجهة ماسابتش الخانة (ما نمسحش الإيميل الحالي)
+  const email = input.email === undefined ? (row.email ? String(row.email) : null) : normalizeEmail(input.email)
+
   const tx = await db.transaction('write')
   try {
     if (input.password && input.password.trim()) {
       const hash = bcrypt.hashSync(input.password.trim(), 10)
       await tx.execute({
-        sql: 'UPDATE users SET full_name = ?, role = ?, active = ?, password_hash = ? WHERE id = ?',
-        args: [input.fullName.trim() || row.username, input.role, input.active ? 1 : 0, hash, id]
+        sql: 'UPDATE users SET full_name = ?, role = ?, active = ?, password_hash = ?, email = ? WHERE id = ?',
+        args: [input.fullName.trim() || row.username, input.role, input.active ? 1 : 0, hash, email, id]
       })
     } else {
       await tx.execute({
-        sql: 'UPDATE users SET full_name = ?, role = ?, active = ? WHERE id = ?',
-        args: [input.fullName.trim() || row.username, input.role, input.active ? 1 : 0, id]
+        sql: 'UPDATE users SET full_name = ?, role = ?, active = ?, email = ? WHERE id = ?',
+        args: [input.fullName.trim() || row.username, input.role, input.active ? 1 : 0, email, id]
       })
     }
 

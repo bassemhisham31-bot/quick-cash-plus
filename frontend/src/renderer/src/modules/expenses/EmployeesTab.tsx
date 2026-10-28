@@ -4,6 +4,7 @@ import type { Employee, EmployeesSummary } from '../../../../shared/types'
 import { EmployeeLedgerModal } from './EmployeeLedgerModal'
 import { formatCurrency as currency } from '../../lib/currency'
 import { playSound } from '../../lib/sounds'
+import { confirmDialog } from '../../components/ConfirmDialogHost'
 
 const emptyForm = { name: '', phone: '', role: '', baseSalary: '0' }
 
@@ -14,6 +15,7 @@ export function EmployeesTab(): JSX.Element {
   const [form, setForm] = useState(emptyForm)
   const [selected, setSelected] = useState<Employee | null>(null)
   const [summary, setSummary] = useState<EmployeesSummary | null>(null)
+  const [editingId, setEditingId] = useState<number | null>(null)
 
   async function refresh(): Promise<void> {
     setEmployees(await window.api.employees.list())
@@ -26,15 +28,30 @@ export function EmployeesTab(): JSX.Element {
 
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault()
-    await window.api.employees.create({
+    const input = {
       name: form.name.trim(),
       phone: form.phone.trim(),
       role: form.role.trim(),
       baseSalary: Number(form.baseSalary) || 0
-    })
+    }
+    if (editingId != null) await window.api.employees.update(editingId, input)
+    else await window.api.employees.create(input)
     playSound('save')
     setForm(emptyForm)
+    setEditingId(null)
     setShowForm(false)
+    refresh()
+  }
+
+  function startEdit(emp: Employee): void {
+    setEditingId(emp.id)
+    setForm({ name: emp.name, phone: emp.phone ?? '', role: emp.role ?? '', baseSalary: String(emp.baseSalary) })
+    setShowForm(true)
+  }
+
+  async function handleDelete(emp: Employee): Promise<void> {
+    if (!(await confirmDialog(`حذف الموظف "${emp.name}"؟ حركاته السابقة هتفضل محفوظة في الدفاتر.`, { danger: true }))) return
+    await window.api.employees.delete(emp.id)
     refresh()
   }
 
@@ -67,7 +84,7 @@ export function EmployeesTab(): JSX.Element {
       )}
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-        <button className="qcp-btn qcp-btn-primary" onClick={() => setShowForm(true)}>
+        <button className="qcp-btn qcp-btn-primary" onClick={() => { setEditingId(null); setForm(emptyForm); setShowForm(true) }}>
           + {t('expenses.addEmployee')}
         </button>
       </div>
@@ -81,6 +98,14 @@ export function EmployeesTab(): JSX.Element {
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10, fontSize: 13 }}>
               <span>{t('expenses.baseSalary')}</span>
               <strong>{currency(emp.baseSalary)}</strong>
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
+              <button type="button" className="qcp-btn qcp-btn-secondary" style={{ flex: 1, padding: '3px 6px', fontSize: 12 }} onClick={() => startEdit(emp)}>
+                ✏️ تعديل
+              </button>
+              <button type="button" className="qcp-btn qcp-btn-secondary" style={{ flex: 1, padding: '3px 6px', fontSize: 12 }} onClick={() => handleDelete(emp)}>
+                🗑 حذف
+              </button>
             </div>
           </div>
         ))}
@@ -97,7 +122,7 @@ export function EmployeesTab(): JSX.Element {
               if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') e.preventDefault()
             }}
           >
-            <h2 style={{ marginTop: 0 }}>{t('expenses.addEmployee')}</h2>
+            <h2 style={{ marginTop: 0 }}>{editingId != null ? 'تعديل الموظف' : t('expenses.addEmployee')}</h2>
             <div className="qcp-field">
               <label>{t('expenses.employeeName')}</label>
               <input

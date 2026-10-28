@@ -69,6 +69,23 @@ export async function createEmployee(input: EmployeeInput): Promise<Employee> {
   return mapEmployee(created.rows[0])
 }
 
+export async function updateEmployee(employeeId: number, input: EmployeeInput): Promise<Employee> {
+  if (!input.name.trim()) throw new Error('اكتب اسم الموظف')
+  const db = getDb()
+  await db.execute({
+    sql: 'UPDATE employees SET name = ?, phone = ?, role = ?, base_salary = ? WHERE id = ? AND deleted_at IS NULL',
+    args: [input.name.trim(), input.phone.trim() || null, input.role.trim() || null, input.baseSalary || 0, employeeId]
+  })
+  const rs = await db.execute({ sql: 'SELECT * FROM employees WHERE id = ?', args: [employeeId] })
+  if (!rs.rows[0]) throw new Error('الموظف غير موجود')
+  return mapEmployee(rs.rows[0])
+}
+
+export async function deleteEmployee(employeeId: number): Promise<void> {
+  const db = getDb()
+  await db.execute({ sql: "UPDATE employees SET deleted_at = datetime('now') WHERE id = ?", args: [employeeId] })
+}
+
 export async function getCurrentPeriod(employeeId: number): Promise<EmployeePayPeriod | null> {
   const db = getDb()
   const rs = await db.execute({

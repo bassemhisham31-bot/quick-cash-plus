@@ -33,6 +33,26 @@ export function LoginPage(): JSX.Element {
   // (لو الـ IP أو الكود غلط مكانش فيه أي طريقة توصل للإعدادات)
   const [netStatus, setNetStatus] = useState<NetworkStatus | null>(null)
   const [showNetwork, setShowNetwork] = useState(false)
+  // استعادة كلمة المرور بالإيميل
+  const [showForgot, setShowForgot] = useState(false)
+  const [forgotId, setForgotId] = useState('')
+  const [forgotBusy, setForgotBusy] = useState(false)
+  const [forgotMsg, setForgotMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function handleForgot(e: FormEvent): Promise<void> {
+    e.preventDefault()
+    if (!forgotId.trim()) return
+    setForgotBusy(true)
+    setForgotMsg(null)
+    try {
+      const res = await window.api.auth.forgotPassword(forgotId.trim())
+      setForgotMsg({ ok: !!res.ok, text: (res.ok ? res.message : res.error) ?? 'حدث خطأ' })
+    } catch {
+      setForgotMsg({ ok: false, text: 'تعذر الاتصال بالسيرفر، جرّب تاني' })
+    } finally {
+      setForgotBusy(false)
+    }
+  }
 
   function loadLoginData(): void {
     window.api.settings.getStore().then(setStore).catch(() => undefined)
@@ -174,7 +194,7 @@ export function LoginPage(): JSX.Element {
             </div>
           </div>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 18px', fontSize: 13 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 8px', fontSize: 13 }}>
             <input
               type="checkbox"
               checked={rememberUsername}
@@ -182,6 +202,28 @@ export function LoginPage(): JSX.Element {
             />
             {t('auth.rememberUsername')}
           </label>
+
+          <button
+            type="button"
+            onClick={() => {
+              setForgotId(username)
+              setForgotMsg(null)
+              setShowForgot(true)
+            }}
+            style={{
+              alignSelf: 'flex-start',
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              margin: '0 0 16px',
+              color: 'var(--qcp-primary, #4f46e5)',
+              cursor: 'pointer',
+              fontSize: 13,
+              textDecoration: 'underline'
+            }}
+          >
+            نسيت كلمة المرور؟
+          </button>
 
           {error && (
             <div className="qcp-pill critical" style={{ marginBottom: 12 }}>
@@ -219,6 +261,39 @@ export function LoginPage(): JSX.Element {
           >
             ⚙️ إعدادات الشبكة
           </button>
+        )}
+
+        {showForgot && (
+          <div className="qcp-modal-backdrop" onClick={() => setShowForgot(false)}>
+            <form className="qcp-modal" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()} onSubmit={handleForgot}>
+              <h3 style={{ marginTop: 0 }}>🔑 استعادة كلمة المرور</h3>
+              <p style={{ fontSize: 13, color: 'var(--qcp-ink-muted)', lineHeight: 1.7 }}>
+                اكتب اسم المستخدم أو الإيميل المسجّل على الحساب، وهنبعتلك رابط لتعيين كلمة مرور جديدة.
+              </p>
+              <div className="qcp-field">
+                <input
+                  className="qcp-input"
+                  autoFocus
+                  placeholder="اسم المستخدم أو الإيميل"
+                  value={forgotId}
+                  onChange={(e) => setForgotId(e.target.value)}
+                />
+              </div>
+              {forgotMsg && (
+                <div className={`qcp-pill ${forgotMsg.ok ? 'success' : 'critical'}`} style={{ display: 'block', whiteSpace: 'normal', lineHeight: 1.7, marginBottom: 10 }}>
+                  {forgotMsg.text}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="submit" className="qcp-btn qcp-btn-primary" style={{ flex: 1 }} disabled={forgotBusy || !forgotId.trim()}>
+                  {forgotBusy ? 'جاري الإرسال...' : 'ابعت رابط الاستعادة'}
+                </button>
+                <button type="button" className="qcp-btn qcp-btn-secondary" onClick={() => setShowForgot(false)}>
+                  إغلاق
+                </button>
+              </div>
+            </form>
+          </div>
         )}
 
         {showNetwork && (

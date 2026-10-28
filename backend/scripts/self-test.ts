@@ -240,6 +240,112 @@ async function main(): Promise<void> {
     assert(renewed.ok && renewed.status.status === 'active', 'تجديد بأمر المالك رجّع التشغيل')
     const unlocked = await rpc('catalog:listWarehouses')
     assert(unlocked.ok === true, 'القنوات رجعت تشتغل بعد التجديد')
+
+    console.log('\n13) استعادة كلمة المرور بالإيميل...')
+    const { setMailSenderForTests } = await import('../src/main/services/mailer')
+    const sent: { to: string; subject: string; text: string }[] = []
+    setMailSenderForTests(async (m) => {
+      sent.push(m)
+    })
+    process.env.QCP_PUBLIC_URL = 'https://test.example.com/'
+    const post = (path: string, body: unknown): Promise<Response> =>
+      fetch(`${BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+    const tokenOf = (text: string): string => /#reset=([0-9a-f]{64})/.exec(text)?.[1] ?? ''
+
+    const badMail = await rpc('users:update', [1, { fullName: 'مدير النظام', role: 'admin', active: true, password: null, email: 'مش-إيميل', permissions: [] }])
+    assert(badMail.ok === false, 'إيميل بشكل غلط اترفض')
+    const setMail = await rpc('users:update', [1, { fullName: 'مدير النظام', role: 'admin', active: true, password: null, email: 'Owner@Example.com', permissions: [] }])
+    assert(setMail.ok === true, 'حفظ إيميل الأدمن نجح')
+    const listed = await rpc('users:list')
+    assert(listed.result?.find((u: any) => u.id === 1)?.email === 'owner@example.com', 'الإيميل اتخزّن lowercase وظهر في قايمة المستخدمين')
+
+    const f1 = await post('/api/auth/forgot-password', { identifier: 'admin' }).then(json)
+    await wait(300)
+    assert(f1.ok === true && sent.length === 1 && sent[0].to === 'owner@example.com', 'طلب الاستعادة بإسم المستخدم بعت إيميل للعنوان الصح')
+    const tok1 = tokenOf(sent[0]?.text ?? '')
+    assert(tok1.length === 64 && (sent[0]?.text ?? '').includes('https://test.example.com/#reset='), 'الرسالة فيها رابط بتوكن 64 حرف على الدومين المضبوط (بدون // مزدوجة)')
+
+    const f2 = await post('/api/auth/forgot-password', { identifier: 'nobody-here' }).then(json)
+    await wait(200)
+    assert(f2.ok === true && f2.message === f1.message && sent.length === 1, 'مستخدم مش موجود: نفس الرد بالظبط ومفيش إيميل اتبعت')
+
+    await post('/api/auth/forgot-password', { identifier: 'owner@example.com' })
+    await wait(200)
+    assert(sent.length === 1, 'طلب تاني خلال دقيقة اتجاهل (مفيش إغراق إيميلات)')
+
+    const shortPw = await post('/api/auth/reset-password', { token: tok1, password: '123' })
+    assert(shortPw.status === 400, 'كلمة مرور قصيرة اترفضت')
+    const wrongTok = await post('/api/auth/reset-password', { token: 'a'.repeat(64), password: 'NewPass123' })
+    assert(wrongTok.status === 400, 'توكن غلط اترفض')
+
+    const resetOk = await post('/api/auth/reset-password', { token: tok1, password: 'NewPass123' }).then(json)
+    assert(resetOk.ok === true, 'تعيين كلمة المرور بالرابط نجح')
+    const newLogin = await post('/api/auth/login', { username: 'admin', password: 'NewPass123' }).then(json)
+    assert(newLogin.ok === true, 'الدخول بكلمة المرور الجديدة نجح')
+    const oldLogin = await post('/api/auth/login', { username: 'admin', password: 'admin123' }).then(json)
+    assert(oldLogin.ok === false, 'كلمة المرور القديمة بطلت تشتغل')
+    const reuse = await post('/api/auth/reset-password', { token: tok1, password: 'Another123' })
+    assert(reuse.status === 400, 'نفس الرابط مايتستخدمش مرتين')
+
+    const dbx = getTestDb()
+    await dbx.execute("UPDATE password_resets SET created_at = datetime('now', '-5 minutes')")
+    await post('/api/auth/forgot-password', { identifier: 'admin' })
+    await wait(300)
+    assert(sent.length === 2, 'بعد دقيقة طلب جديد بعت رسالة جديدة')
+    const tok2 = tokenOf(sent[1]?.text ?? '')
+    await dbx.execute({ sql: 'UPDATE password_resets SET expires_at = ? WHERE used_at IS NULL', args: [new Date(Date.now() - 1000).toISOString()] })
+    const expired = await post('/api/auth/reset-password', { token: tok2, password: 'Another123' })
+    assert(expired.status === 400, 'رابط منتهي الصلاحية اترفض')
+
+    let limited = false
+    for (let i = 0; i < 6 && !limited; i++) {
+      limited = (await post('/api/auth/forgot-password', { identifier: 'x' + i })).status === 429
+    }
+    assert(limited, 'كتر الطلبات من نفس الـIP بيرجّع 429')
+    setMailSenderForTests(null)
+
+    console.log('\n17) نسخة retail (QCP_EDITION): من غير أي ميزة مطاعم...')
+    const rawRpc = (channel: string, args: unknown[] = [], headers: Record<string, string> = authHeaders): Promise<Response> =>
+      fetch(`${BASE}/api/rpc/${channel}`, { method: 'POST', headers, body: JSON.stringify({ args }) })
+    const RESTAURANT_KEYS = ['restaurant', 'restaurantTables', 'restaurantCaptains', 'delivery', 'events', 'settings:restaurant',
+      'report:restaurant_sales_by_order_type', 'report:restaurant_recipe_consumption', 'report:restaurant_table_activity', 'report:sales_by_captain']
+
+    const fullLic = await rpc('license:getStatus')
+    assert(RESTAURANT_KEYS.every((k) => !fullLic.result.disabledFeatures.includes(k)), 'النسخة الكاملة: مفيش ميزة مطاعم موقوفة')
+    assert((await rawRpc('restaurant:listTables')).status === 200, 'النسخة الكاملة: restaurant:listTables شغالة')
+
+    process.env.QCP_EDITION = ' Retail ' // المسافات وحالة الحروف مش بتفرق
+    try {
+      const retailLic = await rpc('license:getStatus')
+      assert(RESTAURANT_KEYS.every((k) => retailLic.result.disabledFeatures.includes(k)), 'retail: كل مفاتيح المطاعم موقوفة في حالة الترخيص')
+      assert(retailLic.result.status === 'active', 'retail: الترخيص نفسه لسه active')
+      const publicLic = await fetch(`${BASE}/api/rpc/license:getStatus`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"args":[]}' }).then(json)
+      assert(publicLic.ok && publicLic.result.disabledFeatures.includes('restaurantTables'), 'retail: القناة العامة (قبل الدخول) كمان بترجّع الميزات الموقوفة')
+
+      for (const [channel, args] of [['restaurant:listTables', []], ['restaurant:getFloor', []], ['delivery:listZones', []], ['recipes:get', [1]], ['reservations:list', []], ['events:listPackages', []]] as [string, unknown[]][]) {
+        assert((await rawRpc(channel, args)).status === 403, `retail: ${channel} ممنوعة (403)`)
+      }
+      assert((await rpc('catalog:listWarehouses')).ok === true, 'retail: القنوات العادية شغالة')
+      assert((await rpc('settings:getRestaurant')).ok === true, 'retail: settings:getRestaurant لسه شغالة (بتتقري جوه الفواتير)')
+      assert((await rpc('reports:run', ['sales_summary', {}])).ok === true, 'retail: تقرير عادي شغال')
+      for (const type of ['restaurant_sales_by_order_type', 'restaurant_recipe_consumption', 'restaurant_table_activity', 'sales_by_captain']) {
+        assert((await rpc('reports:run', [type, {}])).ok === false, `retail: تقرير ${type} ممنوع`)
+      }
+
+      // الميزات الموقوفة بالنسخة ثابتة حتى لو الترخيص اتجدد من غير ميزات موقوفة
+      const withFeature = await json(await internal({ plan: 'yearly', expiresAt: '2099-01-01', disabledFeatures: ['settings:backup'] }))
+      assert(withFeature.status.disabledFeatures.includes('settings:backup') && withFeature.status.disabledFeatures.includes('restaurant'), 'retail: ميزات الترخيص بتتدمج مع ميزات النسخة')
+      const renewedPlain = await json(await internal({ plan: 'yearly', expiresAt: '2099-02-01' }))
+      assert(renewedPlain.status.disabledFeatures.includes('restaurant') && !renewedPlain.status.disabledFeatures.includes('settings:backup'), 'retail: تجديد من غير ميزات بيرجّع ميزات النسخة بس')
+
+      process.env.QCP_EDITION = 'bogus'
+      const bogus = await rpc('license:getStatus')
+      assert(!bogus.result.disabledFeatures.includes('restaurant'), 'قيمة نسخة غلط بترجع للنسخة الكاملة (مع تحذير)')
+    } finally {
+      delete process.env.QCP_EDITION
+    }
+    assert((await rawRpc('restaurant:listTables')).status === 200, 'رجوع للنسخة الكاملة: القنوات رجعت تشتغل')
   } finally {
     server.close()
   }

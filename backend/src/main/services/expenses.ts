@@ -68,6 +68,11 @@ export async function createExpense(input: ExpenseInput, userId: number): Promis
   return { ok: true, expense: created }
 }
 
+export async function deleteExpense(expenseId: number): Promise<void> {
+  const db = getDb()
+  await db.execute({ sql: "UPDATE expenses SET deleted_at = datetime('now') WHERE id = ? AND deleted_at IS NULL", args: [expenseId] })
+}
+
 export async function getExpensesByMethodSummary(): Promise<ExpensesByMethodSummary> {
   const db = getDb()
   const rs = await db.execute(

@@ -169,10 +169,13 @@ import {
   createExpenseCategory,
   getExpensesByMethodSummary,
   listExpenseCategories,
+  deleteExpense,
   listExpenses
 } from './services/expenses'
 import {
   createEmployee,
+  updateEmployee,
+  deleteEmployee,
   deleteEmployeeTransaction,
   getEmployeeLedger,
   getEmployeesSummary,
@@ -203,6 +206,7 @@ import {
   listOpenOrders,
   listTables,
   mergeTables,
+  moveOrderItemToGroup,
   openOrder,
   removeOrderItem,
   sendToKitchen,
@@ -414,10 +418,13 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'expenses:createCategory': (name: string) => createExpenseCategory(name),
     'expenses:list': (limit?: number) => listExpenses(limit),
     'expenses:create': (input: ExpenseInput, userId: number) => createExpense(input, userId),
+    'expenses:delete': (expenseId: number) => deleteExpense(expenseId),
     'expenses:byMethodSummary': () => getExpensesByMethodSummary(),
 
     'employees:list': () => listEmployees(),
     'employees:create': (input: EmployeeInput) => createEmployee(input),
+    'employees:update': (employeeId: number, input: EmployeeInput) => updateEmployee(employeeId, input),
+    'employees:delete': (employeeId: number) => deleteEmployee(employeeId),
     'employees:recordTransaction': (input: EmployeeTransactionInput, userId: number) =>
       recordEmployeeTransaction(input, userId),
     'employees:updateTransaction': (transactionId: number, input: { amount: number; note: string }) =>
@@ -458,6 +465,7 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'restaurant:addItems': (orderId: number, items: RestaurantOrderItemInput[]) => addItemsToOrder(orderId, items),
     'restaurant:updateItem': (itemId: number, patch: { qty?: number; note?: string; splitGroup?: number; discountType?: 'percent' | 'value'; discountValue?: number }) =>
       updateOrderItem(itemId, patch),
+    'restaurant:moveItem': (itemId: number, group: number, qty?: number) => moveOrderItemToGroup(itemId, group, qty),
     'restaurant:updateOrderMeta': (
       orderId: number,
       patch: {

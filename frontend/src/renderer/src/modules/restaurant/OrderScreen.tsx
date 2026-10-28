@@ -81,6 +81,8 @@ export function OrderScreen({ orderId, onClose }: { orderId: number; onClose: ()
   const [toast, setToast] = useState<string | null>(null)
   const [noteOpenFor, setNoteOpenFor] = useState<number | null>(null)
   const [splitMode, setSplitMode] = useState(false)
+  /** تقسيم الشيك: عدد الوحدات اللي هتتنقل من كل سطر كميته أكتر من 1 (الافتراضي واحدة) */
+  const [moveUnits, setMoveUnits] = useState<Record<number, number>>({})
   const [checkGroup, setCheckGroup] = useState(1)
   const [showDelivery, setShowDelivery] = useState(false)
   const [showOrderNote, setShowOrderNote] = useState(false)
@@ -110,7 +112,7 @@ export function OrderScreen({ orderId, onClose }: { orderId: number; onClose: ()
   }
 
   function refreshAvailableTables(): void {
-    window.api.restaurant.listTables().then((list) => setAvailableTables(list.filter((t) => t.status === 'available')))
+    window.api.restaurant.listTables().then((list) => setAvailableTables(list.filter((t) => t.currentOrderId !== orderId)))
   }
 
   useEffect(() => {
@@ -287,8 +289,13 @@ export function OrderScreen({ orderId, onClose }: { orderId: number; onClose: ()
     window.api.restaurant.updateOrderMeta(orderId, { discountType: type, discountValue: Number(value) || 0 })
   }
 
+  function unitsToMove(item: RestaurantOrderItemView): number {
+    return Math.min(Math.max(moveUnits[item.id] ?? 1, 1), item.qty)
+  }
+
   async function setItemGroup(item: RestaurantOrderItemView, group: number): Promise<void> {
-    await window.api.restaurant.updateItem(item.id, { splitGroup: group })
+    if (item.splitGroup === group) return
+    await window.api.restaurant.moveItem(item.id, group, unitsToMove(item))
     await refreshOrder()
   }
 
@@ -357,6 +364,7 @@ export function OrderScreen({ orderId, onClose }: { orderId: number; onClose: ()
         ? await window.api.restaurant.mergeTables(orderId, [tableId])
         : await window.api.restaurant.transferTable(orderId, tableId)
     if (!result.ok) setError(result.error ?? 'تعذر تنفيذ العملية')
+    else if (result.orderId && result.orderId !== orderId) setActiveOrderId(result.orderId)
     setTableAction(null)
     await refreshOrder()
     refreshAvailableTables()
@@ -874,6 +882,33 @@ export function OrderScreen({ orderId, onClose }: { orderId: number; onClose: ()
                   }}
                 />
               )}
+              {splitMode && item.qty > 1 && (
+                <div className="rst-group-pick">
+                  <span style={{ fontSize: 11, color: 'var(--qcp-ink-faint)', alignSelf: 'center' }}>الكمية المنقولة:</span>
+                  <button
+                    type="button"
+                    onClick={() => setMoveUnits((m) => ({ ...m, [item.id]: Math.max(1, unitsToMove(item) - 1) }))}
+                  >
+                    −
+                  </button>
+                  <span style={{ fontSize: 12, fontWeight: 700, minWidth: 18, textAlign: 'center', alignSelf: 'center' }}>
+                    {unitsToMove(item)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setMoveUnits((m) => ({ ...m, [item.id]: Math.min(item.qty, unitsToMove(item) + 1) }))}
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    className={unitsToMove(item) === item.qty ? 'active' : ''}
+                    onClick={() => setMoveUnits((m) => ({ ...m, [item.id]: item.qty }))}
+                  >
+                    الكل
+                  </button>
+                </div>
+              )}
               {splitMode && (
                 <div className="rst-group-pick">
                   <span style={{ fontSize: 11, color: 'var(--qcp-ink-faint)', alignSelf: 'center' }}>فاتورة:</span>
@@ -1034,19 +1069,19 @@ export function OrderScreen({ orderId, onClose }: { orderId: number; onClose: ()
             <h3 style={{ marginTop: 0 }}>{tableAction === 'merge' ? '🔗 دمج ترابيزة مع الطلب' : '↔️ نقل الطلب لترابيزة تانية'}</h3>
             <p style={{ color: 'var(--qcp-ink-muted)', fontSize: 13, marginTop: 0 }}>
               {tableAction === 'merge'
-                ? 'الترابيزة اللي هتختارها هتنضم لنفس الطلب (مناسب للمجموعات الكبيرة).'
-                : 'الطلب كله هيتنقل للترابيزة الجديدة، والترابيزة الحالية هتفضى.'}
+                ? 'الترابيزة اللي هتختارها هتنضم لنفس الطلب (مناسب للمجموعات الكبيرة). لو مشغولة، طلبها هيتدمج مع الطلب ده.'
+                : 'الطلب كله هيتنقل للترابيزة الجديدة، والترابيزة الحالية هتفضى. لو الترابيزة مشغولة، الطلبين هيتدمجوا في طلبها.'}
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: 8 }}>
               {availableTables.map((t) => (
                 <button key={t.id} type="button" className="rst-cat" style={{ padding: '14px 8px' }} onClick={() => applyTableAction(t.id)}>
-                  🪑 {t.name}
+                  🪑 {t.name}{t.status === 'occupied' ? ' 🔴' : ''}
                   <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--qcp-ink-faint)' }}>
                     {t.seats} كرسي{t.zone ? ` · ${t.zone}` : ''}
                   </div>
                 </button>
               ))}
-              {!availableTables.length && <div className="rst-empty">مفيش ترابيزات فاضية دلوقتي</div>}
+              {!availableTables.length && <div className="rst-empty">مفيش ترابيزات تانية</div>}
             </div>
             <button type="button" className="qcp-btn qcp-btn-secondary" style={{ width: '100%', marginTop: 14 }} onClick={() => setTableAction(null)}>
               إلغاء
