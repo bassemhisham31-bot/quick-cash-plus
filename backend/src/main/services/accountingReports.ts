@@ -1,6 +1,7 @@
 import { getDb } from '../db'
 import { branchesEnabled, branchFilter, currentBranchId } from './branchScope'
 import { listTreasuries, getTreasuryStatement } from './treasuries'
+import { defaultLedgerAccountCode } from './accountsChart'
 import { accountLedgerReport, balanceSheetReport, incomeStatementReport, journalReport, trialBalanceReport } from './ledger'
 import type { ReportResult } from '../../shared/types'
 
@@ -103,7 +104,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
     case 'journal':
       return journalReport(f.from, f.to)
     case 'account_ledger':
-      return accountLedgerReport(f.accountCode ?? '1200', f.from, f.to)
+      return accountLedgerReport(f.accountCode ?? (await defaultLedgerAccountCode()), f.from, f.to)
     case 'daily_sales': {
       const rs = await db.execute({
         sql: `SELECT date(i.created_at) AS day, COUNT(*) AS cnt,

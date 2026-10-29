@@ -22,6 +22,8 @@ interface AccountDef {
   type: string
   isSystem: boolean
   active: boolean
+  /** الحركات المربوطة بالحساب ده (الشجرة المبسّطة) */
+  roles?: string[]
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -91,7 +93,11 @@ function ReportsTab(): JSX.Element {
   useEffect(() => {
     window.api.accounting.listReports().then(setDefs)
     window.api.catalog.listWarehouses().then(setWarehouses)
-    window.api.ledger.listAccounts().then(setAccounts)
+    window.api.ledger.listAccounts().then((a) => {
+      setAccounts(a)
+      // الشجرة المبسّطة مفيهاش 1200 — لو الكود الحالي مش موجود نختار أول حساب
+      setAccountCode((c) => (a.some((x) => x.code === c) ? c : (a[0]?.code ?? c)))
+    })
   }, [])
 
   const def = defs.find((d) => d.type === type)
@@ -321,27 +327,85 @@ function EntriesTab({ canManage }: { canManage: boolean }): JSX.Element {
 
 /* ------------------------------ شجرة الحسابات ------------------------------ */
 
+interface RoleDef {
+  role: string
+  label: string
+  type: string
+  accountCode: string
+  defaultCode: string
+}
+
 function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
+  const dataVersion = useAppStore((s) => s.dataVersion)
   const [accounts, setAccounts] = useState<AccountDef[]>([])
+  const [roles, setRoles] = useState<RoleDef[]>([])
+  const [custom, setCustom] = useState(false)
+  const [showRoles, setShowRoles] = useState(false)
+  /** null = إضافة حساب جديد، غير كده = كود الحساب اللي بيتعدّل */
+  const [editing, setEditing] = useState<string | null>(null)
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
   const [type, setType] = useState('expense')
   const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
 
   function refresh(): void {
     window.api.ledger.listAccounts().then(setAccounts)
+    window.api.ledger.listAccountRoles().then((r) => {
+      setCustom(r.custom)
+      setRoles(r.roles)
+    })
   }
-  useEffect(refresh, [])
+  useEffect(refresh, [dataVersion])
 
-  async function add(): Promise<void> {
+  function resetForm(): void {
+    setEditing(null)
+    setCode('')
+    setName('')
+    setType('expense')
+  }
+
+  async function save(): Promise<void> {
     setError(null)
+    setMessage(null)
     try {
-      await window.api.ledger.createAccount({ code, name, type })
-      setCode('')
-      setName('')
+      if (editing === null) {
+        await window.api.ledger.createAccount({ code, name, type })
+        setMessage('تم إضافة الحساب')
+      } else {
+        await window.api.ledger.updateAccount(editing, { code, name, type })
+        setMessage('تم حفظ التعديل')
+      }
+      resetForm()
       refresh()
     } catch (e: any) {
-      setError(e?.message ?? 'تعذر إضافة الحساب')
+      setError(e?.message ?? (editing === null ? 'تعذر إضافة الحساب' : 'تعذر حفظ التعديل'))
+    }
+  }
+
+  async function remove(a: AccountDef): Promise<void> {
+    setError(null)
+    setMessage(null)
+    if (!(await confirmDialog(`مسح الحساب ${a.code} — ${a.name}؟`, { danger: true, confirmLabel: 'مسح' }))) return
+    try {
+      await window.api.ledger.deleteAccount(a.code)
+      if (editing === a.code) resetForm()
+      setMessage('تم مسح الحساب')
+      refresh()
+    } catch (e: any) {
+      setError(e?.message ?? 'تعذر مسح الحساب')
+    }
+  }
+
+  async function mapRole(role: string, accountCode: string): Promise<void> {
+    setError(null)
+    setMessage(null)
+    try {
+      await window.api.ledger.setAccountRoles({ [role]: accountCode })
+      setMessage('تم تغيير الربط — التقارير بتتحسب على الحساب الجديد (القديم والجديد)')
+      refresh()
+    } catch (e: any) {
+      setError(e?.message ?? 'تعذر تغيير الربط')
     }
   }
 
@@ -351,7 +415,7 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
         <div className="qcp-card" style={{ display: 'grid', gridTemplateColumns: '140px 1fr 180px auto', gap: 10, marginBottom: 14, alignItems: 'end' }}>
           <div className="qcp-field" style={{ margin: 0 }}>
             <label>كود الحساب</label>
-            <input className="qcp-input" value={code} onChange={(e) => setCode(e.target.value)} placeholder="مثال: 6200" />
+            <input className="qcp-input" value={code} onChange={(e) => setCode(e.target.value)} placeholder="مثال: 1100" />
           </div>
           <div className="qcp-field" style={{ margin: 0 }}>
             <label>اسم الحساب</label>
@@ -367,12 +431,20 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
               ))}
             </select>
           </div>
-          <button className="qcp-btn qcp-btn-primary" onClick={add}>
-            ➕ إضافة
-          </button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="qcp-btn qcp-btn-primary" onClick={save}>
+              {editing === null ? '➕ إضافة' : '💾 حفظ التعديل'}
+            </button>
+            {editing !== null && (
+              <button className="qcp-btn qcp-btn-secondary" onClick={resetForm}>
+                إلغاء
+              </button>
+            )}
+          </div>
         </div>
       )}
       {error && <div className="rst-error" style={{ marginBottom: 10 }}>⚠️ {error}</div>}
+      {message && <div className="qcp-pill success" style={{ marginBottom: 10 }}>{message}</div>}
       <div className="qcp-table-wrap">
         <table className="qcp-table">
           <thead>
@@ -386,30 +458,102 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
           </thead>
           <tbody>
             {accounts.map((a) => (
-              <tr key={a.code} style={{ opacity: a.active ? 1 : 0.5 }}>
+              <tr key={a.code} style={{ opacity: a.active ? 1 : 0.5, background: editing === a.code ? 'var(--qcp-accent-soft)' : undefined }}>
                 <td>{a.code}</td>
                 <td>{a.name}</td>
                 <td>{TYPE_LABELS[a.type] ?? a.type}</td>
-                <td>{a.isSystem ? 'حساب نظام' : a.active ? 'نشط' : 'موقوف'}</td>
+                <td>
+                  {a.isSystem ? 'حساب نظام' : a.active ? 'نشط' : 'موقوف'}
+                  {!!a.roles?.length && <span title="مربوط بحركات النظام (من ربط حسابات النظام)"> 🔗</span>}
+                </td>
                 <td>
                   {canManage && !a.isSystem && (
-                    <button
-                      className="qcp-btn qcp-btn-secondary"
-                      style={{ padding: '4px 8px' }}
-                      onClick={async () => {
-                        await window.api.ledger.setAccountActive(a.code, !a.active)
-                        refresh()
-                      }}
-                    >
-                      {a.active ? 'إيقاف' : 'تفعيل'}
-                    </button>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        className="qcp-btn qcp-btn-secondary"
+                        style={{ padding: '4px 8px' }}
+                        title="تعديل"
+                        onClick={() => {
+                          setEditing(a.code)
+                          setCode(a.code)
+                          setName(a.name)
+                          setType(a.type)
+                          setError(null)
+                          setMessage(null)
+                        }}
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        className="qcp-btn qcp-btn-secondary"
+                        style={{ padding: '4px 8px' }}
+                        onClick={async () => {
+                          await window.api.ledger.setAccountActive(a.code, !a.active)
+                          refresh()
+                        }}
+                      >
+                        {a.active ? 'إيقاف' : 'تفعيل'}
+                      </button>
+                      <button className="qcp-btn qcp-btn-secondary" style={{ padding: '4px 8px' }} title="مسح" onClick={() => remove(a)}>
+                        🗑
+                      </button>
+                    </div>
                   )}
                 </td>
               </tr>
             ))}
+            {!accounts.length && (
+              <tr>
+                <td colSpan={5} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                  مفيش حسابات
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
+
+      {custom && canManage && (
+        <div className="qcp-card" style={{ marginTop: 16 }}>
+          <button className="qcp-btn qcp-btn-secondary" onClick={() => setShowRoles((v) => !v)}>
+            🔗 ربط حسابات النظام {showRoles ? '▲' : '▼'}
+          </button>
+          <p style={{ fontSize: 12, color: 'var(--qcp-ink-faint)', margin: '8px 0 0' }}>
+            بيحدد كل نوع حركة في النظام (مبيعات، عملاء، مخزون، خزائن...) بيتسجّل على أنهي حساب في الشجرة. الافتراضي هو الحسابات الأساسية السبعة؛ لو أضفت حسابات فرعية (مثلًا 5100 خزينة) اربط الحركة بيها من هنا. الحساب المربوط مينفعش يتمسح.
+          </p>
+          {showRoles && (
+            <div className="qcp-table-wrap" style={{ marginTop: 10 }}>
+              <table className="qcp-table">
+                <thead>
+                  <tr>
+                    <th>الحركة</th>
+                    <th>الحساب المربوط</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {roles.map((r) => (
+                    <tr key={r.role}>
+                      <td>{r.label}</td>
+                      <td>
+                        <select className="qcp-select" style={{ width: 300 }} value={r.accountCode} onChange={(e) => mapRole(r.role, e.target.value)}>
+                          {accounts
+                            .filter((a) => a.type === r.type && (a.active || a.code === r.accountCode))
+                            .map((a) => (
+                              <option key={a.code} value={a.code}>
+                                {a.code} — {a.name}
+                              </option>
+                            ))}
+                          {!accounts.some((a) => a.code === r.accountCode) && <option value={r.accountCode}>{r.accountCode}</option>}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

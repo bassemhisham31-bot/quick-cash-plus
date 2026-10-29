@@ -33,3 +33,9 @@
 
 ## 2026-10-25 — تقسيم الشيك بالوحدة
 نُسخ: `services/restaurant.ts` (`moveOrderItemToGroup`)، `OrderScreen.tsx`، `restaurant.css`، `mutatingChannels.ts` (backend + frontend)، وأُعيد توليد `handlers.ts`. **`webApi.ts` اتعدّل يدويًا (سطر `moveItem` بس) لأن `gen-webapi.cjs` بيمسح `forgotPassword`/`resetPassword` المضافين يدويًا في جلسة 2026-10-24b — لا تشغّله قبل ما تتضاف لـ`prelude.txt`/`web-tail.txt`.** اتجرّب على DB مؤقتة + `npm test` 62/0. **لم يُنشر على السيرفر.**
+
+## 2026-10-30 — تعديلات ويب فقط: شجرة الحسابات المبسّطة + قنوات مطاعم إضافية ممنوعة في retail + استيراد أصناف من غير باركود
+- **شجرة الحسابات**: `services/accountsChart.ts` جديد (الحسابات + ربط الأدوار + التحويل للـ7 حسابات) و`services/ledger.ts` بقى بيسجّل القيود بالـ"دور" (`role`) مش بالكود الثابت (الشجرة القديمة سلوكها بالظبط زي ما كان) + migration 071 (`account_roles`) + قنوات `ledger:updateAccount/deleteAccount/listAccountRoles/setAccountRoles` في `handlers.ts` و`webApi.ts` و`mutatingChannels.ts` (**مضافة يدويًا — `port-handlers.cjs` و`gen-webapi.cjs` هيمسحوها**) + `AccountingPage.tsx` (تعديل/مسح/ربط) + endpoint `/internal/chart` و`deploy/simplify-chart.sh` + `scripts/chart-test.ts`. الأوفلاين مفيهوش حاجة من دي.
+- **`services/catalogImportExport.ts`**: الباركود بقى اختياري (باركود تلقائي لو فاضي، ومطابقة بالاسم عشان إعادة الاستيراد ما تكرّرش) و`nextAutoBarcode` اتصدّرت من `catalog.ts`. **`port-catalog-import.cjs` هيرجّع شرط "الباركود مطلوب" لو اتشغّل** — لازم تتعدّل قاعدة الأوفلاين نفسها أو يتعاد تطبيق التعديل.
+- **`services/edition.ts`**: قنوات `settings:getRestaurant/updateRestaurant/*DeliveryDriver/*Captain` و`print:kitchenTicket/eventBooking` بقت ممنوعة في retail (الفواتير والطباعة بتقراها جوه السيرفر مباشرة). `PosPage` مبقاش بينادي `listDeliveryDrivers` إلا لو التوصيل مسموح.
+

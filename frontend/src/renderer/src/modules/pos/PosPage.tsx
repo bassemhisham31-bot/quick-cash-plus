@@ -148,7 +148,6 @@ export function PosPage(): JSX.Element {
       const defaultId = list.find((w) => w.isDefault)?.id ?? list[0]?.id ?? null
       setWarehouseId(defaultId)
     })
-    window.api.settings.listDeliveryDrivers().then(setDrivers)
   }, [])
 
   // الطاولات ومناطق التوصيل مش موجودة في النسخ اللي من غير مطاعم (السيرفر بيرفض قنواتها) — منناديهاش أصلًا هناك
@@ -163,8 +162,13 @@ export function PosPage(): JSX.Element {
     }
   }, [tablesAllowed])
   useEffect(() => {
-    if (deliveryAllowed) window.api.delivery.listZones().then(setZones).catch(() => {})
-    else setZones([])
+    if (deliveryAllowed) {
+      window.api.delivery.listZones().then(setZones).catch(() => {})
+      window.api.settings.listDeliveryDrivers().then(setDrivers).catch(() => {})
+    } else {
+      setZones([])
+      setDrivers([])
+    }
   }, [deliveryAllowed])
 
   useEffect(() => {

@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs'
 import { getDb } from '../db'
 import { getDefaultWarehouseId } from '../db/seed'
+import { nextAutoBarcode } from './catalog'
 import type { ExportResult, ProductImportResult } from '../../shared/types'
 
 const HEADERS = {
@@ -165,10 +166,11 @@ export async function importProductsFromExcel(dataBase64: string): Promise<Produ
       const key = (Object.keys(HEADERS) as Array<keyof typeof HEADERS>).find((k) => HEADERS[k] === text)
       if (key) colIndex[key] = colNumber
     })
-    if (!colIndex.name || !colIndex.barcode) {
+    // الباركود اختياري: عمود "الاسم" هو الوحيد المطلوب (الصف اللي من غير باركود بيتاخد له باركود تلقائي زي شاشة إضافة صنف)
+    if (!colIndex.name) {
       return {
         ok: false,
-        error: 'لازم يكون فيه عمودين على الأقل: "الاسم" و"الباركود" — استخدم زرار تحميل القالب',
+        error: 'لازم يكون فيه عمود "الاسم" على الأقل — استخدم زرار تحميل القالب',
         created: 0,
         updated: 0,
         rowErrors: []
@@ -179,6 +181,8 @@ export async function importProductsFromExcel(dataBase64: string): Promise<Produ
     const warehouseId = await getDefaultWarehouseId(db)
     const categoryCache = new Map<string, number>()
     const unitCache = new Map<string, number>()
+    /** أصناف اتضافت في الاستيراد ده من صفوف من غير باركود — عشان صف تاني بنفس الاسم في نفس الملف ما يعدّلهاش بدل ما يضيف صنف */
+    const createdThisRun = new Set<number>()
 
     let created = 0
     let updated = 0
@@ -187,12 +191,11 @@ export async function importProductsFromExcel(dataBase64: string): Promise<Produ
     for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
       const row = sheet.getRow(rowNumber)
       const name = cellText(row, colIndex.name)
-      const barcode = cellText(row, colIndex.barcode)
-      if (!name && !barcode) continue
+      const barcodeCell = colIndex.barcode ? cellText(row, colIndex.barcode) : ''
+      if (!name && !barcodeCell) continue
 
       try {
         if (!name) throw new Error('اسم الصنف مطلوب')
-        if (!barcode) throw new Error('الباركود مطلوب')
 
         const categoryId = colIndex.category ? await resolveCategoryId(cellText(row, colIndex.category), categoryCache) : null
         const unitId = colIndex.unit ? await resolveUnitId(cellText(row, colIndex.unit), unitCache) : null
@@ -206,8 +209,14 @@ export async function importProductsFromExcel(dataBase64: string): Promise<Produ
         const expiryDate = colIndex.expiryDate ? cellText(row, colIndex.expiryDate) || null : null
         const serialNumber = colIndex.serialNumber ? cellText(row, colIndex.serialNumber) || null : null
 
-        const existingRs = await db.execute({ sql: 'SELECT id FROM products WHERE barcode = ?', args: [barcode] })
-        const existing = existingRs.rows[0] as any
+        // الباركود موجود: بنطابق بيه زي الأول. فاضي: بنطابق بالاسم (عشان إعادة استيراد نفس الملف ما تكرّرش الأصناف)، ولو مفيش صنف بالاسم ده بنضيف صنف جديد بباركود تلقائي
+        let existing: any
+        if (barcodeCell) {
+          existing = (await db.execute({ sql: 'SELECT id FROM products WHERE barcode = ?', args: [barcodeCell] })).rows[0]
+        } else {
+          const byName = await db.execute({ sql: 'SELECT id FROM products WHERE name = ? AND deleted_at IS NULL ORDER BY id', args: [name] })
+          existing = (byName.rows as any[]).find((r) => !createdThisRun.has(Number(r.id)))
+        }
 
         if (existing) {
           const productId = Number(existing.id)
@@ -261,6 +270,7 @@ export async function importProductsFromExcel(dataBase64: string): Promise<Produ
           }
           updated++
         } else {
+          const barcode = barcodeCell || (await nextAutoBarcode())
           const info = await db.execute({
             sql: `INSERT INTO products
                     (name, barcode, category_id, unit_id, cost_price, retail_price, reorder_point, expiry_date, serial_number)
@@ -268,6 +278,7 @@ export async function importProductsFromExcel(dataBase64: string): Promise<Produ
             args: [name, barcode, categoryId, unitId, costPrice, retailPrice, reorderPoint, expiryDate, serialNumber]
           })
           const productId = Number(info.lastInsertRowid)
+          if (!barcodeCell) createdThisRun.add(productId)
           const tierPrices: Array<[string, number | null]> = [
             ['wholesale', wholesalePrice],
             ['wholesale2', wholesale2Price],

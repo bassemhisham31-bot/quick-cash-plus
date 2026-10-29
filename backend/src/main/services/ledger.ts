@@ -1,98 +1,10 @@
 import { getDb } from '../db'
 import { currentBranchId } from './branchScope'
 import { loadTreasuryRows, resolveTreasury } from './treasuries'
+import { ensureAccounts, listAccounts, loadResolver, type AccountResolver, type AccountRole, type AccountRow, type AccountType } from './accountsChart'
 import type { ReportResult } from '../../shared/types'
 
-/* ------------------------------ شجرة الحسابات ------------------------------ */
-
-export type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'cogs' | 'expense'
-
-export interface AccountRow {
-  code: string
-  name: string
-  type: AccountType
-  isSystem: boolean
-  active: boolean
-}
-
-export const AR = '1200'
-export const INVENTORY = '1300'
-export const AP = '2100'
-export const VAT = '2200'
-export const TIPS = '2300'
-export const EVENT_DEPOSITS = '2400'
-export const EVENT_REVENUE = '4600'
-export const OPENING_EQUITY = '3100'
-export const SALES = '4100'
-export const SALES_RETURNS = '4200'
-export const SALES_DISCOUNTS = '4300'
-export const DELIVERY_REVENUE = '4400'
-export const SERVICE_REVENUE = '4500'
-export const CASH_SURPLUS = '4800'
-export const OTHER_INCOME = '4900'
-export const COGS = '5100'
-export const CASH_SHORTAGE = '6800'
-export const MISC_EXPENSE = '6900'
-
-const SYSTEM_ACCOUNTS: [string, string, AccountType][] = [
-  [AR, 'العملاء (المدينون)', 'asset'],
-  [INVENTORY, 'المخزون', 'asset'],
-  [AP, 'الموردون (الدائنون)', 'liability'],
-  [VAT, 'ضريبة القيمة المضافة المستحقة', 'liability'],
-  [TIPS, 'إكراميات مستحقة للعاملين', 'liability'],
-  [EVENT_DEPOSITS, 'عربونات ومقدمات حجوزات المناسبات', 'liability'],
-  [OPENING_EQUITY, 'رأس المال والأرصدة الافتتاحية', 'equity'],
-  [SALES, 'المبيعات', 'revenue'],
-  [SALES_RETURNS, 'مرتجعات المبيعات', 'revenue'],
-  [SALES_DISCOUNTS, 'خصومات المبيعات', 'revenue'],
-  [DELIVERY_REVENUE, 'إيراد رسوم التوصيل', 'revenue'],
-  [SERVICE_REVENUE, 'إيراد رسوم الخدمة', 'revenue'],
-  [EVENT_REVENUE, 'إيراد حجوزات المناسبات', 'revenue'],
-  [CASH_SURPLUS, 'زيادة الخزينة', 'revenue'],
-  [OTHER_INCOME, 'إيرادات أخرى', 'revenue'],
-  [COGS, 'تكلفة البضاعة المباعة', 'cogs'],
-  [CASH_SHORTAGE, 'عجز الخزينة', 'expense'],
-  [MISC_EXPENSE, 'مصروفات متنوعة', 'expense']
-]
-
-export const treasuryCode = (id: number): string => String(1100 + id)
-export const expenseCategoryCode = (id: number): string => String(6000 + id)
-
-/** بيضمن إن حسابات النظام وحسابات الخزائن وتصنيفات المصروفات موجودة (وبيحدّث الأسماء لو اتغيّرت) */
-export async function ensureAccounts(): Promise<void> {
-  const db = getDb()
-  const upsert = async (code: string, name: string, type: AccountType, system: number): Promise<void> => {
-    await db.execute({
-      sql: `INSERT INTO accounts (code, name, type, is_system) VALUES (?, ?, ?, ?)
-            ON CONFLICT(code) DO UPDATE SET name = excluded.name WHERE is_system = 1`,
-      args: [code, name, type, system]
-    })
-  }
-  for (const [code, name, type] of SYSTEM_ACCOUNTS) await upsert(code, name, type, 1)
-  const treasuries = await db.execute('SELECT id, name FROM treasuries WHERE deleted_at IS NULL')
-  for (const t of treasuries.rows as any[]) await upsert(treasuryCode(Number(t.id)), `خزينة: ${t.name}`, 'asset', 1)
-  const cats = await db.execute('SELECT id, name FROM expense_categories')
-  for (const c of cats.rows as any[]) await upsert(expenseCategoryCode(Number(c.id)), `مصروف: ${c.name}`, 'expense', 1)
-}
-
-export async function listAccounts(): Promise<AccountRow[]> {
-  await ensureAccounts()
-  const rs = await getDb().execute('SELECT code, name, type, is_system, active FROM accounts ORDER BY code')
-  return (rs.rows as any[]).map((r) => ({ code: r.code, name: r.name, type: r.type, isSystem: !!r.is_system, active: !!r.active }))
-}
-
-export async function createAccount(input: { code: string; name: string; type: AccountType }): Promise<void> {
-  const code = input.code.trim()
-  if (!/^\d{3,10}$/.test(code)) throw new Error('كود الحساب أرقام فقط (3 إلى 10 أرقام)')
-  if (!input.name.trim()) throw new Error('اسم الحساب مطلوب')
-  const exists = await getDb().execute({ sql: 'SELECT 1 FROM accounts WHERE code = ?', args: [code] })
-  if (exists.rows.length) throw new Error('الكود ده مستخدم قبل كده')
-  await getDb().execute({ sql: 'INSERT INTO accounts (code, name, type, is_system) VALUES (?, ?, ?, 0)', args: [code, input.name.trim(), input.type] })
-}
-
-export async function setAccountActive(code: string, active: boolean): Promise<void> {
-  await getDb().execute({ sql: 'UPDATE accounts SET active = ? WHERE code = ? AND is_system = 0', args: [active ? 1 : 0, code] })
-}
+export type { AccountRow, AccountType }
 
 /* ------------------------------ القيود ------------------------------ */
 
@@ -101,6 +13,8 @@ export interface LedgerLine {
   debit: number
   credit: number
   memo?: string
+  /** دور الحساب في النظام (عملاء/مبيعات/خزينة...) — بيتحسب بيه رصيد أول المدة حتى لو أكتر من دور مربوط بنفس الحساب */
+  role?: AccountRole
 }
 
 export interface LedgerEntry {
@@ -117,15 +31,15 @@ const r2 = (v: number): number => Math.round(v * 100) / 100
 const branchOf = (r: any): number | undefined => (r?.branch_id != null && Number.isFinite(Number(r.branch_id)) ? Number(r.branch_id) : undefined)
 
 /** بيحوّل أجزاء قيد لسطور متوازنة (فرق التقريب بيتحط على الحساب المحدد) */
-function balanced(lines: LedgerLine[], plugCode: string): LedgerLine[] {
+function balanced(lines: LedgerLine[], plugRole: AccountRole, R: AccountResolver): LedgerLine[] {
   const out = lines.filter((l) => r2(l.debit) !== 0 || r2(l.credit) !== 0).map((l) => ({ ...l, debit: r2(l.debit), credit: r2(l.credit) }))
   const diff = r2(out.reduce((s, l) => s + l.debit - l.credit, 0))
   if (diff !== 0) {
-    const plug = out.find((l) => l.code === plugCode)
+    const plug = out.find((l) => l.role === plugRole)
     if (plug) {
       if (diff > 0) plug.credit = r2(plug.credit + diff)
       else plug.debit = r2(plug.debit - diff)
-    } else out.push({ code: plugCode, debit: diff < 0 ? -diff : 0, credit: diff > 0 ? diff : 0 })
+    } else out.push({ role: plugRole, code: R.code(plugRole), debit: diff < 0 ? -diff : 0, credit: diff > 0 ? diff : 0 })
   }
   return out
 }
@@ -134,12 +48,24 @@ function balanced(lines: LedgerLine[], plugCode: string): LedgerLine[] {
 export async function buildLedger(): Promise<LedgerEntry[]> {
   await ensureAccounts()
   const db = getDb()
+  const R = await loadResolver()
   const treasuries = await loadTreasuryRows()
   const entries: LedgerEntry[] = []
-  const tCode = (method: string | null, explicitId?: number | null, branchId?: number | null): string => {
+
+  /** سطر على حساب الدور ده — الكود بيتحدد من وضع الشجرة (قديمة: أكواد ثابتة / مبسّطة: الحساب المربوط) */
+  const L = (role: AccountRole, debit: number, credit: number, memo?: string): LedgerLine => ({ role, code: R.code(role), debit, credit, ...(memo !== undefined ? { memo } : {}) })
+  /** سطر خزينة (بطريقة الدفع أو بخزينة محددة) */
+  const T = (method: string | null, explicitId: number | null | undefined, branchId: number | null | undefined, debit: number, credit: number, memo?: string): LedgerLine => {
     const id = resolveTreasury(treasuries, method, explicitId, branchId)
-    return id != null ? treasuryCode(id) : treasuryCode(treasuries[0]?.id ?? 1)
+    return TL(id != null ? id : (treasuries[0]?.id ?? 1), debit, credit, memo)
   }
+  const TL = (treasuryId: number, debit: number, credit: number, memo?: string): LedgerLine => ({
+    role: 'treasury',
+    code: R.treasury(treasuryId),
+    debit,
+    credit,
+    ...(memo !== undefined ? { memo } : {})
+  })
 
   // ---------- المبيعات + تكلفتها ----------
   const sales = await db.execute(
@@ -166,20 +92,20 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
     const cashPart = Math.max(0, paid - settled)
     const arPart = Math.max(0, total - paid)
     const lines: LedgerLine[] = [
-      { code: tCode(r.payment_method, null, Number(r.branch_id)), debit: cashPart, credit: 0 },
-      { code: AR, debit: arPart, credit: 0, memo: r.customerName },
-      { code: AP, debit: settled, credit: 0, memo: 'تسوية مع مورد مرتبط' },
-      { code: SALES_DISCOUNTS, debit: itemsDiscount + invoiceDiscount + redeem, credit: 0 },
-      { code: SALES, debit: 0, credit: gross },
-      { code: VAT, debit: 0, credit: tax },
-      { code: SERVICE_REVENUE, debit: 0, credit: service },
-      { code: DELIVERY_REVENUE, debit: 0, credit: delivery },
-      { code: COGS, debit: Number(r.cogs), credit: 0 },
-      { code: INVENTORY, debit: 0, credit: Number(r.cogs) },
-      { code: tCode(r.payment_method, null, Number(r.branch_id)), debit: Number(r.tip_amount) || 0, credit: 0, memo: 'إكرامية' },
-      { code: TIPS, debit: 0, credit: Number(r.tip_amount) || 0 }
+      T(r.payment_method, null, Number(r.branch_id), cashPart, 0),
+      L('ar', arPart, 0, r.customerName),
+      L('ap', settled, 0, 'تسوية مع مورد مرتبط'),
+      L('sales_discounts', itemsDiscount + invoiceDiscount + redeem, 0),
+      L('sales', 0, gross),
+      L('vat', 0, tax),
+      L('service_revenue', 0, service),
+      L('delivery_revenue', 0, delivery),
+      L('cogs', Number(r.cogs), 0),
+      L('inventory', 0, Number(r.cogs)),
+      T(r.payment_method, null, Number(r.branch_id), Number(r.tip_amount) || 0, 0, 'إكرامية'),
+      L('tips', 0, Number(r.tip_amount) || 0)
     ]
-    entries.push({ branchId: branchOf(r), date: r.created_at, ref: r.number, description: `فاتورة بيع — ${r.customerName}`, source: 'مبيعات', lines: balanced(lines, SALES) })
+    entries.push({ branchId: branchOf(r), date: r.created_at, ref: r.number, description: `فاتورة بيع — ${r.customerName}`, source: 'مبيعات', lines: balanced(lines, 'sales', R) })
   }
 
   // ---------- حجوزات المناسبات: الدفعات التزام (عربون) لحد ما الحجز يتنفّذ فيتحوّل لإيراد ----------
@@ -196,10 +122,11 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       source: 'حجوزات',
       lines: balanced(
         [
-          { code: tCode(r.method), debit: amt > 0 ? amt : 0, credit: amt < 0 ? -amt : 0 },
-          { code: EVENT_DEPOSITS, debit: amt < 0 ? -amt : 0, credit: amt > 0 ? amt : 0 }
+          T(r.method, undefined, undefined, amt > 0 ? amt : 0, amt < 0 ? -amt : 0),
+          L('event_deposits', amt < 0 ? -amt : 0, amt > 0 ? amt : 0)
         ],
-        EVENT_DEPOSITS
+        'event_deposits',
+        R
       )
     })
   }
@@ -216,13 +143,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       ref: r.number,
       description: `تنفيذ حجز مناسبة — ${r.customer_name}`,
       source: 'حجوزات',
-      lines: balanced(
-        [
-          { code: EVENT_DEPOSITS, debit: paid, credit: 0 },
-          { code: EVENT_REVENUE, debit: 0, credit: paid }
-        ],
-        EVENT_REVENUE
-      )
+      lines: balanced([L('event_deposits', paid, 0), L('event_revenue', 0, paid)], 'event_revenue', R)
     })
   }
 
@@ -243,12 +164,13 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       source: 'مرتجع مبيعات',
       lines: balanced(
         [
-          { code: SALES_RETURNS, debit: Number(r.amount), credit: 0 },
-          { code: credit ? AR : tCode(r.payment_method, null, Number(r.branch_id)), debit: 0, credit: Number(r.amount) },
-          { code: INVENTORY, debit: Number(r.cogs), credit: 0 },
-          { code: COGS, debit: 0, credit: Number(r.cogs) }
+          L('sales_returns', Number(r.amount), 0),
+          credit ? L('ar', 0, Number(r.amount)) : T(r.payment_method, null, Number(r.branch_id), 0, Number(r.amount)),
+          L('inventory', Number(r.cogs), 0),
+          L('cogs', 0, Number(r.cogs))
         ],
-        SALES_RETURNS
+        'sales_returns',
+        R
       )
     })
   }
@@ -269,11 +191,12 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       source: 'مشتريات',
       lines: balanced(
         [
-          { code: INVENTORY, debit: total, credit: 0 },
-          { code: tCode(r.payment_method, null, Number(r.branch_id)), debit: 0, credit: paidNow },
-          { code: AP, debit: 0, credit: total - paidNow, memo: r.vendorName ?? '' }
+          L('inventory', total, 0),
+          T(r.payment_method, null, Number(r.branch_id), 0, paidNow),
+          L('ap', 0, total - paidNow, r.vendorName ?? '')
         ],
-        INVENTORY
+        'inventory',
+        R
       )
     })
   }
@@ -291,10 +214,11 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       source: 'مرتجع مشتريات',
       lines: balanced(
         [
-          { code: credit ? AP : tCode(r.payment_method, null, Number(r.branch_id)), debit: Number(r.amount), credit: 0 },
-          { code: INVENTORY, debit: 0, credit: Number(r.amount) }
+          credit ? L('ap', Number(r.amount), 0) : T(r.payment_method, null, Number(r.branch_id), Number(r.amount), 0),
+          L('inventory', 0, Number(r.amount))
         ],
-        INVENTORY
+        'inventory',
+        R
       )
     })
   }
@@ -307,15 +231,15 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
   )
   for (const r of payments.rows as any[]) {
     const isCustomer = r.party_type === 'customer'
-    const cash = tCode(r.method, r.treasury_id != null ? Number(r.treasury_id) : null, Number(r.branch_id))
+    const treasuryId = r.treasury_id != null ? Number(r.treasury_id) : null
     entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `P-${r.id}`,
       description: `${isCustomer ? 'تحصيل من' : 'سداد إلى'} ${r.partyName}`,
       source: isCustomer ? 'تحصيل عميل' : 'سداد مورد',
       lines: isCustomer
-        ? [{ code: cash, debit: Number(r.amount), credit: 0 }, { code: AR, debit: 0, credit: Number(r.amount), memo: r.partyName }]
-        : [{ code: AP, debit: Number(r.amount), credit: 0, memo: r.partyName }, { code: cash, debit: 0, credit: Number(r.amount) }]
+        ? [T(r.method, treasuryId, Number(r.branch_id), Number(r.amount), 0), L('ar', 0, Number(r.amount), r.partyName)]
+        : [L('ap', Number(r.amount), 0, r.partyName), T(r.method, treasuryId, Number(r.branch_id), 0, Number(r.amount))]
     })
   }
 
@@ -325,14 +249,15 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
      FROM expenses e LEFT JOIN expense_categories ec ON ec.id = e.category_id WHERE e.deleted_at IS NULL`
   )
   for (const r of expenses.rows as any[]) {
+    const catId = r.category_id != null ? Number(r.category_id) : null
     entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `E-${r.id}`,
       description: `${r.categoryName ?? 'مصروف'}${r.note ? ` — ${r.note}` : ''}`,
       source: 'مصروف',
       lines: [
-        { code: r.category_id != null ? expenseCategoryCode(Number(r.category_id)) : MISC_EXPENSE, debit: Number(r.amount), credit: 0 },
-        { code: tCode(r.method, r.treasury_id != null ? Number(r.treasury_id) : null, Number(r.branch_id)), debit: 0, credit: Number(r.amount) }
+        { role: catId != null ? 'expense' : 'misc_expense', code: R.expense(catId), debit: Number(r.amount), credit: 0 },
+        T(r.method, r.treasury_id != null ? Number(r.treasury_id) : null, Number(r.branch_id), 0, Number(r.amount))
       ]
     })
   }
@@ -347,10 +272,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       ref: `RV-${String(r.id).padStart(6, '0')}`,
       description: `${r.party_name ?? 'إيراد'}${r.note ? ` — ${r.note}` : ''}`,
       source: 'سند قبض',
-      lines: [
-        { code: treasuryCode(Number(r.treasury_id)), debit: Number(r.amount), credit: 0 },
-        { code: OTHER_INCOME, debit: 0, credit: Number(r.amount) }
-      ]
+      lines: [TL(Number(r.treasury_id), Number(r.amount), 0), L('other_income', 0, Number(r.amount))]
     })
   }
 
@@ -363,26 +285,20 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       ref: `T-${r.id}`,
       description: 'تحويل بين الخزائن',
       source: 'تحويل',
-      lines: [
-        { code: treasuryCode(Number(r.to_treasury_id)), debit: Number(r.amount), credit: 0 },
-        { code: treasuryCode(Number(r.from_treasury_id)), debit: 0, credit: Number(r.amount) }
-      ]
+      lines: [TL(Number(r.to_treasury_id), Number(r.amount), 0), TL(Number(r.from_treasury_id), 0, Number(r.amount))]
     })
   }
 
   const diffs = await db.execute('SELECT session_id, created_at, difference, treasury_id FROM cash_differences WHERE difference != 0')
   for (const r of diffs.rows as any[]) {
     const diff = Number(r.difference)
-    const t = treasuryCode(Number(r.treasury_id))
+    const tid = Number(r.treasury_id)
     entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `S-${r.session_id}`,
       description: `فرق جرد الوردية #${r.session_id} (${diff < 0 ? 'عجز' : 'زيادة'})`,
       source: 'فرق خزينة',
-      lines:
-        diff < 0
-          ? [{ code: CASH_SHORTAGE, debit: -diff, credit: 0 }, { code: t, debit: 0, credit: -diff }]
-          : [{ code: t, debit: diff, credit: 0 }, { code: CASH_SURPLUS, debit: 0, credit: diff }]
+      lines: diff < 0 ? [L('cash_shortage', -diff, 0), TL(tid, 0, -diff)] : [TL(tid, diff, 0), L('cash_surplus', 0, diff)]
     })
   }
 
@@ -404,27 +320,28 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
 
   // ---------- أرصدة أول المدة (بتُحسب من الأرصدة الحالية عشان الأرصدة السابقة لتشغيل النظام ما تضيعش) ----------
   const generated = entries.filter((e) => e.source !== 'قيد يدوي')
-  const net = (code: string): number => generated.reduce((s, e) => s + e.lines.filter((l) => l.code === code).reduce((a, l) => a + l.debit - l.credit, 0), 0)
+  // بالدور مش بالكود: في الشجرة المبسّطة أكتر من دور (عملاء/مخزون/خزائن) ممكن يتسجّلوا على نفس الحساب
+  const net = (role: AccountRole): number => generated.reduce((s, e) => s + e.lines.filter((l) => l.role === role).reduce((a, l) => a + l.debit - l.credit, 0), 0)
   const minDate = generated.reduce((m, e) => (e.date < m ? e.date : m), '9999-12-31 00:00:00')
   const openDate = minDate === '9999-12-31 00:00:00' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : minDate
 
   const opening: LedgerLine[] = []
   for (const t of treasuries) {
-    if (t.openingBalance !== 0) opening.push({ code: treasuryCode(t.id), debit: t.openingBalance > 0 ? t.openingBalance : 0, credit: t.openingBalance < 0 ? -t.openingBalance : 0 })
+    if (t.openingBalance !== 0) opening.push(TL(t.id, t.openingBalance > 0 ? t.openingBalance : 0, t.openingBalance < 0 ? -t.openingBalance : 0))
   }
   const custSum = Number(((await db.execute('SELECT COALESCE(SUM(balance), 0) AS s FROM customers WHERE deleted_at IS NULL')).rows[0] as any).s)
   const vendSum = Number(((await db.execute('SELECT COALESCE(SUM(balance), 0) AS s FROM vendors WHERE deleted_at IS NULL')).rows[0] as any).s)
   const stockVal = Number(
     ((await db.execute('SELECT COALESCE(SUM(s.quantity * p.cost_price), 0) AS s FROM stock s JOIN products p ON p.id = s.product_id WHERE p.deleted_at IS NULL')).rows[0] as any).s
   )
-  const arGap = r2(custSum - net(AR))
-  const apGap = r2(vendSum + net(AP)) // رصيد الموردين دائن: balance موجب = علينا
-  const invGap = r2(stockVal - net(INVENTORY))
-  if (arGap !== 0) opening.push({ code: AR, debit: arGap > 0 ? arGap : 0, credit: arGap < 0 ? -arGap : 0, memo: 'فرق أرصدة العملاء الافتتاحية' })
-  if (apGap !== 0) opening.push({ code: AP, debit: apGap < 0 ? -apGap : 0, credit: apGap > 0 ? apGap : 0, memo: 'فرق أرصدة الموردين الافتتاحية' })
-  if (invGap !== 0) opening.push({ code: INVENTORY, debit: invGap > 0 ? invGap : 0, credit: invGap < 0 ? -invGap : 0, memo: 'مخزون أول المدة وتسويات الجرد' })
+  const arGap = r2(custSum - net('ar'))
+  const apGap = r2(vendSum + net('ap')) // رصيد الموردين دائن: balance موجب = علينا
+  const invGap = r2(stockVal - net('inventory'))
+  if (arGap !== 0) opening.push(L('ar', arGap > 0 ? arGap : 0, arGap < 0 ? -arGap : 0, 'فرق أرصدة العملاء الافتتاحية'))
+  if (apGap !== 0) opening.push(L('ap', apGap < 0 ? -apGap : 0, apGap > 0 ? apGap : 0, 'فرق أرصدة الموردين الافتتاحية'))
+  if (invGap !== 0) opening.push(L('inventory', invGap > 0 ? invGap : 0, invGap < 0 ? -invGap : 0, 'مخزون أول المدة وتسويات الجرد'))
   if (opening.length) {
-    entries.push({ date: openDate, ref: 'OPEN', description: 'أرصدة أول المدة (خزائن، عملاء، موردين، مخزون)', source: 'رصيد افتتاحي', lines: balanced(opening, OPENING_EQUITY) })
+    entries.push({ date: openDate, ref: 'OPEN', description: 'أرصدة أول المدة (خزائن، عملاء، موردين، مخزون)', source: 'رصيد افتتاحي', lines: balanced(opening, 'opening_equity', R) })
   }
 
   entries.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))

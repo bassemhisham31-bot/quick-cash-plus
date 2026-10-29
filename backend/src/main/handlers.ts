@@ -249,7 +249,8 @@ import {
   updateTreasury
 } from './services/treasuries'
 import type { TreasuryInput, TreasuryTransferInput, VoucherInput, EventPackageInput, EventBookingInput, EventBookingStatus } from '../shared/types'
-import { createAccount, createManualEntry, deleteManualEntry, listAccounts, listManualEntries, setAccountActive, type AccountType, type ManualEntryInput } from './services/ledger'
+import { createManualEntry, deleteManualEntry, listManualEntries, type ManualEntryInput } from './services/ledger'
+import { createAccount, deleteAccount, listAccountRoles, listAccounts, setAccountActive, setAccountRoles, updateAccount, type AccountType } from './services/accountsChart'
 import { ACCOUNTING_REPORTS, runAccountingReport, type AccountingReportFilter, type AccountingReportType } from './services/accountingReports'
 import { deleteHeldInvoice, getHeldInvoice, holdInvoice, listHeldInvoices } from './services/heldInvoices'
 import type { HeldInvoiceInput } from '../shared/types'
@@ -570,6 +571,10 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'ledger:listAccounts': () => listAccounts(),
     'ledger:createAccount': (input: { code: string; name: string; type: AccountType }) => createAccount(input),
     'ledger:setAccountActive': (code: string, active: boolean) => setAccountActive(code, active),
+    'ledger:updateAccount': (code: string, input: { code?: string; name: string; type: AccountType }) => updateAccount(code, input),
+    'ledger:deleteAccount': (code: string) => deleteAccount(code),
+    'ledger:listAccountRoles': () => listAccountRoles(),
+    'ledger:setAccountRoles': (input: Record<string, string>) => setAccountRoles(input),
     'ledger:listEntries': () => listManualEntries(),
     'ledger:createEntry': (input: ManualEntryInput, userId: number) => createManualEntry(input, userId),
     'ledger:deleteEntry': (id: number) => deleteManualEntry(id),

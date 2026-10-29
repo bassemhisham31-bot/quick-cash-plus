@@ -8,8 +8,9 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/self-test.ts && tsx scripts/branches-test.ts",
-    "test:branches": "tsx scripts/branches-test.ts"
+    "test": "tsx scripts/self-test.ts && tsx scripts/branches-test.ts && tsx scripts/chart-test.ts",
+    "test:branches": "tsx scripts/branches-test.ts",
+    "test:chart": "tsx scripts/chart-test.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.14.0",

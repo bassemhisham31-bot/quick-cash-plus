@@ -2866,6 +2866,7 @@ const CURRENCY_PRESETS: { code: string; symbol: string; label: string }[] = [
 
 function PosUiSection(): JSX.Element {
   const { t } = useTranslation()
+  const restaurantLicensed = !useAppStore((s) => s.disabledFeatures).includes('restaurant')
   const [settings, setSettings] = useState<PosUiSettings | null>(null)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
@@ -2980,7 +2981,7 @@ function PosUiSection(): JSX.Element {
       </div>
       <ToggleRow
         title="السماح بالبيع بالرصيد السالب"
-        hint="يسمح ببيع صنف رصيده صفر أو أقل من الكمية المطلوبة في البيع العادي (الرصيد بيروح بالسالب وبيتصلّح بعدين بفاتورة شراء أو إذن إضافة). المطاعم بتبيع بالسالب دايمًا."
+        hint={`يسمح ببيع صنف رصيده صفر أو أقل من الكمية المطلوبة في البيع العادي (الرصيد بيروح بالسالب وبيتصلّح بعدين بفاتورة شراء أو إذن إضافة).${restaurantLicensed ? ' المطاعم بتبيع بالسالب دايمًا.' : ''}`}
         checked={settings.allowNegativeStock}
         onChange={(v) => handleSave({ ...settings, allowNegativeStock: v })}
       />

@@ -11,6 +11,8 @@ import { statfsSync } from 'fs'
 import { getDb, getDbPath } from '../main/db'
 import { getWebLicenseStatus, setLicenseFromOwner, webLicenseBlockReason } from '../main/services/licenseWeb'
 import { editionBlockReason, getEdition } from '../main/services/edition'
+import { convertToBaseChart, planBaseChart } from '../main/services/accountsChart'
+import { runLocalBackup } from '../main/services/backup'
 import { branchScope } from '../main/services/branchScope'
 import { resolveBranchScope } from '../main/services/branches'
 import { timingSafeEqual } from 'crypto'
@@ -104,20 +106,52 @@ export function createApp(): express.Express {
    * localhost فقط + سر QCP_INTERNAL_SECRET من .env. Caddy بيوجّه /api و/ws بس، فالمسار ده مش متاح من الإنترنت أصلًا.
    * من غير plan في الجسم بيرجّع الحالة الحالية بس.
    */
-  app.post('/internal/license', async (req, res) => {
+  const internalAllowed = (req: express.Request): boolean => {
     const secret = process.env.QCP_INTERNAL_SECRET ?? ''
     const given = String(req.headers['x-qcp-internal'] ?? '')
     const ip = req.socket.remoteAddress ?? ''
     const loopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
     const a = Buffer.from(given)
     const b = Buffer.from(secret)
-    if (!secret || !loopback || a.length !== b.length || !timingSafeEqual(a, b)) {
+    return !!secret && loopback && a.length === b.length && timingSafeEqual(a, b)
+  }
+
+  app.post('/internal/license', async (req, res) => {
+    if (!internalAllowed(req)) {
       res.status(404).end()
       return
     }
     try {
       const status = req.body?.plan ? await setLicenseFromOwner(req.body) : await getWebLicenseStatus()
       res.json({ ok: true, status })
+    } catch (err: any) {
+      res.status(400).json({ ok: false, error: err?.message ?? 'خطأ' })
+    }
+  })
+
+  /**
+   * تحويل شجرة الحسابات للنظام المبسّط (7 حسابات أساسية) بأمر المالك — deploy/simplify-chart.sh، نفس حماية /internal/license.
+   * بيشتغل جوه السيرفر الحي (مفيش اتصال تاني بملف SQLite). action: plan (يعرض اللي هيتحذف من غير أي تغيير) | apply (نسخة احتياطية الأول ثم التحويل).
+   */
+  app.post('/internal/chart', async (req, res) => {
+    if (!internalAllowed(req)) {
+      res.status(404).end()
+      return
+    }
+    try {
+      const action = String(req.body?.action ?? 'plan')
+      if (action === 'plan') {
+        res.json({ ok: true, plan: await planBaseChart() })
+        return
+      }
+      if (action !== 'apply') throw new Error('action لازم يكون plan أو apply')
+      const plan = await planBaseChart()
+      if (plan.alreadyConverted) throw new Error('الشجرة اتحوّلت للنظام المبسّط قبل كده')
+      const backup = await runLocalBackup()
+      if (!backup.ok) throw new Error(`فشلت النسخة الاحتياطية قبل التحويل: ${backup.error}`)
+      await convertToBaseChart()
+      broadcastChanged('ledger:convertChart')
+      res.json({ ok: true, plan, backup: backup.filePath })
     } catch (err: any) {
       res.status(400).json({ ok: false, error: err?.message ?? 'خطأ' })
     }

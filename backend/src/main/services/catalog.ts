@@ -71,7 +71,7 @@ export async function createWarehouse(name: string): Promise<Warehouse> {
   return { id: Number(rs.lastInsertRowid), name, isDefault: false, branchId }
 }
 
-async function nextAutoBarcode(): Promise<string> {
+export async function nextAutoBarcode(): Promise<string> {
   const db = getDb()
   const rs = await db.execute(
     "SELECT MAX(CAST(barcode AS INTEGER)) AS m FROM products WHERE barcode GLOB '[0-9]*'"

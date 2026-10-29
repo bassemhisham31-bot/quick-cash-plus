@@ -42,6 +42,20 @@ const RETAIL_DISABLED_FEATURES: readonly string[] = [
 /** قنوات الـRPC اللي بتتمنع كلها في نسخة retail (بادئة اسم القناة) */
 const RETAIL_BLOCKED_CHANNEL_PREFIXES: readonly string[] = ['restaurant:', 'recipes:', 'delivery:', 'reservations:', 'events:']
 
+/** قنوات مفردة (مش بادئة كاملة) خاصة بالمطاعم جوه مجموعات عامة زي settings: وprint: */
+const RETAIL_BLOCKED_CHANNELS: ReadonlySet<string> = new Set([
+  'settings:getRestaurant',
+  'settings:updateRestaurant',
+  'settings:listDeliveryDrivers',
+  'settings:upsertDeliveryDriver',
+  'settings:deleteDeliveryDriver',
+  'settings:listCaptains',
+  'settings:upsertCaptain',
+  'settings:deleteCaptain',
+  'print:kitchenTicket',
+  'print:eventBooking'
+])
+
 const NOT_IN_EDITION_MESSAGE = 'الميزة دي مش متاحة في النسخة الحالية'
 
 /** الميزات اللي النسخة بتوقفها تلقائيًا (بتتدمج مع الميزات الموقوفة بالترخيص) */
@@ -52,7 +66,7 @@ export function editionDisabledFeatures(): string[] {
 /** رسالة الخطأ لو القناة دي مش جزء من نسخة العميل، أو null لو متاحة */
 export function editionBlockReason(channel: string): string | null {
   if (getEdition() !== 'retail') return null
-  return RETAIL_BLOCKED_CHANNEL_PREFIXES.some((p) => channel.startsWith(p)) ? NOT_IN_EDITION_MESSAGE : null
+  return RETAIL_BLOCKED_CHANNELS.has(channel) || RETAIL_BLOCKED_CHANNEL_PREFIXES.some((p) => channel.startsWith(p)) ? NOT_IN_EDITION_MESSAGE : null
 }
 
 /** نفس الفكرة لأنواع التقارير (القناة reports:run واحدة لكل الأنواع) */

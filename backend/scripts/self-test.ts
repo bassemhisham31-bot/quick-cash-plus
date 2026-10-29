@@ -327,7 +327,11 @@ async function main(): Promise<void> {
         assert((await rawRpc(channel, args)).status === 403, `retail: ${channel} ممنوعة (403)`)
       }
       assert((await rpc('catalog:listWarehouses')).ok === true, 'retail: القنوات العادية شغالة')
-      assert((await rpc('settings:getRestaurant')).ok === true, 'retail: settings:getRestaurant لسه شغالة (بتتقري جوه الفواتير)')
+      // إعدادات المطاعم والسواقين والكباتن قنواتها كمان ممنوعة (الفواتير والطباعة بتقراها جوه السيرفر مباشرة مش عبر القناة)
+      for (const channel of ['settings:getRestaurant', 'settings:listDeliveryDrivers', 'settings:listCaptains']) {
+        assert((await rawRpc(channel)).status === 403, `retail: ${channel} ممنوعة (403)`)
+      }
+      assert((await rpc('settings:getTax')).ok === true, 'retail: إعدادات الضريبة العادية شغالة')
       assert((await rpc('reports:run', ['sales_summary', {}])).ok === true, 'retail: تقرير عادي شغال')
       for (const type of ['restaurant_sales_by_order_type', 'restaurant_recipe_consumption', 'restaurant_table_activity', 'sales_by_captain']) {
         assert((await rpc('reports:run', [type, {}])).ok === false, `retail: تقرير ${type} ممنوع`)
