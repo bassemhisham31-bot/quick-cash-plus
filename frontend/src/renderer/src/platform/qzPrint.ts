@@ -52,7 +52,7 @@ async function ensureConnected(): Promise<void> {
     await connecting
   } catch {
     throw new Error(
-      'تعذر الاتصال بـQZ Tray — تأكد إنه مثبت وشغال على الجهاز ده (أيقونة QZ Tray في شريط المهام)'
+      'QZ Tray مش شغال على الجهاز ده. افتحه من قايمة ابدأ (ابحث عن QZ Tray) واستنى لما أيقونته تظهر جنب الساعة، وبعدين جرّب الطباعة تاني.'
     )
   }
 }
