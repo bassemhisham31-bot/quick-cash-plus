@@ -1,6 +1,6 @@
 import { getDb } from '../db'
 import { getTempItemProductId, getWalkInCustomerId } from '../db/seed'
-import { branchesEnabled, currentBranchId, requireBranchId } from './branchScope'
+import { branchesEnabled, branchWarehouseFilter, currentBranchId, requireBranchId } from './branchScope'
 import { getOpenSession } from './cashSession'
 import { getLoyaltySettings, getPosUiSettings, getTaxSettings } from './settings'
 import { notifySaleByWhatsApp } from './whatsapp'
@@ -314,17 +314,43 @@ export async function checkout(
       })
     }
 
-    // قائمة "مطلوب شراؤه": كل قطعة اتباعت (غير الخدمات والأصناف المؤقتة) بتتسجل عشان تتشترى من المورد
+    // قائمة "مطلوب شراؤه": حسب طريقة كل صنف — كل قطعة تتباع | لما الرصيد يوصل للحد الأدنى | مايتسجلش (الخدمات والمؤقت مستثناة)
     // (شاشة المطعم بتبعت allowNegativeStock وأطباقها مالهاش مشتريات — مستثناة)
     if (input.allowNegativeStock !== true && (await getPosUiSettings()).purchaseListEnabled) {
       for (const line of input.lines) {
         if (line.isTemp || isServiceLine(line)) continue
         const prodRs = await tx.execute({
-          sql: 'SELECT name, barcode, cost_price, vendor_id FROM products WHERE id = ?',
+          sql: 'SELECT name, barcode, cost_price, vendor_id, purchase_mode, reorder_point, reorder_qty FROM products WHERE id = ?',
           args: [line.productId]
         })
         const prod = prodRs.rows[0] as any
         if (!prod) continue
+        const mode = String(prod.purchase_mode ?? 'every_sale')
+        if (mode === 'none') continue
+        if (mode === 'min_stock') {
+          // الرصيد بعد البيع (كل مخازن الفرع) وصل للحد الأدنى؟ → طلب شراء واحد بس مفتوح للصنف
+          const wf = branchWarehouseFilter('warehouse_id')
+          const stockRs = await tx.execute({
+            sql: `SELECT COALESCE(SUM(quantity), 0) AS q FROM stock WHERE product_id = ? AND ${wf.sql}`,
+            args: [line.productId, ...wf.args] as any
+          })
+          const remaining = Number((stockRs.rows[0] as any).q)
+          const minQty = Number(prod.reorder_point) || 0
+          if (remaining > minQty) continue
+          const openRs = await tx.execute({
+            sql: "SELECT 1 FROM purchase_requests WHERE product_id = ? AND status = 'pending' AND branch_id = ? LIMIT 1",
+            args: [line.productId, branchId]
+          })
+          if (openRs.rows.length) continue
+          const reorderQty = Number(prod.reorder_qty) || 0
+          const needed = reorderQty > 0 ? reorderQty : Math.max(1, 2 * minQty - remaining)
+          await tx.execute({
+            sql: `INSERT INTO purchase_requests (product_id, product_name, barcode, qty, unit_cost, vendor_id, sales_invoice_id, branch_id, note)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            args: [line.productId, prod.name, prod.barcode ?? null, needed, Number(prod.cost_price) || 0, prod.vendor_id ?? null, invoiceId, branchId, `وصل للحد الأدنى (الرصيد ${remaining} والحد ${minQty})`]
+          })
+          continue
+        }
         await tx.execute({
           sql: `INSERT INTO purchase_requests (product_id, product_name, barcode, qty, unit_cost, vendor_id, sales_invoice_id, branch_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

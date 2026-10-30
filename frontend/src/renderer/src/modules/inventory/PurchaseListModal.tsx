@@ -221,7 +221,10 @@ export function PurchaseListModal({ onClose, onBuy }: Props): JSX.Element {
                           <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
                         </td>
                       )}
-                      <td>{r.productName}</td>
+                      <td>
+                        {r.productName}
+                        {r.note && <div style={{ fontSize: 11, color: 'var(--qcp-ink-faint)' }}>{r.note}</div>}
+                      </td>
                       <td>
                         {status === 'pending' ? (
                           <input

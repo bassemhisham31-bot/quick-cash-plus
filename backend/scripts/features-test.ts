@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { getDb, initDatabaseAtPath } from '../src/main/db'
-import { createProduct } from '../src/main/services/catalog'
+import { createProduct, updateProduct } from '../src/main/services/catalog'
 import { createVendor } from '../src/main/services/vendors'
 import { createCustomer } from '../src/main/services/customers'
 import { createSalesRep } from '../src/main/services/salesReps'
@@ -274,6 +274,60 @@ async function main(): Promise<void> {
   assert((await readAttachment('../../etc/passwd')).ok === false, 'مسار خارج المجلد اترفض')
   assert((await uploadAttachment({ name: 'virus.exe', mime: 'x', dataBase64: 'AAAA' })).ok === false, 'نوع ملف غير مدعوم اترفض')
   assert((await uploadAttachment({ name: 'big.pdf', mime: 'application/pdf', dataBase64: Buffer.alloc(11 * 1024 * 1024).toString('base64') })).ok === false, 'ملف أكبر من 10 ميجا اترفض')
+
+  console.log('\n12-ب) مطلوب شراؤه حسب الحد الأدنى للصنف')
+  await openDay(adminId, 0) // اليوم اتقفل في 11-ب
+  // صنف طلبه بالحد الأدنى: رصيد 5 وحد 3 (الكمية المطلوبة فاضية = يكمّل لضعف الحد)
+  const minItem = await createProduct(
+    productInput({ name: 'شاحن سريع', costPrice: 80, retailPrice: 150, openingQuantity: 5, reorderPoint: 3, vendorId: vendor.id, warehouseId, purchaseMode: 'min_stock' })
+  )
+  assert(minItem.purchaseMode === 'min_stock' && minItem.reorderQty === 0, 'طريقة min_stock اتحفظت على الصنف')
+  const sellOne = async (p: { id: number; name: string; barcode: string }, price: number): Promise<void> => {
+    const r = await checkout(sale({ lines: [line(p, 1, price)], paymentMethod: 'cash', paid: price }), adminId)
+    if (!r.ok) throw new Error(r.error)
+  }
+  const openFor = async (id: number): Promise<number> => (await listPurchaseRequests({ status: 'pending' })).filter((p) => p.productId === id).length
+  await sellOne(minItem, 150) // الرصيد 4 (فوق الحد 3)
+  assert((await openFor(minItem.id)) === 0, 'الرصيد 4 أعلى من الحد 3: مفيش طلب شراء')
+  await sellOne(minItem, 150) // الرصيد 3 = الحد
+  const reqMin = (await listPurchaseRequests({ status: 'pending' })).find((p) => p.productId === minItem.id)
+  assert(!!reqMin && near(reqMin.qty, 3) /* 2*3 - 3 */ && /وصل للحد/.test(reqMin?.note ?? ''), 'الرصيد وصل للحد (3): اتفتح طلب شراء واحد بكمية 3 وملاحظة')
+  assert(reqMin?.vendorName === 'مورد الإكسسوارات' && near(reqMin?.unitCost ?? 0, 80), 'الطلب واخد المورد وسعر الشراء من الصنف')
+  await sellOne(minItem, 150) // الرصيد 2
+  assert((await openFor(minItem.id)) === 1, 'بيع تاني تحت الحد ما كرّرش الطلب')
+  // بعد الشراء والاستلام ورجوع الرصيد فوق الحد، ونزوله تاني = طلب جديد
+  await createPurchaseInvoice(
+    { vendorId: vendor.id, warehouseId, lines: [{ productId: minItem.id, name: minItem.name, barcode: minItem.barcode, qty: 6, purchasePrice: 80 }], paymentMethod: 'cash', paid: 480, note: '', purchaseRequestIds: [reqMin!.id] },
+    adminId
+  )
+  assert((await openFor(minItem.id)) === 0, 'بعد فاتورة الشراء الطلب اتقفل')
+  await sellOne(minItem, 150) // الرصيد 7
+  assert((await openFor(minItem.id)) === 0, 'بعد الشراء الرصيد 7 فوق الحد: مفيش طلب')
+  for (let i = 0; i < 4; i++) await sellOne(minItem, 150) // 6,5,4,3
+  assert((await openFor(minItem.id)) === 1, 'نزل للحد تاني: اتفتح طلب جديد')
+
+  // صنف بكمية شراء محددة
+  const fixedQty = await createProduct(
+    productInput({ name: 'كابل شحن', costPrice: 20, retailPrice: 40, openingQuantity: 3, reorderPoint: 2, warehouseId, purchaseMode: 'min_stock', reorderQty: 10 })
+  )
+  await sellOne(fixedQty, 40) // الرصيد 2 = الحد
+  const reqFixed = (await listPurchaseRequests({ status: 'pending' })).find((p) => p.productId === fixedQty.id)
+  assert(!!reqFixed && near(reqFixed.qty, 10), 'الكمية المحددة على الصنف (10) هي اللي اتطلبت')
+
+  // صنف مايتسجلش
+  const noneItem = await createProduct(productInput({ name: 'هدية', costPrice: 5, retailPrice: 10, openingQuantity: 5, reorderPoint: 1, warehouseId, purchaseMode: 'none' }))
+  await sellOne(noneItem, 10)
+  assert((await openFor(noneItem.id)) === 0, 'صنف "ماتتسجلش" ما دخلش القائمة')
+
+  // التعديل بيتحفظ، والخدمة مالهاش مشتريات حتى لو اتحدد
+  const upd = await updateProduct(noneItem.id, {
+    name: noneItem.name, barcode: noneItem.barcode, categoryId: null, unitId: null, vendorId: null, costPrice: 5, retailPrice: 10, wholesalePrice: 0,
+    wholesale2Price: 0, packPrice: 0, reorderPoint: 1, expiryDate: null, serialNumber: null, showInPos: true, serialTrackingEnabled: false, imageDataUrl: null,
+    purchaseMode: 'min_stock', reorderQty: 7
+  })
+  assert(upd.purchaseMode === 'min_stock' && upd.reorderQty === 7, 'تعديل الصنف حفظ طريقة الشراء والكمية')
+  const svcMode = await createProduct(productInput({ name: 'خدمة تجريبية', retailPrice: 10, isService: true, purchaseMode: 'min_stock' }))
+  assert(svcMode.purchaseMode === 'none', 'الخدمة بتتحوّل لـ none تلقائيًا')
 
   console.log('\n13) توقيع QZ Tray')
   const qz = getQzCredentials()

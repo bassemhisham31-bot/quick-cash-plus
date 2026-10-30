@@ -144,6 +144,7 @@ export async function listProducts(search = '', warehouseId?: number): Promise<P
                  p.image_data_url AS imageDataUrl,
                  p.is_service AS isService, p.commission_enabled AS commissionEnabled,
                  p.commission_percent AS commissionPercent, p.commission_min AS commissionMin,
+                 p.purchase_mode AS purchaseMode, p.reorder_qty AS reorderQty,
                  COALESCE(s.quantity, 0) AS quantity,
                  (SELECT price FROM product_prices WHERE product_id = p.id AND tier = 'wholesale') AS wholesalePrice,
                  (SELECT price FROM product_prices WHERE product_id = p.id AND tier = 'wholesale2') AS wholesale2Price,
@@ -181,7 +182,9 @@ export async function listProducts(search = '', warehouseId?: number): Promise<P
     isService: !!r.isService,
     commissionEnabled: !!r.isService && !!r.commissionEnabled,
     commissionPercent: Number(r.commissionPercent) || 0,
-    commissionMin: Number(r.commissionMin) || 0
+    commissionMin: Number(r.commissionMin) || 0,
+    purchaseMode: (['every_sale', 'min_stock', 'none'].includes(r.purchaseMode) ? r.purchaseMode : 'every_sale') as Product['purchaseMode'],
+    reorderQty: Number(r.reorderQty) || 0
   }))
 }
 
@@ -192,6 +195,12 @@ function serviceColumns(input: { isService?: boolean; commissionEnabled?: boolea
   const percent = commission ? Math.min(100, Math.max(0, Number(input.commissionPercent) || 0)) : 0
   const min = commission ? Math.max(0, Number(input.commissionMin) || 0) : 0
   return [isService ? 1 : 0, commission ? 1 : 0, percent, min]
+}
+
+/** طريقة "مطلوب شراؤه" وكمية الشراء (الخدمة مالهاش مشتريات دايمًا) */
+function purchaseColumns(input: { isService?: boolean; purchaseMode?: string; reorderQty?: number }): [string, number] {
+  const mode = input.isService ? 'none' : ['every_sale', 'min_stock', 'none'].includes(String(input.purchaseMode)) ? String(input.purchaseMode) : 'every_sale'
+  return [mode, Math.max(0, Number(input.reorderQty) || 0)]
 }
 
 export async function createProduct(input: ProductInput): Promise<Product> {
@@ -205,8 +214,8 @@ export async function createProduct(input: ProductInput): Promise<Product> {
     const info = await tx.execute({
       sql: `INSERT INTO products
               (name, barcode, category_id, unit_id, vendor_id, cost_price, retail_price, reorder_point, expiry_date, serial_number, show_in_pos, serial_tracking_enabled, image_data_url,
-               is_service, commission_enabled, commission_percent, commission_min)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               is_service, commission_enabled, commission_percent, commission_min, purchase_mode, reorder_qty)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         input.name.trim(),
         barcode,
@@ -221,7 +230,8 @@ export async function createProduct(input: ProductInput): Promise<Product> {
         input.showInPos ? 1 : 0,
         input.serialTrackingEnabled ? 1 : 0,
         input.imageDataUrl || null,
-        ...serviceColumns(input)
+        ...serviceColumns(input),
+        ...purchaseColumns(input)
       ]
     })
     productId = Number(info.lastInsertRowid)
@@ -275,7 +285,7 @@ export async function updateProduct(id: number, input: ProductUpdateInput): Prom
             SET name = ?, barcode = ?, category_id = ?, unit_id = ?, vendor_id = ?, cost_price = ?, retail_price = ?,
                 reorder_point = ?, expiry_date = ?, serial_number = ?, show_in_pos = ?, serial_tracking_enabled = ?,
                 image_data_url = ?, is_service = ?, commission_enabled = ?, commission_percent = ?, commission_min = ?,
-                updated_at = datetime('now')
+                purchase_mode = ?, reorder_qty = ?, updated_at = datetime('now')
             WHERE id = ?`,
       args: [
         input.name.trim(),
@@ -292,6 +302,7 @@ export async function updateProduct(id: number, input: ProductUpdateInput): Prom
         input.serialTrackingEnabled ? 1 : 0,
         input.imageDataUrl || null,
         ...serviceColumns(input),
+        ...purchaseColumns(input),
         id
       ]
     })

@@ -6,6 +6,7 @@ import type {
   Product,
   ProductImportResult,
   PurchaseLineInput,
+  PurchaseMode,
   Unit,
   VendorView,
   Warehouse
@@ -44,7 +45,9 @@ const emptyForm = {
   isService: false,
   commissionEnabled: false,
   commissionPercent: '0',
-  commissionMin: '0'
+  commissionMin: '0',
+  purchaseMode: 'every_sale' as PurchaseMode,
+  reorderQty: '0'
 }
 
 function daysUntil(dateStr: string): number {
@@ -196,7 +199,9 @@ export function InventoryPage(): JSX.Element {
       isService: p.isService,
       commissionEnabled: p.commissionEnabled,
       commissionPercent: String(p.commissionPercent),
-      commissionMin: String(p.commissionMin)
+      commissionMin: String(p.commissionMin),
+      purchaseMode: p.purchaseMode,
+      reorderQty: String(p.reorderQty)
     })
     setShowForm(true)
   }
@@ -227,9 +232,18 @@ export function InventoryPage(): JSX.Element {
   }
 
   /** حقول الخدمة/العمولة (العمولة مش بتتفعّل إلا لو الصنف خدمة) */
-  function servicePayload(): { isService: boolean; commissionEnabled: boolean; commissionPercent: number; commissionMin: number } {
+  function servicePayload(): {
+    isService: boolean
+    commissionEnabled: boolean
+    commissionPercent: number
+    commissionMin: number
+    purchaseMode: PurchaseMode
+    reorderQty: number
+  } {
     const commission = form.isService && form.commissionEnabled
     return {
+      purchaseMode: form.isService ? 'none' : form.purchaseMode,
+      reorderQty: form.purchaseMode === 'min_stock' ? Number(form.reorderQty) || 0 : 0,
       isService: form.isService,
       commissionEnabled: commission,
       commissionPercent: commission ? Number(form.commissionPercent) || 0 : 0,
@@ -693,7 +707,7 @@ export function InventoryPage(): JSX.Element {
                 </div>
               )}
               <div className="qcp-field" style={{ flex: 1 }}>
-                <label>{t('inventory.reorderPoint')}</label>
+                <label>{t('inventory.reorderPoint')} (الحد الأدنى)</label>
                 <input
                   className="qcp-input"
                   type="number"
@@ -702,6 +716,41 @@ export function InventoryPage(): JSX.Element {
                 />
               </div>
             </div>
+
+            {!form.isService && (
+              <div className="qcp-card" style={{ padding: 10, marginBottom: 10, background: 'var(--qcp-bg-sunken)' }}>
+                <div className="qcp-field">
+                  <label>📝 قائمة «مطلوب شراؤه»</label>
+                  <select
+                    className="qcp-select"
+                    value={form.purchaseMode}
+                    onChange={(e) => setForm((f) => ({ ...f, purchaseMode: e.target.value as PurchaseMode }))}
+                  >
+                    <option value="every_sale">كل قطعة تتباع تتسجل</option>
+                    <option value="min_stock">لما الرصيد يوصل للحد الأدنى (حد التنبيه)</option>
+                    <option value="none">ماتتسجلش</option>
+                  </select>
+                </div>
+                {form.purchaseMode === 'min_stock' && (
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 8 }}>
+                    <div className="qcp-field" style={{ flex: 1 }}>
+                      <label>الكمية المطلوب شراؤها (اختياري)</label>
+                      <input
+                        className="qcp-input"
+                        type="number"
+                        min={0}
+                        value={form.reorderQty}
+                        onChange={(e) => setForm((f) => ({ ...f, reorderQty: e.target.value }))}
+                      />
+                    </div>
+                    <div style={{ flex: 1.6, fontSize: 11.5, color: 'var(--qcp-ink-faint)' }}>
+                      لما رصيد الصنف بعد البيع يوصل لـ {Number(form.reorderPoint) || 0} أو أقل بيتضاف لقائمة مطلوب شراؤه مرة واحدة. لو سبت الكمية 0 بيطلب
+                      اللي يكمّل لضعف الحد الأدنى، وتقدر تعدّلها من القائمة.
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: 10 }}>
               <div className="qcp-field" style={{ flex: 1 }}>
@@ -749,7 +798,7 @@ export function InventoryPage(): JSX.Element {
                   {form.commissionEnabled && (
                     <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
                       <div className="qcp-field" style={{ flex: 1 }}>
-                        <label>نسبة العمولة %</label>
+                        <label>نسبة العمولة المقترحة % (اختياري)</label>
                         <input
                           className="qcp-input"
                           type="number"
@@ -770,7 +819,7 @@ export function InventoryPage(): JSX.Element {
                         />
                       </div>
                       <div style={{ flex: 1.2, fontSize: 11.5, color: 'var(--qcp-ink-faint)', alignSelf: 'center' }}>
-                        وقت البيع بتكتب المبلغ (مثلًا 1000) والعمولة بتتحسب وتتضاف على الفاتورة.
+                        وقت البيع بتكتب العمولة بإيدك (لأنها مش واحدة كل مرة). لو حطيت نسبة، بتتقترح لك من المبلغ وتقدر تغيّرها.
                       </div>
                     </div>
                   )}

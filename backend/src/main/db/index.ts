@@ -73,6 +73,7 @@ import { migration069PasswordReset } from './migrations/069_password_reset'
 import { migration070Branches } from './migrations/070_branches'
 import { migration071AccountRoles } from './migrations/071_account_roles'
 import { migration072ServicesSplitDueDates } from './migrations/072_services_split_due_dates'
+import { migration073PurchaseMode } from './migrations/073_purchase_mode'
 import { seedDatabase } from './seed'
 
 let db: Client | null = null
@@ -203,7 +204,8 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
   { name: '069_password_reset', sql: migration069PasswordReset },
   { name: '070_branches', sql: migration070Branches },
   { name: '071_account_roles', sql: migration071AccountRoles },
-  { name: '072_services_split_due_dates', sql: migration072ServicesSplitDueDates }
+  { name: '072_services_split_due_dates', sql: migration072ServicesSplitDueDates },
+  { name: '073_purchase_mode', sql: migration073PurchaseMode }
 ]
 
 async function runMigrations(client: Client): Promise<void> {

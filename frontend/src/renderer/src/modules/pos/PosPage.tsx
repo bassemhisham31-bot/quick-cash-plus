@@ -117,6 +117,14 @@ export function PosPage(): JSX.Element {
   /** نافذة مبلغ الخدمة اللي ليها عمولة (سحب فودافون كاش مثلًا) */
   const [servicePrompt, setServicePrompt] = useState<Product | null>(null)
   const [serviceAmountStr, setServiceAmountStr] = useState('')
+  /** العمولة بيكتبها الكاشير بإيده (ممكن تتقترح من النسبة) — مش كل العمليات عمولتها واحدة */
+  const [serviceCommissionStr, setServiceCommissionStr] = useState('')
+  const [commissionTouched, setCommissionTouched] = useState(false)
+  /** إضافة محل مسوّق جديد من شاشة البيع */
+  const [showAddShop, setShowAddShop] = useState(false)
+  const [newShopName, setNewShopName] = useState('')
+  const [newShopPercent, setNewShopPercent] = useState('10')
+  const [shopError, setShopError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<InvoiceView | null>(null)
   const [lastChange, setLastChange] = useState(0)
@@ -235,6 +243,7 @@ export function PosPage(): JSX.Element {
   const taxTotal = taxSettings?.enabled ? preTaxTotal * (taxSettings.rate / 100) : 0
 
   const selectedCustomer = customers.find((c) => c.id === customerId) ?? null
+  const selectedShop = salesReps.find((r) => r.id === salesRepId) ?? null
   const phoneMatches =
     phoneSearch.trim().length >= 2
       ? customers
@@ -430,16 +439,17 @@ export function PosPage(): JSX.Element {
     return { ...l, discount: lineDiscountAmount(l.qty, l.unitPrice, l.discountType, l.discountValue) }
   }
 
-  /** إضافة عملية خدمة ليها عمولة: سعر السطر = العمولة، والمبلغ الأساسي بيتسجل معاه (ولو الخدمة موجودة بالفعل بيتجمع عليها) */
-  function addServiceCommissionLine(product: Product, amount: number): void {
-    const fee = calcCommission(amount, product.commissionPercent, product.commissionMin)
+  /** إضافة عملية خدمة ليها عمولة: سعر السطر = العمولة اللي الكاشير كتبها، والمبلغ الأساسي (اختياري) بيتسجل معاه (ولو الخدمة موجودة بالفعل بيتجمع عليها) */
+  function addServiceCommissionLine(product: Product, amount: number, fee: number): void {
+    const cleanFee = Math.round(fee * 100) / 100
+    const noteFor = (a: number): string | null => (a > 0 ? `مبلغ العملية: ${a}` : null)
     setCart((prev) => {
       const existing = prev.find((l) => l.productId === product.id)
       if (existing) {
         const newAmount = (existing.serviceAmount ?? 0) + amount
         return prev.map((l) =>
           l.productId === product.id
-            ? withDiscount({ ...l, unitPrice: Math.round((l.unitPrice + fee) * 100) / 100, serviceAmount: newAmount, note: `مبلغ العملية: ${newAmount}` })
+            ? withDiscount({ ...l, unitPrice: Math.round((l.unitPrice + cleanFee) * 100) / 100, serviceAmount: newAmount > 0 ? newAmount : null, note: noteFor(newAmount) })
             : l
         )
       }
@@ -449,21 +459,50 @@ export function PosPage(): JSX.Element {
           productId: product.id,
           name: product.name,
           barcode: product.barcode,
-          unitPrice: fee,
+          unitPrice: cleanFee,
           qty: 1,
           discount: 0,
           isService: true,
-          serviceAmount: amount,
-          note: `مبلغ العملية: ${amount}`
+          isCommission: true,
+          serviceAmount: amount > 0 ? amount : null,
+          note: noteFor(amount)
         }
       ]
     })
     playSound('save')
   }
 
+  function confirmServicePrompt(): void {
+    if (!servicePrompt) return
+    const fee = Number(serviceCommissionStr)
+    if (!(fee > 0)) return
+    addServiceCommissionLine(servicePrompt, Number(serviceAmountStr) || 0, fee)
+    setServicePrompt(null)
+  }
+
+  async function saveNewShop(): Promise<void> {
+    const name = newShopName.trim()
+    if (!name) {
+      setShopError('اكتب اسم المحل')
+      return
+    }
+    try {
+      const created = await window.api.salesReps.create({ name, phone: '', commissionPercent: Math.max(0, Number(newShopPercent) || 0) })
+      setSalesReps((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))
+      setSalesRepId(created.id)
+      setShowAddShop(false)
+      setNewShopName('')
+      setShopError(null)
+    } catch (err: any) {
+      setShopError(err?.message ?? 'تعذر إضافة المحل')
+    }
+  }
+
   function addToCart(product: Product, qty = 1): void {
     if (product.isService && product.commissionEnabled) {
       setServiceAmountStr('')
+      setServiceCommissionStr('')
+      setCommissionTouched(false)
       setServicePrompt(product)
       return
     }
@@ -904,7 +943,7 @@ export function PosPage(): JSX.Element {
                 <div className="rst-product-body">
                   <div className="rst-product-name">{p.name}</div>
                   <div className="rst-product-price">
-                    {p.isService && p.commissionEnabled ? `عمولة ${p.commissionPercent}%` : currency(priceForTier(p, priceTier))}
+                    {p.isService && p.commissionEnabled ? (p.commissionPercent > 0 ? `عمولة ${p.commissionPercent}%` : 'اكتب العمولة') : currency(priceForTier(p, priceTier))}
                   </div>
                   {p.isService ? (
                     <span className="pos-stock">🛠 خدمة</span>
@@ -996,6 +1035,35 @@ export function PosPage(): JSX.Element {
             </div>
           )}
 
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
+            <select
+              className="qcp-select"
+              style={{ flex: 1, minWidth: 0 }}
+              title="المحل اللي سوّقلك العميل (للعمولة)"
+              value={salesRepId ?? ''}
+              onChange={(e) => setSalesRepId(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">🏪 المحل المسوّق — بدون</option>
+              {salesReps.map((r) => (
+                <option key={r.id} value={r.id}>
+                  🏪 {r.name} ({r.commissionPercent}%)
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="pos-tool-btn"
+              style={{ padding: '6px 10px' }}
+              title="إضافة محل مسوّق جديد"
+              onClick={() => {
+                setShopError(null)
+                setShowAddShop(true)
+              }}
+            >
+              ✚ محل
+            </button>
+          </div>
+
           {delivery && (
             <div className="rst-info-card" onClick={() => setShowDelivery(true)} title="تعديل بيانات التوصيل">
               <span style={{ fontSize: 18 }}>🛵</span>
@@ -1042,9 +1110,9 @@ export function PosPage(): JSX.Element {
                       {t('posUi.tempItemBadge')}
                     </span>
                   )}
-                  {line.serviceAmount ? (
+                  {line.isCommission ? (
                     <small>
-                      💰 مبلغ العملية {currency(line.serviceAmount)} — العمولة {currency(line.unitPrice)}
+                      💰 {line.serviceAmount ? `مبلغ العملية ${currency(line.serviceAmount)} — ` : ''}العمولة {currency(line.unitPrice)}
                     </small>
                   ) : canEditPrice ? (
                     <input
@@ -1058,7 +1126,7 @@ export function PosPage(): JSX.Element {
                     <small>{currency(line.unitPrice)}</small>
                   )}
                 </div>
-                {line.serviceAmount ? (
+                {line.isCommission ? (
                   <div className="rst-qty" />
                 ) : (
                   <div className="rst-qty">
@@ -1142,6 +1210,14 @@ export function PosPage(): JSX.Element {
             <span>{t('pos.subtotal')}</span>
             <span>{currency(subtotal)}</span>
           </div>
+          {selectedShop && selectedShop.commissionPercent > 0 && (
+            <div className="row" style={{ color: 'var(--qcp-ink-muted)', fontSize: 12.5 }}>
+              <span>
+                🏪 عمولة {selectedShop.name} ({selectedShop.commissionPercent}%)
+              </span>
+              <span>{currency((total * selectedShop.commissionPercent) / 100)}</span>
+            </div>
+          )}
           {canDiscount && (
           <div className="row disc-row">
             <span>خصم الفاتورة</span>
@@ -1268,51 +1344,101 @@ export function PosPage(): JSX.Element {
         </div>
       )}
 
+      {/* ------------------------------ إضافة محل مسوّق ------------------------------ */}
+      {showAddShop && (
+        <div className="qcp-modal-backdrop" onClick={() => setShowAddShop(false)}>
+          <div className="qcp-modal" style={{ width: 'min(400px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>🏪 محل مسوّق جديد</h3>
+            <div className="qcp-field">
+              <label>اسم المحل</label>
+              <input
+                className="qcp-input"
+                autoFocus
+                value={newShopName}
+                onChange={(e) => setNewShopName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void saveNewShop()
+                }}
+              />
+            </div>
+            <div className="qcp-field" style={{ marginTop: 8 }}>
+              <label>نسبة العمولة % من الفاتورة</label>
+              <input className="qcp-input" type="number" min={0} value={newShopPercent} onChange={(e) => setNewShopPercent(e.target.value)} />
+            </div>
+            {shopError && <div className="rst-error" style={{ marginTop: 8 }}>⚠️ {shopError}</div>}
+            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+              <button type="button" className="rst-big-btn pay" style={{ flex: 2 }} onClick={() => void saveNewShop()}>
+                حفظ واختيار المحل
+              </button>
+              <button type="button" className="qcp-btn qcp-btn-secondary" style={{ flex: 1 }} onClick={() => setShowAddShop(false)}>
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ------------------------------ مبلغ الخدمة اللي ليها عمولة ------------------------------ */}
       {servicePrompt && (
         <div className="qcp-modal-backdrop" onClick={() => setServicePrompt(null)}>
           <div className="qcp-modal" style={{ width: 'min(420px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0 }}>🛠 {servicePrompt.name}</h3>
             <div className="qcp-field">
-              <label>المبلغ (اللي العميل بيسحبه أو بيحوّله)</label>
+              <label>المبلغ (اللي العميل بيسحبه أو بيحوّله) — اختياري</label>
               <input
                 className="qcp-input"
                 type="number"
                 min={0}
-                autoFocus
-                style={{ fontSize: 22, fontWeight: 800 }}
+                autoFocus={servicePrompt.commissionPercent > 0}
+                style={{ fontSize: 20, fontWeight: 800 }}
                 value={serviceAmountStr}
-                onChange={(e) => setServiceAmountStr(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && Number(serviceAmountStr) > 0) {
-                    addServiceCommissionLine(servicePrompt, Number(serviceAmountStr))
-                    setServicePrompt(null)
+                onChange={(e) => {
+                  const v = e.target.value
+                  setServiceAmountStr(v)
+                  // العمولة بتتقترح من النسبة (لو متحدّدة) طول ما الكاشير ما كتبهاش بإيده
+                  if (!commissionTouched && servicePrompt.commissionPercent > 0) {
+                    setServiceCommissionStr(Number(v) > 0 ? String(calcCommission(Number(v), servicePrompt.commissionPercent, servicePrompt.commissionMin)) : '')
                   }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') confirmServicePrompt()
+                  if (e.key === 'Escape') setServicePrompt(null)
+                }}
+              />
+            </div>
+            <div className="qcp-field" style={{ marginTop: 8 }}>
+              <label>
+                💰 العمولة — اكتبها
+                {servicePrompt.commissionPercent > 0 && (
+                  <span style={{ color: 'var(--qcp-ink-faint)', fontWeight: 400 }}>
+                    {' '}
+                    (مقترحة {servicePrompt.commissionPercent}%{servicePrompt.commissionMin > 0 ? `، حد أدنى ${currency(servicePrompt.commissionMin)}` : ''} — تقدر تغيّرها)
+                  </span>
+                )}
+              </label>
+              <input
+                className="qcp-input"
+                type="number"
+                min={0}
+                autoFocus={!(servicePrompt.commissionPercent > 0)}
+                style={{ fontSize: 22, fontWeight: 800 }}
+                value={serviceCommissionStr}
+                onChange={(e) => {
+                  setCommissionTouched(true)
+                  setServiceCommissionStr(e.target.value)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') confirmServicePrompt()
                   if (e.key === 'Escape') setServicePrompt(null)
                 }}
               />
             </div>
             <div className="rst-change" style={{ marginTop: 8 }}>
-              <span>
-                العمولة ({servicePrompt.commissionPercent}%{servicePrompt.commissionMin > 0 ? `، حد أدنى ${currency(servicePrompt.commissionMin)}` : ''})
-              </span>
-              <span>
-                {Number(serviceAmountStr) > 0
-                  ? currency(calcCommission(Number(serviceAmountStr), servicePrompt.commissionPercent, servicePrompt.commissionMin))
-                  : '—'}
-              </span>
+              <span>اللي هيتضاف على الفاتورة</span>
+              <span>{Number(serviceCommissionStr) > 0 ? currency(Number(serviceCommissionStr)) : '—'}</span>
             </div>
             <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-              <button
-                type="button"
-                className="rst-big-btn pay"
-                style={{ flex: 2 }}
-                disabled={!(Number(serviceAmountStr) > 0)}
-                onClick={() => {
-                  addServiceCommissionLine(servicePrompt, Number(serviceAmountStr))
-                  setServicePrompt(null)
-                }}
-              >
+              <button type="button" className="rst-big-btn pay" style={{ flex: 2 }} disabled={!(Number(serviceCommissionStr) > 0)} onClick={confirmServicePrompt}>
                 إضافة للفاتورة
               </button>
               <button type="button" className="qcp-btn qcp-btn-secondary" style={{ flex: 1 }} onClick={() => setServicePrompt(null)}>
@@ -1391,25 +1517,13 @@ export function PosPage(): JSX.Element {
               </div>
             </div>
 
-            {(salesReps.length > 0 || loyaltyActive || maxVendorSettlement > 0) && (
+            {selectedShop && (
+              <div style={{ fontSize: 12.5, color: 'var(--qcp-ink-muted)', margin: '4px 0' }}>
+                🏪 المحل المسوّق: <strong>{selectedShop.name}</strong>
+              </div>
+            )}
+            {(loyaltyActive || maxVendorSettlement > 0) && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                {salesReps.length > 0 && (
-                  <div className="qcp-field">
-                    <label>{t('salesReps.posLabel')}</label>
-                    <select
-                      className="qcp-select"
-                      value={salesRepId ?? ''}
-                      onChange={(e) => setSalesRepId(e.target.value ? Number(e.target.value) : null)}
-                    >
-                      <option value="">{t('salesReps.posNone')}</option>
-                      {salesReps.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name} ({r.commissionPercent}%)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
                 {loyaltyActive && (
                   <div className="qcp-field">
                     <label>

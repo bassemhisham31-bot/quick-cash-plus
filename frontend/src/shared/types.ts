@@ -40,6 +40,9 @@ export interface ProductPrices {
   pack: number | null
 }
 
+/** طريقة تسجيل الصنف في "مطلوب شراؤه": كل قطعة تتباع | لما الرصيد يوصل للحد الأدنى | مايتسجلش */
+export type PurchaseMode = 'every_sale' | 'min_stock' | 'none'
+
 export interface Product {
   id: number
   name: string
@@ -66,6 +69,9 @@ export interface Product {
   commissionPercent: number
   /** حد أدنى للعمولة (0 = بدون حد أدنى) */
   commissionMin: number
+  purchaseMode: PurchaseMode
+  /** كمية الشراء المطلوبة لما الرصيد يوصل للحد الأدنى (0 = يكمّل لضعف الحد الأدنى) */
+  reorderQty: number
 }
 
 export interface ProductInput {
@@ -91,6 +97,8 @@ export interface ProductInput {
   commissionEnabled?: boolean
   commissionPercent?: number
   commissionMin?: number
+  purchaseMode?: PurchaseMode
+  reorderQty?: number
 }
 
 export interface ProductUpdateInput {
@@ -114,6 +122,8 @@ export interface ProductUpdateInput {
   commissionEnabled?: boolean
   commissionPercent?: number
   commissionMin?: number
+  purchaseMode?: PurchaseMode
+  reorderQty?: number
 }
 
 export type NotificationSeverity = 'critical' | 'warning'
@@ -670,7 +680,9 @@ export interface CartLine {
   note?: string | null
   /** الصنف خدمة (من غير مخزون) — السيرفر بيتأكد منها من جدول الأصناف */
   isService?: boolean
-  /** المبلغ الأساسي لعملية فيها عمولة (مثلًا مبلغ سحب فودافون كاش) — سعر السطر هو العمولة */
+  /** سطر عمولة خدمة (السعر = العمولة اللي الكاشير كتبها) — للواجهة بس */
+  isCommission?: boolean
+  /** المبلغ الأساسي لعملية فيها عمولة (مثلًا مبلغ سحب فودافون كاش) — اختياري، سعر السطر هو العمولة */
   serviceAmount?: number | null
 }
 
