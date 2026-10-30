@@ -21,6 +21,8 @@ import { getPaymentMethodsBreakdown } from '../src/main/services/dashboard'
 import { readAttachment, uploadAttachment } from '../src/main/services/attachments'
 import { runAccountingReport } from '../src/main/services/accountingReports'
 import { createVerify, X509Certificate } from 'crypto'
+import { editionBlockReason } from '../src/main/services/edition'
+import { restoreBackup } from '../src/main/services/backup'
 import { getQzCredentials, signQzMessage } from '../src/main/services/qzSigning'
 import { closeDay } from '../src/main/services/cashSession'
 import type { CheckoutInput, ProductInput } from '../src/shared/types'
@@ -341,6 +343,18 @@ async function main(): Promise<void> {
   verifier.update(msg)
   assert(verifier.verify(x509.publicKey, sig, 'base64'), 'التوقيع بيتحقق بالمفتاح العام للشهادة (SHA512)')
   assert(existsSync(join(DATA_DIR, 'qz', 'private-key.pem')), 'المفتاح اتحفظ في مجلد بيانات العميل')
+
+  console.log('\n14) النسخة التجريبية وتحصين النسخ الاحتياطي')
+  assert(editionBlockReason('backup:restore') === null, 'من غير QCP_DEMO قناة الاسترجاع متاحة (سلوك العملاء العاديين)')
+  process.env.QCP_DEMO = 'on'
+  assert(editionBlockReason('backup:restore') != null && editionBlockReason('dataReset:factoryReset') != null && editionBlockReason('whatsapp:startPairing') != null, 'QCP_DEMO بيوقف الاسترجاع والمسح والواتساب')
+  assert(editionBlockReason('pos:checkout') === null && editionBlockReason('restaurant:openOrder') === null, 'والبيع والمطعم شغالين في الديمو')
+  delete process.env.QCP_DEMO
+  process.env.QCP_BACKUP_DIR = join(DATA_DIR, 'backups')
+  const outside = await restoreBackup('/etc/passwd')
+  const traversal = await restoreBackup(join(DATA_DIR, 'backups', '..', 'features-test.sqlite'))
+  assert(outside.ok === false && /غير مسموح/.test(outside.error ?? ''), 'استرجاع من مسار خارج مجلد النسخ اترفض')
+  assert(traversal.ok === false && /غير مسموح/.test(traversal.error ?? ''), 'محاولة ../ للخروج من مجلد النسخ اترفضت')
 
   console.log(`\nالنتيجة: ${passed} نجح / ${failed} فشل`)
   process.exit(failed ? 1 : 0)

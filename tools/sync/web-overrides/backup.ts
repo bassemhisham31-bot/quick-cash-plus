@@ -1,13 +1,15 @@
 import { copyFile, mkdir, readdir, stat, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
-import { join } from 'path'
+import { join, resolve, sep } from 'path'
 import { getDb, getDbPath } from '../db'
 import { getBackupSettings } from './settings'
 import type { BackupFileInfo, BackupResult } from '../../shared/types'
 
+/**
+ * على الويب مسار النسخ الاحتياطي بيحدده السيرفر (QCP_BACKUP_DIR) — مش مسار بيتكتب من الواجهة. قبل كده إعداد "backupFolder"
+ * والاسترجاع كانوا بيقبلوا أي مسار على السيرفر (يعني أدمن عميل كان يقدر يقرأ/يكتب ملفات عميل تاني).
+ */
 async function resolveBackupFolder(): Promise<string> {
-  const settings = await getBackupSettings()
-  if (settings.backupFolder) return settings.backupFolder
   return join(process.env.QCP_BACKUP_DIR ?? join(process.cwd(), 'data', 'backups'))
 }
 
@@ -81,7 +83,10 @@ export async function listBackups(folderOverride?: string): Promise<BackupFileIn
 /** يستبدل ملف قاعدة البيانات الحالي بنسخة احتياطية، ثم ينهي عملية السيرفر — متوقَّع أن يكون مُدار بـPM2 (أو مشابه) عشان يعيد تشغيلها تلقائيًا. */
 export async function restoreBackup(filePath: string): Promise<BackupResult> {
   try {
-    if (!existsSync(filePath)) return { ok: false, error: 'الملف غير موجود' }
+    const folder = resolve(await resolveBackupFolder())
+    const target = resolve(String(filePath ?? ''))
+    if (!target.startsWith(folder + sep) || !target.endsWith('.sqlite')) return { ok: false, error: 'مسار النسخة الاحتياطية غير مسموح' }
+    if (!existsSync(target)) return { ok: false, error: 'الملف غير موجود' }
 
     const dbPath = getDbPath()
     if (/^(libsql|https?):\/\//.test(dbPath)) {
@@ -90,7 +95,7 @@ export async function restoreBackup(filePath: string): Promise<BackupResult> {
     const db = getDb()
     await (db as any).close?.()
 
-    await copyFile(filePath, dbPath)
+    await copyFile(target, dbPath)
     for (const suffix of ['-wal', '-shm']) {
       const p = `${dbPath}${suffix}`
       if (existsSync(p)) await unlink(p).catch(() => {})
