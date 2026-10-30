@@ -334,6 +334,7 @@ async function main(): Promise<void> {
   assert(qz.certificatePem.startsWith('-----BEGIN CERTIFICATE-----') && qz.privateKeyPem.includes('PRIVATE KEY'), 'اتولّدت شهادة ومفتاح')
   const x509 = new X509Certificate(qz.certificatePem)
   assert(x509.subject.includes('Quick Cash Plus') && new Date(x509.validTo).getTime() > Date.now() + 10 * 365 * 86400000, 'الشهادة صالحة لسنين طويلة')
+  assert(x509.ca === true, 'الشهادة CA:TRUE (تنفع override.crt في QZ Tray) — والقديمة اتجدّدت تلقائيًا')
   const msg = '{"call":"printers.getDefault","timestamp":1793000000000}'
   const sig = signQzMessage(msg)
   const verifier = createVerify('RSA-SHA512')

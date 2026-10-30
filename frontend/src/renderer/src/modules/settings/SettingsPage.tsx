@@ -36,6 +36,7 @@ import type {
 } from '../../../../shared/types'
 import { PERMISSIONS } from '../../../../shared/types'
 import { confirmDialog } from '../../components/ConfirmDialogHost'
+import { QzCertificateCard } from '../../components/QzCertificateCard'
 
 type Section =
   | 'store'
@@ -1141,6 +1142,8 @@ function PrintSection(): JSX.Element {
         <input type="checkbox" checked={settings.autoPrintAfterSale} onChange={(e) => setSettings({ ...settings, autoPrintAfterSale: e.target.checked })} />
         {t('settings.autoPrintAfterSale')}
       </label>
+
+      <QzCertificateCard />
 
       <h3>{t('settings.thermalCalibration')}</h3>
       <p style={{ marginTop: -6, fontSize: 12.5, color: 'var(--qcp-ink-faint)' }}>{t('settings.thermalCalibrationHint')}</p>

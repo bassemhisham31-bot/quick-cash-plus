@@ -3,12 +3,13 @@
  *
  * من غير توقيع، QZ Tray بيعتبر الصفحة "Untrusted website / anonymous request" وبيطلع رسالة موافقة مع كل اتصال/طباعة.
  * هنا السيرفر بيولّد (مرة واحدة) مفتاح خاص + شهادة موقّعة ذاتيًا بتتحفظوا في مجلد البيانات بتاع العميل (<QCP_DATA_DIR>/qz)،
- * والمتصفح بياخد الشهادة العامة ويطلب من السيرفر يوقّع رسايل QZ. المستخدم بيوافق مرة واحدة على جهازه مع "Remember this decision"
- * (أو بيحط الشهادة كـoverride.crt في فولدر QZ Tray فمبتظهرش أي رسالة خالص) — ومن بعدها الطباعة صامتة.
+ * والمتصفح بياخد الشهادة العامة ويطلب من السيرفر يوقّع رسايل QZ.
+ * مهم: QZ Tray مش بيسمح بـ"Remember → Allow" لموقع "Untrusted" (الزرار Allow بيتعطّل لما تعلّم Remember) — فلازم الشهادة تبقى "موثوقة":
+ * المستخدم بينزّلها من الإعدادات ويحطها كـoverride.crt في فولدر QZ Tray (مرة واحدة لكل جهاز طباعة)، وبعدها Remember + Allow بيشتغلوا والطباعة تبقى صامتة.
  *
  * المفتاح الخاص ما بيطلعش من السيرفر أبدًا؛ الواجهة بتبعت الرسالة بس والسيرفر بيرجّع التوقيع (بعد تسجيل دخول المستخدم).
  */
-import { createSign, generateKeyPairSync, randomBytes } from 'crypto'
+import { X509Certificate, createSign, generateKeyPairSync, randomBytes } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import forge from 'node-forge'
@@ -32,8 +33,18 @@ export function getQzCredentials(): QzCredentials {
   const keyPath = join(dir, 'private-key.pem')
   const certPath = join(dir, 'digital-certificate.pem')
   if (existsSync(keyPath) && existsSync(certPath)) {
-    cached = { privateKeyPem: readFileSync(keyPath, 'utf8'), certificatePem: readFileSync(certPath, 'utf8') }
-    return cached
+    const certificatePem = readFileSync(certPath, 'utf8')
+    // شهادة قديمة من غير CA:true (أول نسخة) QZ Tray مش بيقبلها كـoverride.crt موثوق — بنجدّدها تلقائيًا
+    let isCa = false
+    try {
+      isCa = new X509Certificate(certificatePem).ca
+    } catch {
+      isCa = false
+    }
+    if (isCa) {
+      cached = { privateKeyPem: readFileSync(keyPath, 'utf8'), certificatePem }
+      return cached
+    }
   }
 
   const { privateKey, publicKey } = generateKeyPairSync('rsa', {
@@ -55,7 +66,12 @@ export function getQzCredentials(): QzCredentials {
   ]
   cert.setSubject(attrs)
   cert.setIssuer(attrs)
-  cert.setExtensions([{ name: 'basicConstraints', cA: false }])
+  // زي شهادة openssl الذاتية الافتراضية (CA:TRUE) — لازم عشان QZ Tray يقبلها كشهادة موثوقة لما تتحط كـoverride.crt
+  cert.setExtensions([
+    { name: 'basicConstraints', cA: true },
+    { name: 'keyUsage', keyCertSign: true, digitalSignature: true, cRLSign: true },
+    { name: 'subjectKeyIdentifier' }
+  ])
   cert.sign(forge.pki.privateKeyFromPem(privateKey), forge.md.sha256.create())
   const certificatePem = forge.pki.certificateToPem(cert)
 
