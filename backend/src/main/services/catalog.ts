@@ -142,6 +142,8 @@ export async function listProducts(search = '', warehouseId?: number): Promise<P
                  p.expiry_date AS expiryDate, p.serial_number AS serialNumber,
                  p.show_in_pos AS showInPos, p.serial_tracking_enabled AS serialTrackingEnabled,
                  p.image_data_url AS imageDataUrl,
+                 p.is_service AS isService, p.commission_enabled AS commissionEnabled,
+                 p.commission_percent AS commissionPercent, p.commission_min AS commissionMin,
                  COALESCE(s.quantity, 0) AS quantity,
                  (SELECT price FROM product_prices WHERE product_id = p.id AND tier = 'wholesale') AS wholesalePrice,
                  (SELECT price FROM product_prices WHERE product_id = p.id AND tier = 'wholesale2') AS wholesale2Price,
@@ -175,8 +177,21 @@ export async function listProducts(search = '', warehouseId?: number): Promise<P
     serialNumber: r.serialNumber ?? null,
     showInPos: !!r.showInPos,
     serialTrackingEnabled: !!r.serialTrackingEnabled,
-    imageDataUrl: r.imageDataUrl ?? null
+    imageDataUrl: r.imageDataUrl ?? null,
+    isService: !!r.isService,
+    commissionEnabled: !!r.isService && !!r.commissionEnabled,
+    commissionPercent: Number(r.commissionPercent) || 0,
+    commissionMin: Number(r.commissionMin) || 0
   }))
+}
+
+/** أعمدة الخدمة (isService, commissionEnabled, commissionPercent, commissionMin): العمولة مش بتتفعّل إلا لو الصنف خدمة */
+function serviceColumns(input: { isService?: boolean; commissionEnabled?: boolean; commissionPercent?: number; commissionMin?: number }): [number, number, number, number] {
+  const isService = !!input.isService
+  const commission = isService && !!input.commissionEnabled
+  const percent = commission ? Math.min(100, Math.max(0, Number(input.commissionPercent) || 0)) : 0
+  const min = commission ? Math.max(0, Number(input.commissionMin) || 0) : 0
+  return [isService ? 1 : 0, commission ? 1 : 0, percent, min]
 }
 
 export async function createProduct(input: ProductInput): Promise<Product> {
@@ -189,8 +204,9 @@ export async function createProduct(input: ProductInput): Promise<Product> {
   try {
     const info = await tx.execute({
       sql: `INSERT INTO products
-              (name, barcode, category_id, unit_id, vendor_id, cost_price, retail_price, reorder_point, expiry_date, serial_number, show_in_pos, serial_tracking_enabled, image_data_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              (name, barcode, category_id, unit_id, vendor_id, cost_price, retail_price, reorder_point, expiry_date, serial_number, show_in_pos, serial_tracking_enabled, image_data_url,
+               is_service, commission_enabled, commission_percent, commission_min)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         input.name.trim(),
         barcode,
@@ -204,7 +220,8 @@ export async function createProduct(input: ProductInput): Promise<Product> {
         input.serialNumber?.trim() || null,
         input.showInPos ? 1 : 0,
         input.serialTrackingEnabled ? 1 : 0,
-        input.imageDataUrl || null
+        input.imageDataUrl || null,
+        ...serviceColumns(input)
       ]
     })
     productId = Number(info.lastInsertRowid)
@@ -257,7 +274,8 @@ export async function updateProduct(id: number, input: ProductUpdateInput): Prom
       sql: `UPDATE products
             SET name = ?, barcode = ?, category_id = ?, unit_id = ?, vendor_id = ?, cost_price = ?, retail_price = ?,
                 reorder_point = ?, expiry_date = ?, serial_number = ?, show_in_pos = ?, serial_tracking_enabled = ?,
-                image_data_url = ?, updated_at = datetime('now')
+                image_data_url = ?, is_service = ?, commission_enabled = ?, commission_percent = ?, commission_min = ?,
+                updated_at = datetime('now')
             WHERE id = ?`,
       args: [
         input.name.trim(),
@@ -273,6 +291,7 @@ export async function updateProduct(id: number, input: ProductUpdateInput): Prom
         input.showInPos ? 1 : 0,
         input.serialTrackingEnabled ? 1 : 0,
         input.imageDataUrl || null,
+        ...serviceColumns(input),
         id
       ]
     })

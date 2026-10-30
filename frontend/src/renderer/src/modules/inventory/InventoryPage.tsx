@@ -5,6 +5,7 @@ import type {
   PosUiSettings,
   Product,
   ProductImportResult,
+  PurchaseLineInput,
   Unit,
   VendorView,
   Warehouse
@@ -13,6 +14,8 @@ import { PurchaseInvoiceModal } from './PurchaseInvoiceModal'
 import { TransferModal } from './TransferModal'
 import { RecipeEditorModal } from '../restaurant/RecipeEditorModal'
 import { QuickStockModal } from './QuickStockModal'
+import { PurchaseListModal } from './PurchaseListModal'
+import { PurchaseInvoicesModal } from './PurchaseInvoicesModal'
 import { formatCurrency as currency } from '../../lib/currency'
 import { playSound } from '../../lib/sounds'
 import { isViewLicensed } from '../../lib/permissions'
@@ -37,7 +40,11 @@ const emptyForm = {
   serialNumber: '',
   showInPos: true,
   serialTrackingEnabled: false,
-  imageDataUrl: null as string | null
+  imageDataUrl: null as string | null,
+  isService: false,
+  commissionEnabled: false,
+  commissionPercent: '0',
+  commissionMin: '0'
 }
 
 function daysUntil(dateStr: string): number {
@@ -60,6 +67,12 @@ export function InventoryPage(): JSX.Element {
   const [newCategoryName, setNewCategoryName] = useState('')
   const [newWarehouseName, setNewWarehouseName] = useState('')
   const [showPurchase, setShowPurchase] = useState(false)
+  /** قائمة مطلوب شراؤه وقائمة فواتير المشتريات */
+  const [showPurchaseList, setShowPurchaseList] = useState(false)
+  const [showPurchasesList, setShowPurchasesList] = useState(false)
+  const [pendingCount, setPendingCount] = useState(0)
+  /** فاتورة شراء متجهزة من قائمة مطلوب شراؤه (مورد + بنود + أرقام الطلبات) */
+  const [purchaseInit, setPurchaseInit] = useState<{ vendorId: number | null; lines: PurchaseLineInput[]; requestIds: number[] } | null>(null)
   const [showTransfer, setShowTransfer] = useState(false)
   const [showWarehouses, setShowWarehouses] = useState(false)
   const [importResult, setImportResult] = useState<ProductImportResult | null>(null)
@@ -151,6 +164,15 @@ export function InventoryPage(): JSX.Element {
     }
   }
 
+  function refreshPendingCount(): void {
+    window.api.purchaseRequests.pendingCount().then(setPendingCount).catch(() => {})
+  }
+
+  useEffect(() => {
+    refreshPendingCount()
+    return window.api.onDataChanged(refreshPendingCount)
+  }, [])
+
   function startEdit(p: Product): void {
     setForm({
       id: p.id,
@@ -170,7 +192,11 @@ export function InventoryPage(): JSX.Element {
       serialNumber: p.serialNumber ?? '',
       showInPos: p.showInPos,
       serialTrackingEnabled: p.serialTrackingEnabled,
-      imageDataUrl: p.imageDataUrl
+      imageDataUrl: p.imageDataUrl,
+      isService: p.isService,
+      commissionEnabled: p.commissionEnabled,
+      commissionPercent: String(p.commissionPercent),
+      commissionMin: String(p.commissionMin)
     })
     setShowForm(true)
   }
@@ -200,6 +226,17 @@ export function InventoryPage(): JSX.Element {
     if (items.length) await window.api.print.labels(items)
   }
 
+  /** حقول الخدمة/العمولة (العمولة مش بتتفعّل إلا لو الصنف خدمة) */
+  function servicePayload(): { isService: boolean; commissionEnabled: boolean; commissionPercent: number; commissionMin: number } {
+    const commission = form.isService && form.commissionEnabled
+    return {
+      isService: form.isService,
+      commissionEnabled: commission,
+      commissionPercent: commission ? Number(form.commissionPercent) || 0 : 0,
+      commissionMin: commission ? Number(form.commissionMin) || 0 : 0
+    }
+  }
+
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault()
     if (!warehouseId) return
@@ -223,7 +260,8 @@ export function InventoryPage(): JSX.Element {
         serialNumber: form.serialNumber.trim() || null,
         showInPos: form.showInPos,
         serialTrackingEnabled: form.serialTrackingEnabled,
-        imageDataUrl: form.imageDataUrl
+        imageDataUrl: form.imageDataUrl,
+        ...servicePayload()
       })
     } else {
       await window.api.catalog.updateProduct(form.id, {
@@ -242,7 +280,8 @@ export function InventoryPage(): JSX.Element {
         serialNumber: form.serialNumber.trim() || null,
         showInPos: form.showInPos,
         serialTrackingEnabled: form.serialTrackingEnabled,
-        imageDataUrl: form.imageDataUrl
+        imageDataUrl: form.imageDataUrl,
+        ...servicePayload()
       })
     }
     playSound('save')
@@ -264,7 +303,19 @@ export function InventoryPage(): JSX.Element {
               🔁 {t('inventory.transferStock')}
             </button>
           )}
-          <button className="qcp-btn qcp-btn-secondary" onClick={() => setShowPurchase(true)}>
+          <button className="qcp-btn qcp-btn-secondary" onClick={() => setShowPurchaseList(true)}>
+            📝 مطلوب شراؤه{pendingCount > 0 ? ` (${pendingCount})` : ''}
+          </button>
+          <button className="qcp-btn qcp-btn-secondary" onClick={() => setShowPurchasesList(true)}>
+            🧾 فواتير المشتريات
+          </button>
+          <button
+            className="qcp-btn qcp-btn-secondary"
+            onClick={() => {
+              setPurchaseInit(null)
+              setShowPurchase(true)
+            }}
+          >
             📥 {t('inventory.purchaseInvoice')}
           </button>
           <button className="qcp-btn qcp-btn-secondary" onClick={handleDownloadTemplate}>
@@ -377,9 +428,13 @@ export function InventoryPage(): JSX.Element {
                 <td>{currency(p.retailPrice)}</td>
                 <td>{p.prices.wholesale != null ? currency(p.prices.wholesale) : '—'}</td>
                 <td>
-                  <span className={`qcp-pill ${p.quantity <= p.reorderPoint ? 'critical' : 'accent'}`}>
-                    {p.quantity}
-                  </span>
+                  {p.isService ? (
+                    <span className="qcp-pill">🛠 خدمة</span>
+                  ) : (
+                    <span className={`qcp-pill ${p.quantity <= p.reorderPoint ? 'critical' : 'accent'}`}>
+                      {p.quantity}
+                    </span>
+                  )}
                 </td>
                 <td>
                   {p.expiryDate ? (
@@ -669,6 +724,60 @@ export function InventoryPage(): JSX.Element {
               </div>
             </div>
 
+            <div className="qcp-card" style={{ marginTop: 10, padding: 10, background: 'var(--qcp-bg-sunken)' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 700 }}>
+                <input
+                  type="checkbox"
+                  checked={form.isService}
+                  onChange={(e) => setForm((f) => ({ ...f, isService: e.target.checked, commissionEnabled: e.target.checked ? f.commissionEnabled : false }))}
+                />
+                🛠 خدمة
+              </label>
+              <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)', marginTop: 2 }}>
+                مثال: تركيب فيميه، كشف أعطال، سحب فودافون كاش. الخدمة من غير مخزون وبتتباع بدون تحقق كمية.
+              </div>
+              {form.isService && (
+                <>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={form.commissionEnabled}
+                      onChange={(e) => setForm((f) => ({ ...f, commissionEnabled: e.target.checked }))}
+                    />
+                    💰 عمولة على مبلغ العملية (اختياري)
+                  </label>
+                  {form.commissionEnabled && (
+                    <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                      <div className="qcp-field" style={{ flex: 1 }}>
+                        <label>نسبة العمولة %</label>
+                        <input
+                          className="qcp-input"
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={form.commissionPercent}
+                          onChange={(e) => setForm((f) => ({ ...f, commissionPercent: e.target.value }))}
+                        />
+                      </div>
+                      <div className="qcp-field" style={{ flex: 1 }}>
+                        <label>حد أدنى للعمولة (اختياري)</label>
+                        <input
+                          className="qcp-input"
+                          type="number"
+                          min={0}
+                          value={form.commissionMin}
+                          onChange={(e) => setForm((f) => ({ ...f, commissionMin: e.target.value }))}
+                        />
+                      </div>
+                      <div style={{ flex: 1.2, fontSize: 11.5, color: 'var(--qcp-ink-faint)', alignSelf: 'center' }}>
+                        وقت البيع بتكتب المبلغ (مثلًا 1000) والعمولة بتتحسب وتتضاف على الفاتورة.
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -768,10 +877,33 @@ export function InventoryPage(): JSX.Element {
         <PurchaseInvoiceModal
           warehouses={warehouses}
           defaultWarehouseId={warehouseId}
-          onClose={() => setShowPurchase(false)}
-          onSaved={() => refreshProducts(warehouseId)}
+          initial={purchaseInit ?? undefined}
+          onClose={() => {
+            setShowPurchase(false)
+            setPurchaseInit(null)
+          }}
+          onSaved={() => {
+            refreshProducts(warehouseId)
+            refreshPendingCount()
+          }}
         />
       )}
+
+      {showPurchaseList && (
+        <PurchaseListModal
+          onClose={() => {
+            setShowPurchaseList(false)
+            refreshPendingCount()
+          }}
+          onBuy={(init) => {
+            setPurchaseInit(init)
+            setShowPurchaseList(false)
+            setShowPurchase(true)
+          }}
+        />
+      )}
+
+      {showPurchasesList && <PurchaseInvoicesModal onClose={() => setShowPurchasesList(false)} />}
 
       {importResult && (
         <div className="qcp-modal-backdrop" onClick={() => setImportResult(null)}>

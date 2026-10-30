@@ -5,6 +5,8 @@ import { assertWarehouseInScope } from './branches'
 import { getCustomerStatement } from './customers'
 import { getVendorStatement } from './vendors'
 import { assertReportInEdition } from './edition'
+import { SALE_PAY_LINES_SQL } from './salePayments'
+import { customerDueDatesReport, salesRepCommissionDetailReport, serviceSalesReport, vendorDueDatesReport } from './reportsExtra'
 import type { OverviewMetric, OverviewSummary, ReportFilter, ReportResult, ReportType } from '../../shared/types'
 
 /**
@@ -98,6 +100,14 @@ export async function runReport(type: ReportType, filter: ReportFilter): Promise
       return salesByEmployee(filter)
     case 'sales_rep_commission':
       return salesRepCommission(filter)
+    case 'sales_rep_commission_detail':
+      return salesRepCommissionDetailReport(filter)
+    case 'customer_due_dates':
+      return customerDueDatesReport(filter)
+    case 'vendor_due_dates':
+      return vendorDueDatesReport(filter)
+    case 'service_sales':
+      return serviceSalesReport(filter)
     case 'purchases_last_price':
       return purchasesLastPrice(filter)
     case 'purchases_detailed':
@@ -134,7 +144,7 @@ async function inventoryStatus(filter: ReportFilter): Promise<ReportResult> {
           FROM products p
           LEFT JOIN categories c ON c.id = p.category_id
           ${sj.sql}
-          WHERE p.deleted_at IS NULL
+          WHERE p.deleted_at IS NULL AND p.is_service = 0
           ORDER BY p.name`,
     args: sj.args as any
   })
@@ -175,7 +185,7 @@ async function stocktake(filter: ReportFilter): Promise<ReportResult> {
           FROM products p
           LEFT JOIN categories c ON c.id = p.category_id
           ${sj.sql}
-          WHERE p.deleted_at IS NULL
+          WHERE p.deleted_at IS NULL AND p.is_service = 0
           ORDER BY p.name`,
     args: sj.args as any
   })
@@ -851,10 +861,10 @@ async function paymentMethods(filter: ReportFilter): Promise<ReportResult> {
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
   const rs = await db.execute({
-    sql: `SELECT payment_method AS method, COUNT(*) AS invoiceCount, SUM(total) AS total
-          FROM sales_invoices
-          WHERE deleted_at IS NULL ${dateSql} ${warehouseSql}
-          GROUP BY method
+    sql: `SELECT pl.method AS method, COUNT(DISTINCT pl.invoice_id) AS invoiceCount, SUM(pl.total_amount) AS total
+          FROM (${SALE_PAY_LINES_SQL}) pl JOIN sales_invoices ON sales_invoices.id = pl.invoice_id
+          WHERE sales_invoices.deleted_at IS NULL ${dateSql} ${warehouseSql}
+          GROUP BY pl.method
           ORDER BY total DESC`,
     args
   })
@@ -1215,9 +1225,9 @@ async function salesRepCommission(filter: ReportFilter): Promise<ReportResult> {
     totalCommission: Number(r.totalCommission)
   }))
   return {
-    title: 'عمولات المناديب',
+    title: 'عمولات المحلات المسوّقة / المناديب',
     columns: [
-      { key: 'name', label: 'المندوب' },
+      { key: 'name', label: 'المحل / المندوب' },
       { key: 'commissionPercent', label: 'نسبة العمولة %', align: 'end' },
       { key: 'invoiceCount', label: 'عدد الفواتير', align: 'end' },
       { key: 'totalSales', label: 'إجمالي المبيعات', align: 'end' },

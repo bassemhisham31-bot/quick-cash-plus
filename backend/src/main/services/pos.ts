@@ -5,7 +5,8 @@ import { getOpenSession } from './cashSession'
 import { getLoyaltySettings, getPosUiSettings, getTaxSettings } from './settings'
 import { notifySaleByWhatsApp } from './whatsapp'
 import { checkRecipeStock, deductRecipeIfAny } from './recipes'
-import type { CheckoutInput, CheckoutResult } from '../../shared/types'
+import { cleanDate } from './salePayments'
+import type { CheckoutInput, CheckoutResult, PaymentMethod } from '../../shared/types'
 
 /**
  * بيرفض الخصم لو الكاشير مالوش صلاحية "pos.discount" أو الخصم عدّى أقصى نسبة في الإعدادات — نفس قواعد الشاشة بس هنا
@@ -133,6 +134,25 @@ export async function checkout(
 
   const tempItemProductId = input.lines.some((l) => l.isTemp) ? await getTempItemProductId(db) : null
 
+  // أصناف الخدمات (من غير مخزون) — بنتأكد منها من جدول الأصناف مش من اللي جاي من الواجهة
+  const realProductIds = [...new Set(input.lines.filter((l) => !l.isTemp).map((l) => l.productId))]
+  const serviceIds = new Set<number>()
+  if (realProductIds.length) {
+    const svcRs = await db.execute({
+      sql: `SELECT id FROM products WHERE is_service = 1 AND id IN (${realProductIds.map(() => '?').join(',')})`,
+      args: realProductIds
+    })
+    for (const r of svcRs.rows as any[]) serviceIds.add(Number(r.id))
+  }
+  const isServiceLine = (l: { isTemp?: boolean; productId: number }): boolean => !l.isTemp && serviceIds.has(l.productId)
+
+  // الدفع المقسّم: المبالغ بالوسائل غير الآجلة، والباقي من الإجمالي بيتسجل آجل على العميل
+  const splitRows = (input.payments ?? [])
+    .map((p) => ({ method: p?.method as PaymentMethod, amount: Math.round((Number(p?.amount) || 0) * 100) / 100 }))
+    .filter((p) => p.amount > 0 && p.method && p.method !== 'credit' && p.method !== 'mixed')
+  const isSplit = input.paymentMethod === 'mixed' && splitRows.length > 0
+  const dueDate = cleanDate(input.dueDate)
+
   const tx = await db.transaction('write')
   try {
     // تأكيد كفاية المخزون قبل أي تعديل — الأصناف المؤقتة (خارج المخزون) مستثناة تمامًا.
@@ -140,7 +160,7 @@ export async function checkout(
     // المطعم بيبعت allowNegativeStock بنفسه؛ البيع العادي بيسمح بالسالب بس لو الخيار مفعّل في الإعدادات (بيتفحص هنا مش في الواجهة)
     const allowNegative = input.allowNegativeStock === true || (await getPosUiSettings()).allowNegativeStock
     for (const line of input.lines) {
-      if (line.isTemp || allowNegative) continue
+      if (line.isTemp || allowNegative || isServiceLine(line)) continue
       const lineWarehouseId = line.warehouseId ?? warehouseId
       const recipeCheck = await checkRecipeStock(tx, line.productId, line.qty, lineWarehouseId)
       if (recipeCheck.hasRecipe) {
@@ -173,13 +193,34 @@ export async function checkout(
       }
     }
 
+    // وسيلة الدفع والمدفوع الفعليين + الجزء الآجل (آجل كامل، أو الباقي بعد الدفع المقسّم)
+    let methodValue: PaymentMethod = input.paymentMethod
+    let paidValue = input.paid + settledAmount
+    let creditAmount = input.paymentMethod === 'credit' ? total - settledAmount : 0
+    let storedSplitRows: typeof splitRows = []
+    if (isSplit) {
+      const nonCredit = splitRows.reduce((s, p) => s + p.amount, 0)
+      const required = total - settledAmount
+      if (nonCredit > required + 0.01) throw new Error('مجموع المبالغ المدفوعة أكبر من المطلوب دفعه')
+      creditAmount = required - nonCredit > 0.01 ? required - nonCredit : 0
+      if (creditAmount > 0 && isWalkInSelection) throw new Error('فيه باقي آجل — اختار عميل عشان يتسجل عليه')
+      paidValue = nonCredit + settledAmount
+      if (splitRows.length === 1 && creditAmount === 0) {
+        methodValue = splitRows[0].method
+      } else {
+        methodValue = 'mixed'
+        storedSplitRows = splitRows
+      }
+    }
+    const invoiceDueDate = creditAmount > 0.005 ? dueDate : null
+
     const info = await tx.execute({
       sql: `INSERT INTO sales_invoices
               (number, customer_id, session_id, cashier_id, warehouse_id, subtotal, discount_type, discount_value,
                discount_total, tax_total, total, paid, payment_method, status, loyalty_points_earned, loyalty_points_redeemed,
                sales_rep_id, commission_amount, order_type, table_id, delivery_fee, delivery_driver_id, service_charge_total, captain_id,
-               delivery_address, delivery_mark, customer_label, tip_amount, branch_id)
-            VALUES ('PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               delivery_address, delivery_mark, customer_label, tip_amount, branch_id, due_date)
+            VALUES ('PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         customerId,
         session.id,
@@ -191,8 +232,8 @@ export async function checkout(
         discountTotal,
         taxTotal,
         total,
-        input.paid + settledAmount,
-        input.paymentMethod,
+        paidValue,
+        methodValue,
         earnedPoints,
         redeemPoints,
         salesRepId,
@@ -206,8 +247,9 @@ export async function checkout(
         orderType === 'delivery' ? input.deliveryAddress?.trim() || null : null,
         orderType === 'delivery' ? input.deliveryMark?.trim() || null : null,
         isWalkInSelection ? input.customerLabel?.trim().slice(0, 80) || null : null,
-        input.paymentMethod !== 'credit' ? Math.max(0, Math.round((Number(input.tipAmount) || 0) * 100) / 100) : 0,
-        branchId
+        methodValue !== 'credit' ? Math.max(0, Math.round((Number(input.tipAmount) || 0) * 100) / 100) : 0,
+        branchId,
+        invoiceDueDate
       ]
     })
     const invoiceId = Number(info.lastInsertRowid)
@@ -217,12 +259,14 @@ export async function checkout(
     for (const line of input.lines) {
       const lineTotal = line.qty * line.unitPrice - line.discount
       const lineProductId = line.isTemp ? tempItemProductId : line.productId
-      // تكلفة الوحدة وقت البيع — بتتسجّل عشان تكلفة البضاعة المباعة في القيود متتغيّرش لو التكلفة اتعدّلت بعد كده
-      const costRs = line.isTemp ? null : await tx.execute({ sql: 'SELECT cost_price FROM products WHERE id = ?', args: [line.productId] })
+      const isService = isServiceLine(line)
+      // تكلفة الوحدة وقت البيع — بتتسجّل عشان تكلفة البضاعة المباعة في القيود متتغيّرش لو التكلفة اتعدّلت بعد كده (الخدمة من غير تكلفة بضاعة)
+      const costRs = line.isTemp || isService ? null : await tx.execute({ sql: 'SELECT cost_price FROM products WHERE id = ?', args: [line.productId] })
       const lineCost = costRs?.rows[0] ? Number((costRs.rows[0] as any).cost_price) : 0
+      const serviceAmount = isService && Number(line.serviceAmount) > 0 ? Number(line.serviceAmount) : null
       await tx.execute({
-        sql: `INSERT INTO sales_items (invoice_id, product_id, product_name, barcode, qty, unit_price, discount, total, serial_number, note, warehouse_id, cost_price)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO sales_items (invoice_id, product_id, product_name, barcode, qty, unit_price, discount, total, serial_number, note, warehouse_id, cost_price, service_amount)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           invoiceId,
           lineProductId,
@@ -235,10 +279,11 @@ export async function checkout(
           line.serialNumber?.trim() || null,
           line.note?.trim() || null,
           line.isTemp ? null : (line.warehouseId ?? null),
-          lineCost
+          lineCost,
+          serviceAmount
         ]
       })
-      if (line.isTemp) continue
+      if (line.isTemp || isService) continue
       const lineWarehouseId = line.warehouseId ?? warehouseId
       const deductedByRecipe = await deductRecipeIfAny(tx, line.productId, line.qty, lineWarehouseId, invoiceId, cashierId)
       if (deductedByRecipe) continue
@@ -255,12 +300,35 @@ export async function checkout(
       })
     }
 
-    if (input.paymentMethod === 'credit') {
-      const creditAmount = total - settledAmount
-      if (creditAmount !== 0) {
+    if (creditAmount !== 0) {
+      await tx.execute({
+        sql: 'UPDATE customers SET balance = balance + ? WHERE id = ?',
+        args: [creditAmount, customerId]
+      })
+    }
+
+    for (const part of storedSplitRows) {
+      await tx.execute({
+        sql: 'INSERT INTO sales_invoice_payments (invoice_id, method, amount) VALUES (?, ?, ?)',
+        args: [invoiceId, part.method, part.amount]
+      })
+    }
+
+    // قائمة "مطلوب شراؤه": كل قطعة اتباعت (غير الخدمات والأصناف المؤقتة) بتتسجل عشان تتشترى من المورد
+    // (شاشة المطعم بتبعت allowNegativeStock وأطباقها مالهاش مشتريات — مستثناة)
+    if (input.allowNegativeStock !== true && (await getPosUiSettings()).purchaseListEnabled) {
+      for (const line of input.lines) {
+        if (line.isTemp || isServiceLine(line)) continue
+        const prodRs = await tx.execute({
+          sql: 'SELECT name, barcode, cost_price, vendor_id FROM products WHERE id = ?',
+          args: [line.productId]
+        })
+        const prod = prodRs.rows[0] as any
+        if (!prod) continue
         await tx.execute({
-          sql: 'UPDATE customers SET balance = balance + ? WHERE id = ?',
-          args: [creditAmount, customerId]
+          sql: `INSERT INTO purchase_requests (product_id, product_name, barcode, qty, unit_cost, vendor_id, sales_invoice_id, branch_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [line.productId, prod.name, prod.barcode ?? null, line.qty, Number(prod.cost_price) || 0, prod.vendor_id ?? null, invoiceId, branchId]
         })
       }
     }

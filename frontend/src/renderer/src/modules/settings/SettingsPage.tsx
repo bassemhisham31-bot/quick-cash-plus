@@ -3011,6 +3011,12 @@ function PosUiSection(): JSX.Element {
         checked={settings.categorySidebarEnabled}
         onChange={(v) => handleSave({ ...settings, categorySidebarEnabled: v })}
       />
+      <ToggleRow
+        title={t('posUi.purchaseListEnabled')}
+        hint={t('posUi.purchaseListEnabledHint')}
+        checked={settings.purchaseListEnabled}
+        onChange={(v) => handleSave({ ...settings, purchaseListEnabled: v })}
+      />
 
       <div className="qcp-card" style={{ marginTop: 16 }}>
         <h3 style={{ marginTop: 0 }}>{t('posUi.currency')}</h3>

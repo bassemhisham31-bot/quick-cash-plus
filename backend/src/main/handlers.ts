@@ -188,6 +188,14 @@ import {
   updateEmployeeTransaction
 } from './services/employees'
 import { createSalesRep, listSalesReps, setSalesRepActive, updateSalesRep } from './services/salesReps'
+// (ويب فقط — مضافة يدويًا، port-handlers.cjs هيمسحها) مرفقات + قائمة مطلوب شراؤه
+import { readAttachment, uploadAttachment } from './services/attachments'
+import {
+  countPendingPurchaseRequests,
+  listPurchaseRequests,
+  setPurchaseRequestsStatus,
+  updatePurchaseRequest
+} from './services/purchaseRequests'
 import {
   convertQuotationToInvoice,
   createQuotation,
@@ -448,6 +456,15 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'salesReps:create': (input: SalesRepInput) => createSalesRep(input),
     'salesReps:update': (id: number, input: SalesRepInput) => updateSalesRep(id, input),
     'salesReps:setActive': (id: number, active: boolean) => setSalesRepActive(id, active),
+
+    // ويب فقط: مرفقات المصروفات/الموظفين (رفع base64 وقراءة) وقائمة مطلوب شراؤه
+    'attachments:upload': (file: import('../shared/types').AttachmentFile) => uploadAttachment(file),
+    'attachments:read': (path: string) => readAttachment(path),
+    'purchaseRequests:list': (filter: import('../shared/types').PurchaseRequestFilter) => listPurchaseRequests(filter),
+    'purchaseRequests:pendingCount': () => countPendingPurchaseRequests(),
+    'purchaseRequests:update': (id: number, patch: { qty?: number; unitCost?: number; vendorId?: number | null; note?: string | null }) =>
+      updatePurchaseRequest(id, patch),
+    'purchaseRequests:setStatus': (ids: number[], status: 'pending' | 'cancelled') => setPurchaseRequestsStatus(ids, status),
 
     'quotations:create': (input: QuotationInput, userId: number) => createQuotation(input, userId),
     'quotations:list': () => listQuotations(),

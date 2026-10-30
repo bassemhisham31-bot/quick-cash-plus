@@ -1,3 +1,11 @@
+  /** قائمة "مطلوب شراؤه" (ويب فقط) */
+  purchaseRequests: {
+    list: (filter: PurchaseRequestFilter): Promise<PurchaseRequestItem[]> => invoke('purchaseRequests:list', filter),
+    pendingCount: (): Promise<number> => invoke('purchaseRequests:pendingCount'),
+    update: (id: number, patch: { qty?: number; unitCost?: number; vendorId?: number | null; note?: string | null }): Promise<void> =>
+      invoke('purchaseRequests:update', id, patch),
+    setStatus: (ids: number[], status: 'pending' | 'cancelled'): Promise<void> => invoke('purchaseRequests:setStatus', ids, status)
+  },
   /**
    * مزامنة الأجهزة عبر الشبكة المحلية (جهاز رئيسي/فرعي) كانت مفهوم خاص بنسخة الأوفلاين —
    * في نسخة الويب كل "جهاز" هو مجرد متصفح بيتصل بالسيرفر المركزي مباشرة عبر الإنترنت،

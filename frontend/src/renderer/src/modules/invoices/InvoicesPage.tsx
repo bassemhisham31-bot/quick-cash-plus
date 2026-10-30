@@ -141,6 +141,7 @@ export function InvoicesPage(): JSX.Element {
               <th>{t('invoices.customer')}</th>
               <th>{t('invoices.total')}</th>
               <th>{t('invoices.status')}</th>
+              <th>الاستحقاق</th>
               <th>{t('invoices.date')}</th>
               <th>{t('common.actions')}</th>
             </tr>
@@ -153,6 +154,7 @@ export function InvoicesPage(): JSX.Element {
                 <td>{inv.customerName}</td>
                 <td>{currency(inv.total)}</td>
                 <td>{statusPill(inv.status, t)}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>{inv.dueDate ?? '—'}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>{inv.createdAt}</td>
                 <td style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   <button className="qcp-btn qcp-btn-secondary" onClick={() => openInvoice(inv.id)}>

@@ -47,6 +47,7 @@ export function PurchaseReturnModal({ invoice, onClose, onChanged }: Props): JSX
         </div>
         <p style={{ color: 'var(--qcp-ink-faint)', fontSize: 12.5, margin: '4px 0 16px' }}>
           {invoice.createdAt} — {invoice.cashierName}
+          {invoice.dueDate && <strong style={{ marginInlineStart: 10, color: 'var(--qcp-accent)' }}>📅 تاريخ السداد: {invoice.dueDate}</strong>}
         </p>
 
         <div className="qcp-table-wrap" style={{ marginBottom: 16 }}>

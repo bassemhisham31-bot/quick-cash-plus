@@ -24,7 +24,11 @@ const REPORT_OPTIONS: { type: ReportType; icon: string; label: string }[] = [
   { type: 'cash_drawer_sessions', icon: '🗄️', label: 'تقرير جلسات الخزنة' },
   { type: 'top_customers', icon: '🏆', label: 'أفضل العملاء شراءً' },
   { type: 'sales_by_employee', icon: '🧑‍💼', label: 'المبيعات حسب الكاشير' },
-  { type: 'sales_rep_commission', icon: '🧾', label: 'عمولات المناديب' },
+  { type: 'sales_rep_commission', icon: '🧾', label: 'عمولات المحلات المسوّقة / المناديب' },
+  { type: 'sales_rep_commission_detail', icon: '🏪', label: 'تفصيل عمولات المحلات (فاتورة بفاتورة)' },
+  { type: 'customer_due_dates', icon: '📅', label: 'مواعيد استحقاق العملاء (الآجل بالشهر)' },
+  { type: 'vendor_due_dates', icon: '🗓️', label: 'مواعيد سداد الموردين (بالشهر)' },
+  { type: 'service_sales', icon: '🛠', label: 'مبيعات الخدمات والعمولات' },
   { type: 'purchases_last_price', icon: '🧾', label: 'تقرير المشتريات الكامل (آخر سعر شراء)' },
   { type: 'purchases_detailed', icon: '📥', label: 'المشتريات التفصيلي' },
   { type: 'account_statement', icon: '📒', label: 'كشف حساب عميل/مورد' },
@@ -202,6 +206,9 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
         </select>
         <input className="qcp-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         <input className="qcp-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        {(selectedType === 'customer_due_dates' || selectedType === 'vendor_due_dates') && (
+          <span style={{ fontSize: 12, color: 'var(--qcp-ink-faint)' }}>الفترة هنا = تاريخ الاستحقاق (سيبها فاضية لعرض الكل)</span>
+        )}
         {selectedType === 'account_statement' && (
           <>
             <select
@@ -298,7 +305,7 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
             </thead>
             <tbody>
               {filteredRows.map((row, idx) => (
-                <tr key={idx}>
+                <tr key={idx} style={row._subtotal ? { fontWeight: 800, background: 'var(--qcp-bg-sunken)' } : undefined}>
                   {result.columns.map((c) => (
                     <td key={c.key} style={{ textAlign: c.align === 'end' ? 'end' : 'start' }}>
                       {formatCell(row[c.key], c)}

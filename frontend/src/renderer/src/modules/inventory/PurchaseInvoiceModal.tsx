@@ -7,16 +7,25 @@ import type { Product, PurchaseLineInput, VendorView, Warehouse } from '../../..
 interface Props {
   warehouses: Warehouse[]
   defaultWarehouseId: number
+  /** بنود جاهزة جاية من قائمة "مطلوب شراؤه" (مورد + بنود + أرقام الطلبات اللي هتتعلّم "اتشترت") */
+  initial?: { vendorId: number | null; lines: PurchaseLineInput[]; requestIds: number[] }
   onClose: () => void
   onSaved: () => void
 }
 
-export function PurchaseInvoiceModal({ warehouses, defaultWarehouseId, onClose, onSaved }: Props): JSX.Element {
+function datePlusDays(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+export function PurchaseInvoiceModal({ warehouses, defaultWarehouseId, initial, onClose, onSaved }: Props): JSX.Element {
   const { t } = useTranslation()
   const user = useAppStore((s) => s.user)
 
   const [vendors, setVendors] = useState<VendorView[]>([])
-  const [vendorId, setVendorId] = useState<number | ''>('')
+  const [vendorId, setVendorId] = useState<number | ''>(initial?.vendorId ?? '')
   const [warehouseId, setWarehouseId] = useState(defaultWarehouseId)
   const [paymentMethod, setPaymentMethod] = useState<
     'cash' | 'credit' | 'card' | 'wallet' | 'vodafone_cash' | 'instapay'
@@ -25,7 +34,9 @@ export function PurchaseInvoiceModal({ warehouses, defaultWarehouseId, onClose, 
   const [note, setNote] = useState('')
   const [search, setSearch] = useState('')
   const [results, setResults] = useState<Product[]>([])
-  const [lines, setLines] = useState<PurchaseLineInput[]>([])
+  const [lines, setLines] = useState<PurchaseLineInput[]>(initial?.lines ?? [])
+  /** تاريخ السداد المتوقع للباقي على المورد (للفاتورة الآجلة) */
+  const [dueDate, setDueDate] = useState(datePlusDays(30))
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -68,6 +79,10 @@ export function PurchaseInvoiceModal({ warehouses, defaultWarehouseId, onClose, 
 
   async function handleSave(): Promise<void> {
     if (!user || !lines.length) return
+    if (paymentMethod === 'credit' && !dueDate) {
+      setError('اختار تاريخ السداد المتوقع للفاتورة الآجلة')
+      return
+    }
     setSaving(true)
     setError(null)
     try {
@@ -78,7 +93,9 @@ export function PurchaseInvoiceModal({ warehouses, defaultWarehouseId, onClose, 
           lines,
           paymentMethod,
           paid: paymentMethod === 'cash' ? Number(paid) || total : paymentMethod === 'credit' ? 0 : total,
-          note
+          note,
+          dueDate: paymentMethod === 'credit' ? dueDate : null,
+          purchaseRequestIds: initial?.requestIds
         },
         user.id
       )
@@ -205,6 +222,13 @@ export function PurchaseInvoiceModal({ warehouses, defaultWarehouseId, onClose, 
           )}
           <input className="qcp-input" style={{ flex: 1 }} placeholder={t('parties.notes') ?? ''} value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
+
+        {paymentMethod === 'credit' && (
+          <div className="qcp-field" style={{ marginBottom: 10 }}>
+            <label>📅 تاريخ السداد المتوقع للمورد</label>
+            <input className="qcp-input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, marginBottom: 14 }}>
           <span>الإجمالي</span>

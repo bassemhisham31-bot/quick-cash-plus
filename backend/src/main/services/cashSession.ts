@@ -2,6 +2,7 @@ import { getDb } from '../db'
 import { assertBranchAccess, branchesEnabled, branchFilter, currentBranchId, requireBranchId } from './branchScope'
 import { computeExpectedCash, recordCashDifference } from './treasuries'
 import { getSessionEventTotals } from './events'
+import { SALE_PAY_LINES_SQL } from './salePayments'
 import type { CashSessionSummary, ExpenseMethod, PaymentMethod, ShiftListRow, ShiftSummaryReport } from '../../shared/types'
 
 export interface CashSessionView {
@@ -55,8 +56,9 @@ async function computeCashTotals(
   const db = getDb()
 
   const salesRs = await db.execute({
-    sql: `SELECT COALESCE(SUM(paid), 0) AS totalPaid
-          FROM sales_invoices WHERE session_id = ? AND payment_method = 'cash' AND deleted_at IS NULL`,
+    sql: `SELECT COALESCE(SUM(pl.amount), 0) AS totalPaid
+          FROM (${SALE_PAY_LINES_SQL}) pl JOIN sales_invoices i ON i.id = pl.invoice_id
+          WHERE i.session_id = ? AND pl.method = 'cash' AND i.deleted_at IS NULL`,
     args: [sessionId]
   })
   const expensesRs = await db.execute({
@@ -186,13 +188,18 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
   const brArgs = branchesEnabled() ? [Number(session.branchId) || 1] : []
 
   const salesRs = await db.execute({
-    sql: `SELECT payment_method AS method, COUNT(*) AS invoiceCount, COALESCE(SUM(total), 0) AS total
-          FROM sales_invoices WHERE session_id = ? AND deleted_at IS NULL
-          GROUP BY payment_method`,
+    sql: `SELECT pl.method AS method, COUNT(DISTINCT pl.invoice_id) AS invoiceCount, COALESCE(SUM(pl.total_amount), 0) AS total
+          FROM (${SALE_PAY_LINES_SQL}) pl JOIN sales_invoices i ON i.id = pl.invoice_id
+          WHERE i.session_id = ? AND i.deleted_at IS NULL
+          GROUP BY pl.method`,
     args: [sessionId]
   })
   const salesByMethod = salesRs.rows.map((r: any) => ({ method: r.method as PaymentMethod, total: Number(r.total) }))
-  const invoiceCount = salesRs.rows.reduce((s, r: any) => s + Number(r.invoiceCount), 0)
+  const invoiceCount = Number(
+    (
+      (await db.execute({ sql: 'SELECT COUNT(*) AS c FROM sales_invoices WHERE session_id = ? AND deleted_at IS NULL', args: [sessionId] })).rows[0] as any
+    ).c
+  )
   const totalSales = salesByMethod.reduce((s, r) => s + r.total, 0)
   const tipsRs = await db.execute({
     sql: 'SELECT COALESCE(SUM(tip_amount), 0) AS totalTips FROM sales_invoices WHERE session_id = ? AND deleted_at IS NULL',

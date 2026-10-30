@@ -7,6 +7,7 @@ import { playSound } from '../../lib/sounds'
 import { colorFor } from '../restaurant/restaurantUi'
 import { DeliveryInfoModal } from '../restaurant/OrderScreen'
 import { DiscountField } from '../restaurant/DiscountField'
+import { InvoicePaymentSummary } from '../../components/InvoicePaymentSummary'
 import { discountRules } from '../../lib/discount'
 import { confirmDialog } from '../../components/ConfirmDialogHost'
 import { lineDiscountAmount } from '../../../../shared/types'
@@ -31,9 +32,32 @@ import type {
   Product,
   RestaurantTable,
   SalesRep,
+  SplitPaymentInput,
   TaxSettings,
   Warehouse
 } from '../../../../shared/types'
+
+/** وسائل الدفع المتاحة لتقسيم الفاتورة (الآجل بيتحسب تلقائيًا من الباقي) */
+const SPLIT_METHODS: { value: SplitPaymentInput['method']; label: string }[] = [
+  { value: 'cash', label: 'نقدًا' },
+  { value: 'vodafone_cash', label: 'فودافون كاش' },
+  { value: 'instapay', label: 'InstaPay' },
+  { value: 'card', label: 'بنكي / فيزا' },
+  { value: 'wallet', label: 'محفظة' }
+]
+
+/** عمولة خدمة = نسبة من المبلغ، مع حد أدنى */
+function calcCommission(amount: number, percent: number, min: number): number {
+  return Math.round(Math.max(min, (amount * percent) / 100) * 100) / 100
+}
+
+/** تاريخ بعد عدد أيام من النهارده بصيغة YYYY-MM-DD (بالتوقيت المحلي) */
+function datePlusDays(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
 
 const TIER_LABELS: Record<PriceTier, string> = {
   retail: 'قطاعي',
@@ -87,6 +111,12 @@ export function PosPage(): JSX.Element {
   const [discountOpen, setDiscountOpen] = useState<Set<number>>(new Set())
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash')
   const [paid, setPaid] = useState('')
+  /** الدفع المقسّم: كل صف وسيلة + مبلغ (الباقي من الإجمالي بيتسجل آجل على العميل) */
+  const [splitRows, setSplitRows] = useState<{ method: SplitPaymentInput['method']; amount: string }[]>([])
+  const [dueDate, setDueDate] = useState('')
+  /** نافذة مبلغ الخدمة اللي ليها عمولة (سحب فودافون كاش مثلًا) */
+  const [servicePrompt, setServicePrompt] = useState<Product | null>(null)
+  const [serviceAmountStr, setServiceAmountStr] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<InvoiceView | null>(null)
   const [lastChange, setLastChange] = useState(0)
@@ -242,6 +272,29 @@ export function PosPage(): JSX.Element {
       : 0
   const vendorSettlementUsed = maxVendorSettlement > 0 ? Math.min(Number(vendorSettlement) || 0, maxVendorSettlement) : 0
 
+  // الدفع المقسّم: المطلوب دفعه = الإجمالي - تسوية المورد، والباقي بعد المبالغ المكتوبة بيتسجل آجل
+  const requiredToPay = Math.max(0, total - vendorSettlementUsed)
+  const splitPaid = splitRows.reduce((s, r) => s + (Number(r.amount) || 0), 0)
+  const splitRemaining = Math.round((requiredToPay - splitPaid) * 100) / 100
+  const needsDueDate = paymentMethod === 'credit' || (paymentMethod === 'mixed' && splitRemaining > 0.01)
+
+  function updateSplitRow(idx: number, patch: Partial<{ method: SplitPaymentInput['method']; amount: string }>): void {
+    setSplitRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
+  }
+  function addSplitRow(): void {
+    setSplitRows((prev) => {
+      const used = new Set(prev.map((r) => r.method))
+      const method = SPLIT_METHODS.find((m) => !used.has(m.value))?.value ?? 'cash'
+      return [...prev, { method, amount: splitRemaining > 0.01 ? String(splitRemaining) : '' }]
+    })
+  }
+  function selectPaymentMethod(method: PaymentMethod): void {
+    setPaymentMethod(method)
+    if (method === 'mixed' && splitRows.length === 0) {
+      setSplitRows([{ method: 'cash', amount: String(Math.round(requiredToPay * 100) / 100) }])
+    }
+  }
+
   const itemsCount = cart.reduce((s, l) => s + l.qty, 0)
   const qtyInCart = useMemo(() => {
     const map = new Map<number, number>()
@@ -377,8 +430,44 @@ export function PosPage(): JSX.Element {
     return { ...l, discount: lineDiscountAmount(l.qty, l.unitPrice, l.discountType, l.discountValue) }
   }
 
+  /** إضافة عملية خدمة ليها عمولة: سعر السطر = العمولة، والمبلغ الأساسي بيتسجل معاه (ولو الخدمة موجودة بالفعل بيتجمع عليها) */
+  function addServiceCommissionLine(product: Product, amount: number): void {
+    const fee = calcCommission(amount, product.commissionPercent, product.commissionMin)
+    setCart((prev) => {
+      const existing = prev.find((l) => l.productId === product.id)
+      if (existing) {
+        const newAmount = (existing.serviceAmount ?? 0) + amount
+        return prev.map((l) =>
+          l.productId === product.id
+            ? withDiscount({ ...l, unitPrice: Math.round((l.unitPrice + fee) * 100) / 100, serviceAmount: newAmount, note: `مبلغ العملية: ${newAmount}` })
+            : l
+        )
+      }
+      return [
+        ...prev,
+        {
+          productId: product.id,
+          name: product.name,
+          barcode: product.barcode,
+          unitPrice: fee,
+          qty: 1,
+          discount: 0,
+          isService: true,
+          serviceAmount: amount,
+          note: `مبلغ العملية: ${amount}`
+        }
+      ]
+    })
+    playSound('save')
+  }
+
   function addToCart(product: Product, qty = 1): void {
-    if (product.quantity <= 0 && !posUiSettings?.allowNegativeStock) return
+    if (product.isService && product.commissionEnabled) {
+      setServiceAmountStr('')
+      setServicePrompt(product)
+      return
+    }
+    if (!product.isService && product.quantity <= 0 && !posUiSettings?.allowNegativeStock) return
     setCart((prev) => {
       const existing = prev.find((l) => l.productId === product.id)
       if (existing) {
@@ -392,7 +481,8 @@ export function PosPage(): JSX.Element {
           barcode: product.barcode,
           unitPrice: priceForTier(product, priceTier),
           qty,
-          discount: 0
+          discount: 0,
+          ...(product.isService ? { isService: true } : {})
         }
       ]
     })
@@ -543,6 +633,8 @@ export function PosPage(): JSX.Element {
     if (!cart.length) return
     setError(null)
     setPaid('')
+    setSplitRows([])
+    setDueDate(datePlusDays(30))
     setTipMode('return')
     setTipStr('')
     setShowPayment(true)
@@ -560,6 +652,24 @@ export function PosPage(): JSX.Element {
       setError('المبلغ المستلم أقل من الصافي — لو العميل هيدفع الباقي بعدين اختار "آجل"')
       return
     }
+    if (paymentMethod === 'mixed') {
+      if (splitPaid <= 0) {
+        setError('اكتب المبالغ المدفوعة لكل وسيلة')
+        return
+      }
+      if (splitRemaining < -0.01) {
+        setError('مجموع المبالغ أكبر من المطلوب دفعه')
+        return
+      }
+      if (splitRemaining > 0.01 && customerId === null) {
+        setError('لسه فيه باقي ' + currency(splitRemaining) + ' — كمّل الدفع أو اختار عميل عشان يتسجل عليه آجل')
+        return
+      }
+    }
+    if (needsDueDate && !dueDate) {
+      setError('اختار تاريخ الاستحقاق للجزء الآجل')
+      return
+    }
 
     setCheckingOut(true)
     try {
@@ -574,7 +684,15 @@ export function PosPage(): JSX.Element {
           paymentMethod,
           // المدفوع = قيمة الفاتورة، مش المبلغ اللي العميل ادّاه — الفكة بترجع له، ودرج الوردية
           // بيجمع "paid" كفلوس داخلة فعلًا (قبل كده الفكة كانت بتتحسب زيادة في الدرج)
-          paid: paymentMethod === 'credit' ? 0 : total,
+          paid: paymentMethod === 'credit' ? 0 : paymentMethod === 'mixed' ? splitPaid : total,
+          ...(paymentMethod === 'mixed'
+            ? {
+                payments: splitRows
+                  .map((r) => ({ method: r.method, amount: Number(r.amount) || 0 }))
+                  .filter((r) => r.amount > 0)
+              }
+            : {}),
+          dueDate: needsDueDate ? dueDate : null,
           tipAmount,
           redeemPoints: redeemPointsUsed,
           salesRepId,
@@ -612,6 +730,8 @@ export function PosPage(): JSX.Element {
       setCustomerLabel('')
       setDiscountOpen(new Set())
       setPaid('')
+      setSplitRows([])
+      setDueDate('')
       setPaymentMethod('cash')
       setCustomerId(null)
       setRedeemPoints('0')
@@ -640,7 +760,7 @@ export function PosPage(): JSX.Element {
     { value: 'wallet', label: t('pos.wallet') },
     { value: 'vodafone_cash', label: t('pos.vodafoneCash') },
     { value: 'instapay', label: t('pos.instapay') },
-    { value: 'mixed', label: t('pos.mixed') },
+    { value: 'mixed', label: 'تقسيم الدفع' },
     { value: 'credit', label: t('pos.credit') }
   ]
 
@@ -767,7 +887,7 @@ export function PosPage(): JSX.Element {
 
         <div className="rst-products">
           {visibleProducts.map((p) => {
-            const out = p.quantity <= 0 && !posUiSettings?.allowNegativeStock
+            const out = !p.isService && p.quantity <= 0 && !posUiSettings?.allowNegativeStock
             const inCart = qtyInCart.get(p.id)
             return (
               <button
@@ -783,10 +903,16 @@ export function PosPage(): JSX.Element {
                 </div>
                 <div className="rst-product-body">
                   <div className="rst-product-name">{p.name}</div>
-                  <div className="rst-product-price">{currency(priceForTier(p, priceTier))}</div>
-                  <span className={`pos-stock ${out ? 'out' : p.quantity <= LOW_STOCK ? 'low' : ''}`}>
-                    {out ? 'نفذ' : p.quantity <= 0 ? `رصيد ${formatQty(p.quantity)} (بالسالب)` : `متاح ${formatQty(p.quantity)}`}
-                  </span>
+                  <div className="rst-product-price">
+                    {p.isService && p.commissionEnabled ? `عمولة ${p.commissionPercent}%` : currency(priceForTier(p, priceTier))}
+                  </div>
+                  {p.isService ? (
+                    <span className="pos-stock">🛠 خدمة</span>
+                  ) : (
+                    <span className={`pos-stock ${out ? 'out' : p.quantity <= LOW_STOCK ? 'low' : ''}`}>
+                      {out ? 'نفذ' : p.quantity <= 0 ? `رصيد ${formatQty(p.quantity)} (بالسالب)` : `متاح ${formatQty(p.quantity)}`}
+                    </span>
+                  )}
                 </div>
                 {inCart ? <span className="rst-product-qty">{formatQty(inCart)}</span> : null}
               </button>
@@ -916,7 +1042,11 @@ export function PosPage(): JSX.Element {
                       {t('posUi.tempItemBadge')}
                     </span>
                   )}
-                  {canEditPrice ? (
+                  {line.serviceAmount ? (
+                    <small>
+                      💰 مبلغ العملية {currency(line.serviceAmount)} — العمولة {currency(line.unitPrice)}
+                    </small>
+                  ) : canEditPrice ? (
                     <input
                       className="qcp-input pos-price-edit"
                       type="number"
@@ -928,15 +1058,19 @@ export function PosPage(): JSX.Element {
                     <small>{currency(line.unitPrice)}</small>
                   )}
                 </div>
-                <div className="rst-qty">
-                  <button type="button" onClick={() => updateQty(line.productId, line.qty + 1)}>
-                    +
-                  </button>
-                  <QtyInput qty={line.qty} onCommit={(v) => updateQty(line.productId, v)} />
-                  <button type="button" onClick={() => updateQty(line.productId, line.qty - 1)}>
-                    −
-                  </button>
-                </div>
+                {line.serviceAmount ? (
+                  <div className="rst-qty" />
+                ) : (
+                  <div className="rst-qty">
+                    <button type="button" onClick={() => updateQty(line.productId, line.qty + 1)}>
+                      +
+                    </button>
+                    <QtyInput qty={line.qty} onCommit={(v) => updateQty(line.productId, v)} />
+                    <button type="button" onClick={() => updateQty(line.productId, line.qty - 1)}>
+                      −
+                    </button>
+                  </div>
+                )}
                 <div className="rst-item-total" style={{ minWidth: 72, textAlign: 'end' }}>
                   {currency(line.qty * line.unitPrice - line.discount)}
                 </div>
@@ -1134,6 +1268,61 @@ export function PosPage(): JSX.Element {
         </div>
       )}
 
+      {/* ------------------------------ مبلغ الخدمة اللي ليها عمولة ------------------------------ */}
+      {servicePrompt && (
+        <div className="qcp-modal-backdrop" onClick={() => setServicePrompt(null)}>
+          <div className="qcp-modal" style={{ width: 'min(420px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>🛠 {servicePrompt.name}</h3>
+            <div className="qcp-field">
+              <label>المبلغ (اللي العميل بيسحبه أو بيحوّله)</label>
+              <input
+                className="qcp-input"
+                type="number"
+                min={0}
+                autoFocus
+                style={{ fontSize: 22, fontWeight: 800 }}
+                value={serviceAmountStr}
+                onChange={(e) => setServiceAmountStr(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && Number(serviceAmountStr) > 0) {
+                    addServiceCommissionLine(servicePrompt, Number(serviceAmountStr))
+                    setServicePrompt(null)
+                  }
+                  if (e.key === 'Escape') setServicePrompt(null)
+                }}
+              />
+            </div>
+            <div className="rst-change" style={{ marginTop: 8 }}>
+              <span>
+                العمولة ({servicePrompt.commissionPercent}%{servicePrompt.commissionMin > 0 ? `، حد أدنى ${currency(servicePrompt.commissionMin)}` : ''})
+              </span>
+              <span>
+                {Number(serviceAmountStr) > 0
+                  ? currency(calcCommission(Number(serviceAmountStr), servicePrompt.commissionPercent, servicePrompt.commissionMin))
+                  : '—'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+              <button
+                type="button"
+                className="rst-big-btn pay"
+                style={{ flex: 2 }}
+                disabled={!(Number(serviceAmountStr) > 0)}
+                onClick={() => {
+                  addServiceCommissionLine(servicePrompt, Number(serviceAmountStr))
+                  setServicePrompt(null)
+                }}
+              >
+                إضافة للفاتورة
+              </button>
+              <button type="button" className="qcp-btn qcp-btn-secondary" style={{ flex: 1 }} onClick={() => setServicePrompt(null)}>
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ------------------------------ نافذة الدفع ------------------------------ */}
       {showPayment && (
         <div className="qcp-modal-backdrop" onClick={() => !checkingOut && setShowPayment(false)}>
@@ -1161,7 +1350,7 @@ export function PosPage(): JSX.Element {
 
             <div className="rst-methods" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
               {paymentMethods.map((m) => (
-                <button key={m.value} type="button" className={paymentMethod === m.value ? 'active' : ''} onClick={() => setPaymentMethod(m.value)}>
+                <button key={m.value} type="button" className={paymentMethod === m.value ? 'active' : ''} onClick={() => selectPaymentMethod(m.value)}>
                   {PAYMENT_ICONS[m.value]} {m.label}
                 </button>
               ))}
@@ -1329,6 +1518,61 @@ export function PosPage(): JSX.Element {
               <div className="rst-change due">
                 <span>هيتسجل على حساب {selectedCustomer?.name ?? 'العميل'}</span>
                 <span>{currency(total - vendorSettlementUsed)}</span>
+              </div>
+            )}
+
+            {paymentMethod === 'mixed' && (
+              <div className="qcp-field" style={{ marginTop: 8 }}>
+                <label>تقسيم الدفع على أكتر من وسيلة</label>
+                {splitRows.map((row, idx) => (
+                  <div key={idx} style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                    <select
+                      className="qcp-select"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={row.method}
+                      onChange={(e) => updateSplitRow(idx, { method: e.target.value as SplitPaymentInput['method'] })}
+                    >
+                      {SPLIT_METHODS.map((m) => (
+                        <option key={m.value} value={m.value}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      className="qcp-input"
+                      type="number"
+                      min={0}
+                      style={{ width: 130, fontWeight: 800 }}
+                      value={row.amount}
+                      placeholder="المبلغ"
+                      onChange={(e) => updateSplitRow(idx, { amount: e.target.value })}
+                    />
+                    {splitRows.length > 1 && (
+                      <button type="button" className="rst-icon-btn danger" title="حذف" onClick={() => setSplitRows((prev) => prev.filter((_, i) => i !== idx))}>
+                        🗑
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button type="button" className="qcp-btn qcp-btn-secondary" onClick={addSplitRow}>
+                  ＋ وسيلة دفع تانية
+                </button>
+                <div className={`rst-change ${splitRemaining > 0.01 || splitRemaining < -0.01 ? 'due' : ''}`} style={{ marginTop: 8 }}>
+                  <span>المدفوع {currency(splitPaid)}</span>
+                  <span>
+                    {splitRemaining > 0.01
+                      ? `الباقي آجل على ${selectedCustomer?.name ?? 'العميل (اختار عميل)'}: ${currency(splitRemaining)}`
+                      : splitRemaining < -0.01
+                        ? `زيادة عن المطلوب: ${currency(-splitRemaining)}`
+                        : '✓ مكتمل'}
+                  </span>
+                </div>
+              </div>
+            )}
+            {needsDueDate && (
+              <div className="qcp-field" style={{ marginTop: 8 }}>
+                <label>📅 تاريخ الاستحقاق (الجزء الآجل)</label>
+                <input className="qcp-input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
               </div>
             )}
 
@@ -1702,7 +1946,11 @@ function ReceiptModal({
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+        <div style={{ marginTop: 10 }}>
+          <InvoicePaymentSummary invoice={invoice} />
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
           <button className="qcp-btn qcp-btn-primary" style={{ flex: 1 }} onClick={() => window.api.print.receipt(invoice.id)}>
             🖨️ {t('common.print')}
           </button>

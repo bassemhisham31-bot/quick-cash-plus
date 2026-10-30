@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
 import { formatCurrency as currency } from '../../lib/currency'
+import { InvoicePaymentSummary } from '../../components/InvoicePaymentSummary'
 import type { InvoiceView, PaymentMethod } from '../../../../shared/types'
 
 interface Props {
@@ -126,6 +127,8 @@ export function InvoiceDetailModal({ invoice, onClose, onChanged, allowEdit = tr
           <span>{t('invoices.total')}</span>
           <span>{currency(invoice.total)}</span>
         </div>
+
+        <InvoicePaymentSummary invoice={invoice} />
 
         {invoice.customerLoyaltyBalance !== null &&
           (invoice.loyaltyPointsEarned > 0 || invoice.loyaltyPointsRedeemed > 0) && (

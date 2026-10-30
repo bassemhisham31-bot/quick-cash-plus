@@ -59,7 +59,7 @@ export function ReportView({ report, searchable = true }: { report: ReportResult
           </thead>
           <tbody>
             {rows.map((row, idx) => (
-              <tr key={idx}>
+              <tr key={idx} style={row._subtotal ? { fontWeight: 800, background: 'var(--qcp-bg-sunken)' } : undefined}>
                 {report.columns.map((c) => (
                   <td key={c.key} style={{ textAlign: c.align === 'end' ? 'end' : 'start' }}>
                     {formatCell(row[c.key], c)}

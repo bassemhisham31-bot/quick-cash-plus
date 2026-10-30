@@ -2,6 +2,7 @@ import { getDb } from '../db'
 import { assertBranchAccess, branchFilter } from './branchScope'
 import { getTaxSettings } from './settings'
 import { generateQrDataUrl } from './qrCode'
+import { creditShare, hasCreditPart, invoiceOutstanding, listInvoicePayments } from './salePayments'
 import type {
   InvoiceListFilter,
   InvoiceListItem,
@@ -23,10 +24,11 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
                  i.order_type AS orderType, t.name AS tableName, d.name AS deliveryDriverName,
                  COALESCE(ro.delivery_address, i.delivery_address) AS deliveryAddress,
                  COALESCE(ro.special_mark, i.delivery_mark) AS deliveryMark, i.delivery_fee AS deliveryFee, i.service_charge_total AS serviceChargeTotal, cap.name AS captainName,
-                 i.branch_id AS branchId
+                 i.branch_id AS branchId, i.due_date AS dueDate, i.commission_amount AS commissionAmount, sr.name AS salesRepName
           FROM sales_invoices i
           JOIN customers c ON c.id = i.customer_id
           JOIN users u ON u.id = i.cashier_id
+          LEFT JOIN sales_reps sr ON sr.id = i.sales_rep_id
           LEFT JOIN restaurant_tables t ON t.id = i.table_id
           LEFT JOIN delivery_drivers d ON d.id = i.delivery_driver_id
           LEFT JOIN captains cap ON cap.id = i.captain_id
@@ -40,7 +42,7 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
 
   const linesRs = await db.execute({
     sql: `SELECT si.id AS salesItemId, si.product_name AS productName, si.barcode, si.qty,
-                 si.unit_price AS unitPrice, si.discount, si.total, si.serial_number AS serialNumber, si.note,
+                 si.unit_price AS unitPrice, si.discount, si.total, si.serial_number AS serialNumber, si.note, si.service_amount AS serviceAmount,
                  COALESCE((SELECT SUM(ri.qty) FROM sales_return_items ri WHERE ri.sales_item_id = si.id), 0) AS returnedQty
           FROM sales_items si WHERE si.invoice_id = ?`,
     args: [invoiceId]
@@ -65,7 +67,7 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
     loyaltyPointsEarned: Number(header.loyaltyPointsEarned ?? 0),
     loyaltyPointsRedeemed: Number(header.loyaltyPointsRedeemed ?? 0),
     customerLoyaltyBalance: header.isWalkIn ? null : Number(header.customerLoyaltyBalance ?? 0),
-    ...(header.isWalkIn || header.paymentMethod !== 'credit'
+    ...(header.isWalkIn || !hasCreditPart(header.paymentMethod) || Number(header.total) - Number(header.paid) <= 0.005
       ? { customerBalanceBefore: null, customerBalanceAfter: null }
       : (() => {
           const after = Number(header.customerBalance ?? 0)
@@ -80,6 +82,10 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
     deliveryFee: Number(header.deliveryFee ?? 0),
     serviceChargeTotal: Number(header.serviceChargeTotal ?? 0),
     captainName: header.captainName ?? null,
+    dueDate: header.dueDate ?? null,
+    salesRepName: header.salesRepName ?? null,
+    commissionAmount: Number(header.commissionAmount ?? 0),
+    payments: await listInvoicePayments(db, invoiceId),
     lines: linesRs.rows.map((r: any) => ({
       salesItemId: Number(r.salesItemId),
       productName: r.productName,
@@ -90,6 +96,7 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
       total: Number(r.total),
       serialNumber: r.serialNumber ?? null,
       note: r.note ?? null,
+      serviceAmount: r.serviceAmount != null ? Number(r.serviceAmount) : null,
       returnedQty: Number(r.returnedQty)
     }))
   }
@@ -126,7 +133,7 @@ export async function listInvoices(filter: InvoiceListFilter): Promise<InvoiceLi
 
   const rs = await db.execute({
     sql: `SELECT i.id, i.number, i.total, i.paid, i.payment_method AS paymentMethod, i.status,
-                 i.created_at AS createdAt, i.deleted_at AS deletedAt, c.name AS customerName,
+                 i.created_at AS createdAt, i.deleted_at AS deletedAt, c.name AS customerName, i.due_date AS dueDate,
                  COALESCE(br.name, '') AS branchName
           FROM sales_invoices i
           LEFT JOIN branches br ON br.id = i.branch_id
@@ -147,6 +154,7 @@ export async function listInvoices(filter: InvoiceListFilter): Promise<InvoiceLi
     status: r.status,
     createdAt: r.createdAt,
     deletedAt: r.deletedAt,
+    dueDate: r.dueDate ?? null,
     branchName: r.branchName
   }))
 }
@@ -162,9 +170,9 @@ export async function deleteInvoice(invoiceId: number, userId: number): Promise<
   const warehouseId = Number(invoice.warehouse_id)
 
   const linesRs = await db.execute({
-    sql: `SELECT si.id, si.product_id, si.qty, si.warehouse_id,
+    sql: `SELECT si.id, si.product_id, si.qty, si.warehouse_id, COALESCE(p.is_service, 0) AS is_service,
                  COALESCE((SELECT SUM(ri.qty) FROM sales_return_items ri WHERE ri.sales_item_id = si.id), 0) AS returnedQty
-          FROM sales_items si WHERE si.invoice_id = ?`,
+          FROM sales_items si LEFT JOIN products p ON p.id = si.product_id WHERE si.invoice_id = ?`,
     args: [invoiceId]
   })
 
@@ -172,7 +180,7 @@ export async function deleteInvoice(invoiceId: number, userId: number): Promise<
   try {
     for (const line of linesRs.rows as any[]) {
       const remaining = Number(line.qty) - Number(line.returnedQty)
-      if (remaining > 0) {
+      if (remaining > 0 && !Number(line.is_service)) {
         await tx.execute({
           sql: 'UPDATE stock SET quantity = quantity + ? WHERE product_id = ? AND warehouse_id = ?',
           args: [remaining, line.product_id, line.warehouse_id != null ? Number(line.warehouse_id) : warehouseId]
@@ -185,8 +193,8 @@ export async function deleteInvoice(invoiceId: number, userId: number): Promise<
       }
     }
 
-    if (invoice.payment_method === 'credit') {
-      const outstanding = Number(invoice.total) - Number(invoice.paid)
+    {
+      const outstanding = invoiceOutstanding(invoice)
       if (outstanding !== 0) {
         await tx.execute({
           sql: 'UPDATE customers SET balance = balance - ? WHERE id = ?',
@@ -218,9 +226,9 @@ export async function restoreInvoice(invoiceId: number, userId: number): Promise
   const warehouseId = Number(invoice.warehouse_id)
 
   const linesRs = await db.execute({
-    sql: `SELECT si.id, si.product_id, si.product_name, si.qty, si.warehouse_id,
+    sql: `SELECT si.id, si.product_id, si.product_name, si.qty, si.warehouse_id, COALESCE(p.is_service, 0) AS is_service,
                  COALESCE((SELECT SUM(ri.qty) FROM sales_return_items ri WHERE ri.sales_item_id = si.id), 0) AS returnedQty
-          FROM sales_items si WHERE si.invoice_id = ?`,
+          FROM sales_items si LEFT JOIN products p ON p.id = si.product_id WHERE si.invoice_id = ?`,
     args: [invoiceId]
   })
 
@@ -228,7 +236,7 @@ export async function restoreInvoice(invoiceId: number, userId: number): Promise
   try {
     for (const line of linesRs.rows as any[]) {
       const remaining = Number(line.qty) - Number(line.returnedQty)
-      if (remaining > 0) {
+      if (remaining > 0 && !Number(line.is_service)) {
         const lineWh = line.warehouse_id != null ? Number(line.warehouse_id) : warehouseId
         const stockRs = await tx.execute({
           sql: 'SELECT quantity FROM stock WHERE product_id = ? AND warehouse_id = ?',
@@ -250,8 +258,8 @@ export async function restoreInvoice(invoiceId: number, userId: number): Promise
       }
     }
 
-    if (invoice.payment_method === 'credit') {
-      const outstanding = Number(invoice.total) - Number(invoice.paid)
+    {
+      const outstanding = invoiceOutstanding(invoice)
       if (outstanding !== 0) {
         await tx.execute({
           sql: 'UPDATE customers SET balance = balance + ? WHERE id = ?',
@@ -282,8 +290,8 @@ export async function updateInvoice(
 
   const tx = await db.transaction('write')
   try {
-    if (invoice.payment_method === 'credit') {
-      const oldOutstanding = Number(invoice.total) - Number(invoice.paid)
+    {
+      const oldOutstanding = invoiceOutstanding(invoice)
       if (oldOutstanding !== 0) {
         await tx.execute({
           sql: 'UPDATE customers SET balance = balance - ? WHERE id = ?',
@@ -292,12 +300,14 @@ export async function updateInvoice(
       }
     }
 
+    // تعديل طريقة الدفع بيلغي تقسيم الدفع القديم (لو فيه) — الفاتورة بتبقى بوسيلة واحدة
+    await tx.execute({ sql: 'DELETE FROM sales_invoice_payments WHERE invoice_id = ?', args: [invoiceId] })
     await tx.execute({
       sql: 'UPDATE sales_invoices SET payment_method = ?, paid = ?, note = ? WHERE id = ?',
       args: [input.paymentMethod, input.paid, input.note || null, invoiceId]
     })
 
-    if (input.paymentMethod === 'credit') {
+    if (hasCreditPart(input.paymentMethod)) {
       const newOutstanding = Number(invoice.total) - input.paid
       if (newOutstanding !== 0) {
         await tx.execute({
@@ -371,15 +381,18 @@ export async function returnInvoiceLines(
         args: [returnId, line.salesItemId, line.qty, refundAmount]
       })
 
-      await tx.execute({
-        sql: 'UPDATE stock SET quantity = quantity + ? WHERE product_id = ? AND warehouse_id = ?',
-        args: [line.qty, item.product_id, item.warehouse_id != null ? Number(item.warehouse_id) : warehouseId]
-      })
-      await tx.execute({
-        sql: `INSERT INTO stock_movements (product_id, warehouse_id, type, qty, ref_type, ref_id, user_id)
-              VALUES (?, ?, 'sale_return', ?, 'sales_return', ?, ?)`,
-        args: [item.product_id, item.warehouse_id != null ? Number(item.warehouse_id) : warehouseId, line.qty, returnId, userId]
-      })
+      const svcRs = await tx.execute({ sql: 'SELECT is_service FROM products WHERE id = ?', args: [item.product_id] })
+      if (!Number((svcRs.rows[0] as any)?.is_service)) {
+        await tx.execute({
+          sql: 'UPDATE stock SET quantity = quantity + ? WHERE product_id = ? AND warehouse_id = ?',
+          args: [line.qty, item.product_id, item.warehouse_id != null ? Number(item.warehouse_id) : warehouseId]
+        })
+        await tx.execute({
+          sql: `INSERT INTO stock_movements (product_id, warehouse_id, type, qty, ref_type, ref_id, user_id)
+                VALUES (?, ?, 'sale_return', ?, 'sales_return', ?, ?)`,
+          args: [item.product_id, item.warehouse_id != null ? Number(item.warehouse_id) : warehouseId, line.qty, returnId, userId]
+        })
+      }
     }
 
     // هل كل أصناف الفاتورة اتسترجعت بالكامل بعد العملية دي؟
@@ -398,10 +411,12 @@ export async function returnInvoiceLines(
     })
     await tx.execute({ sql: 'UPDATE sales_invoices SET status = ? WHERE id = ?', args: [newStatus, invoiceId] })
 
-    if (invoice.payment_method === 'credit' && totalRefund !== 0) {
+    // المرتجع بيتوزّع بنسبة الجزء الآجل من الفاتورة (آجل كامل = رصيد العميل كله، مقسّم = حصة الآجل بس)
+    const creditRefund = totalRefund * creditShare(invoice)
+    if (creditRefund !== 0) {
       await tx.execute({
         sql: 'UPDATE customers SET balance = balance - ? WHERE id = ?',
-        args: [totalRefund, invoice.customer_id]
+        args: [creditRefund, invoice.customer_id]
       })
     }
 

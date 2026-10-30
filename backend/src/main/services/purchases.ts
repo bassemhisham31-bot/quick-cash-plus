@@ -1,5 +1,6 @@
 import { getDb } from '../db'
 import { assertBranchAccess, branchesEnabled, branchFilter, requireBranchId } from './branchScope'
+import { cleanDate } from './salePayments'
 import type {
   PurchaseInvoiceInput,
   PurchaseInvoiceListItem,
@@ -32,9 +33,20 @@ export async function createPurchaseInvoice(
   const tx = await db.transaction('write')
   try {
     const info = await tx.execute({
-      sql: `INSERT INTO purchase_invoices (number, vendor_id, warehouse_id, total, payment_method, paid, user_id, branch_id)
-            VALUES ('PENDING', ?, ?, ?, ?, ?, ?, ?)`,
-      args: [input.vendorId, input.warehouseId, total, input.paymentMethod, input.paid, userId, branchId]
+      sql: `INSERT INTO purchase_invoices (number, vendor_id, warehouse_id, total, payment_method, paid, user_id, branch_id, due_date, note)
+            VALUES ('PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        input.vendorId,
+        input.warehouseId,
+        total,
+        input.paymentMethod,
+        input.paid,
+        userId,
+        branchId,
+        // تاريخ السداد المتوقع بيتسجل بس لو فيه باقي على المورد
+        total - input.paid > 0.005 || input.paymentMethod === 'credit' ? cleanDate(input.dueDate) : null,
+        input.note?.trim() || null
+      ]
     })
     const purchaseId = Number(info.lastInsertRowid)
     const number = `PUR-${String(purchaseId).padStart(6, '0')}`
@@ -64,6 +76,16 @@ export async function createPurchaseInvoice(
       })
     }
 
+    // البنود اللي اتشترت من قائمة "مطلوب شراؤه" بتتعلّم "اتشترت" وتتربط بالفاتورة
+    const requestIds = (input.purchaseRequestIds ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0)
+    if (requestIds.length) {
+      await tx.execute({
+        sql: `UPDATE purchase_requests SET status = 'purchased', purchase_invoice_id = ?, purchased_at = datetime('now')
+              WHERE status = 'pending' AND id IN (${requestIds.map(() => '?').join(',')})`,
+        args: [purchaseId, ...requestIds]
+      })
+    }
+
     if (input.vendorId && input.paymentMethod === 'credit') {
       const outstanding = total - input.paid
       if (outstanding !== 0) {
@@ -86,7 +108,7 @@ export async function listPurchaseInvoices(): Promise<PurchaseInvoiceListItem[]>
   const db = getDb()
   const bf = branchFilter('pi.branch_id')
   const rs = await db.execute({
-    sql: `SELECT pi.id, pi.number, pi.total, pi.paid, pi.payment_method AS paymentMethod, pi.created_at AS createdAt,
+    sql: `SELECT pi.id, pi.number, pi.total, pi.paid, pi.payment_method AS paymentMethod, pi.created_at AS createdAt, pi.due_date AS dueDate,
             COALESCE(v.name, 'مورد غير محدد') AS vendorName, COALESCE(br.name, '') AS branchName
      FROM purchase_invoices pi
      LEFT JOIN branches br ON br.id = pi.branch_id
@@ -104,6 +126,7 @@ export async function listPurchaseInvoices(): Promise<PurchaseInvoiceListItem[]>
     paid: Number(r.paid),
     paymentMethod: r.paymentMethod,
     createdAt: r.createdAt,
+    dueDate: r.dueDate ?? null,
     branchName: r.branchName
   }))
 }
@@ -113,7 +136,7 @@ export async function getPurchaseInvoiceView(purchaseId: number): Promise<Purcha
   const headerRs = await db.execute({
     sql: `SELECT pi.id, pi.number, pi.total, pi.paid, pi.payment_method AS paymentMethod, pi.note, pi.status,
                  pi.created_at AS createdAt, COALESCE(v.name, 'مورد غير محدد') AS vendorName,
-                 w.name AS warehouseName, u.full_name AS cashierName, pi.branch_id AS branchId
+                 w.name AS warehouseName, u.full_name AS cashierName, pi.branch_id AS branchId, pi.due_date AS dueDate
           FROM purchase_invoices pi
           LEFT JOIN vendors v ON v.id = pi.vendor_id
           JOIN warehouses w ON w.id = pi.warehouse_id
@@ -144,6 +167,7 @@ export async function getPurchaseInvoiceView(purchaseId: number): Promise<Purcha
     note: header.note,
     createdAt: header.createdAt,
     cashierName: header.cashierName,
+    dueDate: header.dueDate ?? null,
     lines: linesRs.rows.map((r: any) => ({
       purchaseItemId: Number(r.purchaseItemId),
       productName: r.productName,

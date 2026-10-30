@@ -1285,6 +1285,23 @@ function loyaltyRowsFormalHtml(invoice: InvoiceView): string {
   return rows.join('')
 }
 
+/** (ويب فقط) تفاصيل الدفع المقسّم + تاريخ استحقاق الباقي الآجل على الفاتورة المطبوعة */
+function paymentDetailsHtml(invoice: InvoiceView, cls: 'totals-row' | 'row', withCreditRow = true): string {
+  const parts = invoice.payments
+    .map((p) => `<div class="${cls}"><span>${escapeHtml(PAYMENT_METHOD_LABELS[p.method] ?? p.method)}</span><span>${currency.format(p.amount)}</span></div>`)
+    .join('')
+  const outstanding = invoice.total - invoice.paid
+  const credit =
+    withCreditRow && invoice.payments.length && outstanding > 0.005
+      ? `<div class="${cls}"><span>آجل</span><span>${currency.format(outstanding)}</span></div>`
+      : ''
+  const due =
+    invoice.dueDate && outstanding > 0.005
+      ? `<div class="${cls}"><span>تاريخ الاستحقاق</span><span>${escapeHtml(invoice.dueDate)}</span></div>`
+      : ''
+  return parts + credit + due
+}
+
 /** بيظهر بس في فواتير البيع الآجل — رصيد العميل قبل الفاتورة وبعدها (بعد إضافة قيمة الفاتورة كدين). */
 function balanceLinesHtml(invoice: InvoiceView): string {
   if (invoice.customerBalanceBefore === null || invoice.customerBalanceAfter === null) return ''
@@ -1334,6 +1351,7 @@ function buildThermalReceiptHtml(
       <div class="item">
         <div class="item-name">${escapeHtml(l.productName)}</div>
         ${l.serialNumber ? `<div class="item-serial">S/N: ${escapeHtml(l.serialNumber)}</div>` : ''}
+        ${l.serviceAmount ? `<div class="item-serial">مبلغ العملية: ${currency.format(l.serviceAmount)} — العمولة</div>` : ''}
         <div class="item-row">
           <span>${l.qty} × ${currency.format(l.unitPrice)}</span>
           <span>${currency.format(l.total)}</span>
@@ -1392,6 +1410,7 @@ function buildThermalReceiptHtml(
     ${invoice.deliveryFee > 0 ? `<div class="totals-row"><span>رسوم التوصيل</span><span>${currency.format(invoice.deliveryFee)}</span></div>` : ''}
     <div class="grand-total"><span>الإجمالي</span><span>${currency.format(invoice.total)}</span></div>
     <div class="totals-row"><span>طريقة الدفع</span><span>${PAYMENT_METHOD_LABELS[invoice.paymentMethod] ?? invoice.paymentMethod}</span></div>
+    ${paymentDetailsHtml(invoice, 'totals-row')}
     ${balanceLinesHtml(invoice)}
     ${loyaltyLinesHtml(invoice)}
     ${qr ? `<div class="qr"><img src="${qr}" width="100" height="100" /></div>` : ''}
@@ -1416,7 +1435,7 @@ function buildFormalInvoiceHtml(
       (l, idx) => `
       <tr>
         <td>${idx + 1}</td>
-        <td>${escapeHtml(l.productName)}${l.serialNumber ? `<br/><span class="serial">S/N: ${escapeHtml(l.serialNumber)}</span>` : ''}</td>
+        <td>${escapeHtml(l.productName)}${l.serialNumber ? `<br/><span class="serial">S/N: ${escapeHtml(l.serialNumber)}</span>` : ''}${l.serviceAmount ? `<br/><span class="serial">مبلغ العملية: ${currency.format(l.serviceAmount)}</span>` : ''}</td>
         <td>${escapeHtml(l.barcode)}</td>
         <td>${l.qty}</td>
         <td>${currency.format(l.unitPrice)}</td>
@@ -1534,6 +1553,7 @@ function buildFormalInvoiceHtml(
       <div class="row grand"><span>الإجمالي</span><span>${currency.format(invoice.total)}</span></div>
       <div class="row"><span>المدفوع</span><span>${currency.format(invoice.paid)}</span></div>
       ${outstanding > 0.01 ? `<div class="row due"><span>المتبقي</span><span>${currency.format(outstanding)}</span></div>` : ''}
+      ${paymentDetailsHtml(invoice, 'row', false)}
       ${balanceRowsFormalHtml(invoice)}
       ${loyaltyRowsFormalHtml(invoice)}
     </div>

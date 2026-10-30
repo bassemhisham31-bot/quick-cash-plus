@@ -58,6 +58,14 @@ export interface Product {
   showInPos: boolean
   serialTrackingEnabled: boolean
   imageDataUrl: string | null
+  /** صنف خدمة (تركيب، كشف أعطال، سحب فودافون كاش...) — من غير مخزون ولا تحقق كمية */
+  isService: boolean
+  /** الخدمة ليها عمولة بتتحسب على مبلغ بيكتبه الكاشير وقت البيع */
+  commissionEnabled: boolean
+  /** نسبة العمولة % من المبلغ */
+  commissionPercent: number
+  /** حد أدنى للعمولة (0 = بدون حد أدنى) */
+  commissionMin: number
 }
 
 export interface ProductInput {
@@ -79,6 +87,10 @@ export interface ProductInput {
   showInPos: boolean
   serialTrackingEnabled: boolean
   imageDataUrl: string | null
+  isService?: boolean
+  commissionEnabled?: boolean
+  commissionPercent?: number
+  commissionMin?: number
 }
 
 export interface ProductUpdateInput {
@@ -98,6 +110,10 @@ export interface ProductUpdateInput {
   showInPos: boolean
   serialTrackingEnabled: boolean
   imageDataUrl: string | null
+  isService?: boolean
+  commissionEnabled?: boolean
+  commissionPercent?: number
+  commissionMin?: number
 }
 
 export type NotificationSeverity = 'critical' | 'warning'
@@ -158,6 +174,10 @@ export interface PurchaseInvoiceInput {
   paymentMethod: 'cash' | 'credit' | 'card' | 'wallet' | 'vodafone_cash' | 'instapay'
   paid: number
   note: string
+  /** تاريخ السداد المتوقع للباقي (YYYY-MM-DD) — للفاتورة الآجلة أو المدفوعة جزئيًا */
+  dueDate?: string | null
+  /** بنود من قائمة "مطلوب شراؤه" اتشترت بالفاتورة دي */
+  purchaseRequestIds?: number[]
 }
 
 export interface PurchaseInvoiceResult {
@@ -178,6 +198,7 @@ export interface PurchaseInvoiceListItem {
   paid: number
   paymentMethod: string
   createdAt: string
+  dueDate: string | null
 }
 
 export interface PurchaseInvoiceLine {
@@ -205,6 +226,7 @@ export interface PurchaseInvoiceView {
   note: string | null
   createdAt: string
   cashierName: string
+  dueDate: string | null
   lines: PurchaseInvoiceLineDetail[]
 }
 
@@ -646,6 +668,16 @@ export interface CartLine {
   isTemp?: boolean
   serialNumber?: string | null
   note?: string | null
+  /** الصنف خدمة (من غير مخزون) — السيرفر بيتأكد منها من جدول الأصناف */
+  isService?: boolean
+  /** المبلغ الأساسي لعملية فيها عمولة (مثلًا مبلغ سحب فودافون كاش) — سعر السطر هو العمولة */
+  serviceAmount?: number | null
+}
+
+/** جزء من دفع الفاتورة المقسّم على أكتر من وسيلة */
+export interface SplitPaymentInput {
+  method: Exclude<PaymentMethod, 'mixed' | 'credit'>
+  amount: number
 }
 
 export interface CheckoutInput {
@@ -678,6 +710,10 @@ export interface CheckoutInput {
   taxValue?: number
   /** إكرامية (تيبس) من باقي العميل — بتدخل الدرج وبتظهر في إقفال الوردية (دفع نقدي بس) */
   tipAmount?: number
+  /** دفع مقسّم (لو فيه وسيلتين أو أكتر): بيحل محل paymentMethod/paid، والباقي من الإجمالي بيتسجل آجل على العميل */
+  payments?: SplitPaymentInput[]
+  /** تاريخ الاستحقاق (YYYY-MM-DD) للجزء الآجل */
+  dueDate?: string | null
 }
 
 export interface CheckoutResult {
@@ -697,6 +733,12 @@ export interface InvoiceLineView {
   total: number
   serialNumber: string | null
   note: string | null
+  serviceAmount: number | null
+}
+
+export interface InvoicePaymentPart {
+  method: PaymentMethod
+  amount: number
 }
 
 export interface InvoiceView {
@@ -729,6 +771,13 @@ export interface InvoiceView {
   deliveryFee: number
   serviceChargeTotal: number
   captainName: string | null
+  /** تاريخ استحقاق الجزء الآجل */
+  dueDate: string | null
+  /** المحل/المندوب المسوّق للفاتورة وعمولته */
+  salesRepName: string | null
+  commissionAmount: number
+  /** تفاصيل الدفع المقسّم (فاضية للفاتورة بوسيلة دفع واحدة) */
+  payments: InvoicePaymentPart[]
 }
 
 export interface CustomerView {
@@ -812,6 +861,7 @@ export interface InvoiceListItem {
   status: 'completed' | 'returned' | 'partial_return'
   createdAt: string
   deletedAt: string | null
+  dueDate: string | null
 }
 
 export interface InvoiceListFilter {
@@ -1078,6 +1128,10 @@ export const REPORT_TYPES = [
   'top_customers',
   'sales_by_employee',
   'sales_rep_commission',
+  'sales_rep_commission_detail',
+  'customer_due_dates',
+  'vendor_due_dates',
+  'service_sales',
   'purchases_last_price',
   'purchases_detailed',
   'account_statement',
@@ -1152,6 +1206,7 @@ export function isCountColumn(col: ReportColumn): boolean {
 export interface ReportResult {
   title: string
   columns: ReportColumn[]
+  /** صف بقيمة _subtotal:1 بيتعرض بخط عريض (إجمالي مجموعة، مثلًا إجمالي الشهر) */
   rows: Record<string, string | number>[]
   totals?: Record<string, number>
 }
@@ -1371,6 +1426,8 @@ export interface PosUiSettings {
   categorySidebarEnabled: boolean
   currencyCode: string
   currencySymbol: string
+  /** كل قطعة بتتباع بتتسجل تلقائيًا في قائمة "مطلوب شراؤه" (للبيع الأول والشراء بعدين) */
+  purchaseListEnabled: boolean
 }
 
 export interface DataResetResult {
@@ -1927,4 +1984,37 @@ export interface AttendanceDayRow {
   /** ساعات العمل (آخر بصمة - أول بصمة) — null لو بصمة واحدة بس */
   hours: number | null
   punchTimes: string[]
+}
+
+/** بند في قائمة "مطلوب شراؤه" (قطعة اتباعت ولسه ما اتشترتش من المورد) */
+export interface PurchaseRequestItem {
+  id: number
+  productId: number
+  productName: string
+  barcode: string | null
+  qty: number
+  unitCost: number
+  vendorId: number | null
+  vendorName: string | null
+  salesInvoiceId: number | null
+  salesInvoiceNumber: string | null
+  status: 'pending' | 'purchased' | 'cancelled'
+  purchaseInvoiceId: number | null
+  note: string | null
+  createdAt: string
+  purchasedAt: string | null
+}
+
+export interface PurchaseRequestFilter {
+  status: 'pending' | 'purchased' | 'cancelled' | 'all'
+  vendorId?: number | null
+  dateFrom?: string
+  dateTo?: string
+}
+
+/** ملف مرفق (مصروف/موظف) على نسخة الويب — بيترفع base64 عبر نفس قناة الـRPC */
+export interface AttachmentFile {
+  name: string
+  mime: string
+  dataBase64: string
 }

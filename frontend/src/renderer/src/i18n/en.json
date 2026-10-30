@@ -734,6 +734,8 @@
     "multiWarehouseEnabledHint": "When off, the app runs on a single default warehouse and all warehouse pickers disappear. Existing warehouse data isn't deleted.",
     "categorySidebarEnabled": "Show category sidebar next to POS",
     "categorySidebarEnabledHint": "A side panel of categories for quickly filtering products in POS.",
+    "purchaseListEnabled": "Add every sold item to the \"To buy\" list",
+    "purchaseListEnabledHint": "For sell-first-then-buy shops: each sold item is added automatically to a to-buy list (in Inventory) that turns into a purchase invoice in one click. Services are not added.",
     "currency": "Currency",
     "currencySymbol": "Displayed currency symbol",
     "currencyNote": "This only changes the displayed symbol/format everywhere — not a real currency conversion.",

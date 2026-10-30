@@ -278,6 +278,7 @@ export function ReturnsPage(): JSX.Element {
                   onClick={() => openPurchaseInvoice(p.id)}
                 >
                   <strong>{p.number}</strong> — {p.vendorName} — {currency(p.total)}
+                  {p.dueDate ? ` — سداد ${p.dueDate}` : ''}
                 </button>
               ))}
               {!purchaseMatches.length && <p style={{ color: 'var(--qcp-ink-faint)' }}>مفيش نتائج</p>}

@@ -20,6 +20,7 @@ import { printCapture, type DevicePrintProfile, type PrintJob } from '../main/se
 import { triggerDebouncedSync } from '../main/services/priceCheckerSync'
 import { signToken, requireAuth, verifyToken, type AuthedRequest } from './auth'
 import { FORGOT_PASSWORD_REPLY, requestPasswordReset, resetPasswordWithToken } from '../main/services/passwordReset'
+import { getQzCredentials, signQzMessage } from '../main/services/qzSigning'
 
 const handlers = buildHandlerMap()
 
@@ -216,6 +217,27 @@ export function createApp(): express.Express {
       return
     }
     requireAuth(req, res, next)
+  })
+
+  /** توقيع طلبات QZ Tray عشان رسالة "Untrusted website" متظهرش مع كل طباعة (بعد تسجيل الدخول بس) */
+  app.get('/api/qz/certificate', (_req, res) => {
+    try {
+      res.type('text/plain').send(getQzCredentials().certificatePem)
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message ?? 'تعذر تجهيز شهادة الطباعة' })
+    }
+  })
+  app.post('/api/qz/sign', (req, res) => {
+    const message = typeof req.body?.message === 'string' ? req.body.message : ''
+    if (!message || message.length > 200000) {
+      res.status(400).json({ ok: false, error: 'رسالة غير صالحة' })
+      return
+    }
+    try {
+      res.json({ ok: true, signature: signQzMessage(message) })
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message ?? 'تعذر التوقيع' })
+    }
   })
 
   app.get('/api/me', (req: AuthedRequest, res) => {

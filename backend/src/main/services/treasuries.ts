@@ -1,5 +1,6 @@
 import { getDb } from '../db'
 import { assertBranchAccess, branchesEnabled, branchFilter, branchScope, currentBranchId, requireBranchId } from './branchScope'
+import { SALE_PAY_LINES_SQL } from './salePayments'
 import type {
   CashDifferenceRow,
   ReportResult,
@@ -97,11 +98,13 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
   }
 
   // مبيعات محصّلة (الآجل مالوش حركة خزينة)
+  // الفاتورة المقسّمة بتطلع حركة لكل وسيلة دفع (الإكرامية مرة واحدة بس)
   const sales = await db.execute(
-    `SELECT i.number, i.created_at, i.paid, i.total, i.payment_method, i.tip_amount, i.branch_id, c.name AS customerName
-     FROM sales_invoices i JOIN customers c ON c.id = i.customer_id
-     WHERE i.deleted_at IS NULL AND i.payment_method != 'credit'`
+    `SELECT pl.invoice_id, i.number, i.created_at, pl.amount AS paid, i.total, pl.method AS payment_method, i.tip_amount, i.branch_id, c.name AS customerName
+     FROM (${SALE_PAY_LINES_SQL}) pl JOIN sales_invoices i ON i.id = pl.invoice_id JOIN customers c ON c.id = i.customer_id
+     WHERE i.deleted_at IS NULL AND pl.method != 'credit'`
   )
+  const tipDone = new Set<number>()
   for (const r of sales.rows as any[]) {
     push(
       { ts: r.created_at, kind: 'مبيعات', ref: r.number, description: `فاتورة بيع — ${r.customerName} (${PAY_LABELS[r.payment_method] ?? r.payment_method})`, inAmount: Math.min(Number(r.paid), Number(r.total)), outAmount: 0 },
@@ -109,7 +112,8 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
       null,
       Number(r.branch_id)
     )
-    if (Number(r.tip_amount) > 0) {
+    if (Number(r.tip_amount) > 0 && !tipDone.has(Number(r.invoice_id))) {
+      tipDone.add(Number(r.invoice_id))
       push(
         { ts: r.created_at, kind: 'إكرامية', ref: r.number, description: `إكرامية (تيبس) — فاتورة ${r.number}`, inAmount: Number(r.tip_amount), outAmount: 0 },
         r.payment_method,
@@ -141,9 +145,11 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
 
   // مرتجعات المبيعات المدفوعة (غير الآجل) بتتصرف من نفس خزينة وسيلة الدفع
   const returns = await db.execute(
-    `SELECT r.id, r.created_at, r.amount, r.branch_id, i.number, i.payment_method
-     FROM sales_returns r JOIN sales_invoices i ON i.id = r.invoice_id
-     WHERE i.payment_method != 'credit'`
+    `SELECT r.id, r.created_at,
+            CASE WHEN i.payment_method = 'mixed' AND i.total > 0 THEN r.amount * pl.amount / i.total ELSE r.amount END AS amount,
+            r.branch_id, i.number, pl.method AS payment_method
+     FROM sales_returns r JOIN sales_invoices i ON i.id = r.invoice_id JOIN (${SALE_PAY_LINES_SQL}) pl ON pl.invoice_id = i.id
+     WHERE pl.method != 'credit'`
   )
   for (const r of returns.rows as any[]) {
     push(

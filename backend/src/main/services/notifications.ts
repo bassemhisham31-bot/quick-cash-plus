@@ -15,7 +15,7 @@ export async function getNotifications(): Promise<NotificationItem[]> {
     sql: `SELECT p.id, p.name, COALESCE(s.quantity, 0) AS qty, p.reorder_point AS reorderPoint
           FROM products p
           JOIN stock s ON s.product_id = p.id AND s.warehouse_id = ?
-          WHERE p.deleted_at IS NULL AND s.quantity <= p.reorder_point
+          WHERE p.deleted_at IS NULL AND p.is_service = 0 AND s.quantity <= p.reorder_point
           ORDER BY s.quantity ASC
           LIMIT 30`,
     args: [warehouseId]

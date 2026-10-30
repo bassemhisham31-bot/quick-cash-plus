@@ -137,7 +137,7 @@ export async function recordVendorPayment(
 export async function listUnpaidPurchaseInvoices(vendorId: number): Promise<PurchaseInvoiceListItem[]> {
   const db = getDb()
   const rs = await db.execute({
-    sql: `SELECT pi.id, pi.number, pi.total, pi.paid, pi.payment_method AS paymentMethod, pi.created_at AS createdAt,
+    sql: `SELECT pi.id, pi.number, pi.total, pi.paid, pi.payment_method AS paymentMethod, pi.created_at AS createdAt, pi.due_date AS dueDate,
                  v.name AS vendorName
           FROM purchase_invoices pi
           JOIN vendors v ON v.id = pi.vendor_id
@@ -152,7 +152,8 @@ export async function listUnpaidPurchaseInvoices(vendorId: number): Promise<Purc
     total: Number(r.total),
     paid: Number(r.paid),
     paymentMethod: r.paymentMethod,
-    createdAt: r.createdAt
+    createdAt: r.createdAt,
+    dueDate: r.dueDate ?? null
   }))
 }
 

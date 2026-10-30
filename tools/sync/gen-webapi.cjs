@@ -89,8 +89,8 @@ replaceBlock(
 replaceBlock(
   'attachments',
   `  attachments: {
-    pick: (): Promise<AttachFileResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as AttachFileResult),
-    open: (_path: string): Promise<{ ok: boolean; error?: string }> => Promise.resolve({ ok: false, error: NOT_ON_WEB })
+    pick: (): Promise<AttachFileResult> => pickAttachment(),
+    open: (path: string): Promise<{ ok: boolean; error?: string }> => openAttachment(path)
   }`
 )
 

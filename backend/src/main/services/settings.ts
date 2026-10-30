@@ -427,7 +427,8 @@ function mapPosUiRow(r: any): PosUiSettings {
     multiWarehouseEnabled: !!r.multi_warehouse_enabled,
     categorySidebarEnabled: !!r.category_sidebar_enabled,
     currencyCode: r.currency_code,
-    currencySymbol: r.currency_symbol
+    currencySymbol: r.currency_symbol,
+    purchaseListEnabled: r.purchase_list_enabled == null ? true : !!r.purchase_list_enabled
   }
 }
 
@@ -442,7 +443,7 @@ export async function updatePosUiSettings(input: PosUiSettings): Promise<PosUiSe
   await db.execute({
     sql: `UPDATE pos_ui_settings
           SET sound_enabled = ?, sound_volume = ?, allow_temp_item = ?, price_edit_enabled = ?, max_discount_percent = ?,
-              hold_invoices_enabled = ?, auto_hold_on_leave = ?, allow_negative_stock = ?, multi_warehouse_enabled = ?, category_sidebar_enabled = ?, currency_code = ?, currency_symbol = ?
+              hold_invoices_enabled = ?, auto_hold_on_leave = ?, allow_negative_stock = ?, multi_warehouse_enabled = ?, category_sidebar_enabled = ?, currency_code = ?, currency_symbol = ?, purchase_list_enabled = ?
           WHERE id = 1`,
     args: [
       input.soundEnabled ? 1 : 0,
@@ -456,7 +457,8 @@ export async function updatePosUiSettings(input: PosUiSettings): Promise<PosUiSe
       input.multiWarehouseEnabled ? 1 : 0,
       input.categorySidebarEnabled ? 1 : 0,
       input.currencyCode,
-      input.currencySymbol
+      input.currencySymbol,
+      input.purchaseListEnabled === false ? 0 : 1
     ]
   })
   return getPosUiSettings()

@@ -23,6 +23,8 @@ import type {
   AssistantSendMessageResult,
   AssistantSettings,
   AttachFileResult,
+  PurchaseRequestFilter,
+  PurchaseRequestItem,
   BackupFileInfo,
   BackupResult,
   BackupSettings,
@@ -479,6 +481,55 @@ function pickFileAsBase64(accept: string): Promise<string | null> {
   })
 }
 
+/** رفع مرفق (مصروف/موظف) — لازم يتنادى مباشرة من ضغطة المستخدم. بيرجّع اسم الملف المخزّن على السيرفر + اسمه الأصلي. */
+function pickAttachment(): Promise<AttachFileResult> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt'
+    input.onchange = () => {
+      const file = input.files?.[0]
+      if (!file) return resolve({ ok: false, canceled: true })
+      if (file.size > 10 * 1024 * 1024) return resolve({ ok: false, error: 'حجم الملف أكبر من 10 ميجا' })
+      const reader = new FileReader()
+      reader.onload = async () => {
+        try {
+          const dataBase64 = String(reader.result).split(',')[1] ?? ''
+          resolve(await invoke('attachments:upload', { name: file.name, mime: file.type, dataBase64 }))
+        } catch (err: any) {
+          resolve({ ok: false, error: err?.message ?? 'تعذر رفع الملف' })
+        }
+      }
+      reader.onerror = () => resolve({ ok: false, error: 'تعذر قراءة الملف' })
+      reader.readAsDataURL(file)
+    }
+    input.oncancel = () => resolve({ ok: false, canceled: true })
+    input.click()
+  })
+}
+
+/** فتح مرفق محفوظ: الصور وPDF في تبويب جديد، والباقي بيتنزّل. */
+async function openAttachment(path: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await invoke('attachments:read', path)
+    if (!r?.ok) return { ok: false, error: r?.error ?? 'تعذر فتح المرفق' }
+    const bytes = Uint8Array.from(atob(r.dataBase64), (c) => c.charCodeAt(0))
+    const url = URL.createObjectURL(new Blob([bytes], { type: r.mime }))
+    const a = document.createElement('a')
+    a.href = url
+    a.target = '_blank'
+    a.rel = 'noopener'
+    if (!/^(image\/|application\/pdf)/.test(String(r.mime))) a.download = path
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+    return { ok: true }
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر فتح المرفق' }
+  }
+}
+
 async function importProductsFile(): Promise<ProductImportResult> {
   const data = await pickFileAsBase64('.xlsx')
   if (!data) return { ok: false, canceled: true, created: 0, updated: 0, rowErrors: [] }
@@ -810,8 +861,8 @@ const api = {
     getSummary: (): Promise<EmployeesSummary> => invoke('employees:getSummary')
   },
   attachments: {
-    pick: (): Promise<AttachFileResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as AttachFileResult),
-    open: (_path: string): Promise<{ ok: boolean; error?: string }> => Promise.resolve({ ok: false, error: NOT_ON_WEB })
+    pick: (): Promise<AttachFileResult> => pickAttachment(),
+    open: (path: string): Promise<{ ok: boolean; error?: string }> => openAttachment(path)
   },
   salesReps: {
     list: (includeInactive = true): Promise<SalesRep[]> => invoke('salesReps:list', includeInactive),
@@ -1043,6 +1094,14 @@ const api = {
     connect: (_clientId: string): Promise<GoogleAuthUrlResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as GoogleAuthUrlResult),
     disconnect: (): Promise<void> => Promise.resolve(),
     upload: (): Promise<BackupResult> => Promise.resolve({ ok: false, error: NOT_ON_WEB } as unknown as BackupResult)
+  },
+  /** قائمة "مطلوب شراؤه" (ويب فقط) */
+  purchaseRequests: {
+    list: (filter: PurchaseRequestFilter): Promise<PurchaseRequestItem[]> => invoke('purchaseRequests:list', filter),
+    pendingCount: (): Promise<number> => invoke('purchaseRequests:pendingCount'),
+    update: (id: number, patch: { qty?: number; unitCost?: number; vendorId?: number | null; note?: string | null }): Promise<void> =>
+      invoke('purchaseRequests:update', id, patch),
+    setStatus: (ids: number[], status: 'pending' | 'cancelled'): Promise<void> => invoke('purchaseRequests:setStatus', ids, status)
   },
   /**
    * مزامنة الأجهزة عبر الشبكة المحلية (جهاز رئيسي/فرعي) كانت مفهوم خاص بنسخة الأوفلاين —

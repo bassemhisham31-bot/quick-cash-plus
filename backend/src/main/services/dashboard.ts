@@ -2,6 +2,7 @@ import { getDb } from '../db'
 import { getDefaultWarehouseId } from '../db/seed'
 import { branchFilter } from './branchScope'
 import { getOpenSession } from './cashSession'
+import { SALE_PAY_LINES_SQL } from './salePayments'
 import type {
   CategorySalesItem,
   DashboardSummary,
@@ -33,7 +34,7 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   const lowStockRs = await db.execute({
     sql: `SELECT COUNT(*) AS cnt FROM products p
           JOIN stock s ON s.product_id = p.id AND s.warehouse_id = ?
-          WHERE p.deleted_at IS NULL AND s.quantity <= p.reorder_point`,
+          WHERE p.deleted_at IS NULL AND p.is_service = 0 AND s.quantity <= p.reorder_point`,
     args: [warehouseId]
   })
   const lowStockRow = lowStockRs.rows[0] as any
@@ -80,12 +81,12 @@ export async function getTopSellingProducts(limit = 5): Promise<TopProductItem[]
 
 export async function getPaymentMethodsBreakdown(): Promise<PaymentMethodBreakdownItem[]> {
   const db = getDb()
-  const bf = branchFilter('branch_id')
+  const bf = branchFilter('i.branch_id')
   const rs = await db.execute({
-    sql: `SELECT payment_method AS method, COALESCE(SUM(total), 0) AS total
-     FROM sales_invoices
-     WHERE deleted_at IS NULL AND date(created_at) = date('now', 'localtime') AND ${bf.sql}
-     GROUP BY payment_method
+    sql: `SELECT pl.method AS method, COALESCE(SUM(pl.total_amount), 0) AS total
+     FROM (${SALE_PAY_LINES_SQL}) pl JOIN sales_invoices i ON i.id = pl.invoice_id
+     WHERE i.deleted_at IS NULL AND date(i.created_at) = date('now', 'localtime') AND ${bf.sql}
+     GROUP BY pl.method
      ORDER BY total DESC`,
     args: bf.args as any
   })

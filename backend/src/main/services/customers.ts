@@ -105,7 +105,7 @@ export async function getCustomerStatement(customerId: number): Promise<Statemen
   if (!customer) throw new Error('العميل غير موجود')
 
   const invoicesRs = await db.execute({
-    sql: `SELECT number, total, payment_method AS paymentMethod, created_at AS createdAt
+    sql: `SELECT number, total, paid, payment_method AS paymentMethod, created_at AS createdAt
           FROM sales_invoices WHERE customer_id = ? AND deleted_at IS NULL ORDER BY created_at`,
     args: [customerId]
   })
@@ -122,7 +122,7 @@ export async function getCustomerStatement(customerId: number): Promise<Statemen
       id: idx,
       date: r.createdAt,
       description: `فاتورة ${r.number} (${paymentMethodLabel(r.paymentMethod)})`,
-      debit: r.paymentMethod === 'credit' ? Number(r.total) : 0,
+      debit: r.paymentMethod === 'credit' ? Number(r.total) : r.paymentMethod === 'mixed' ? Math.max(0, Number(r.total) - Number(r.paid)) : 0,
       credit: 0
     })
   })

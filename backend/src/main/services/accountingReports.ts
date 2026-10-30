@@ -2,6 +2,7 @@ import { getDb } from '../db'
 import { branchesEnabled, branchFilter, currentBranchId } from './branchScope'
 import { listTreasuries, getTreasuryStatement } from './treasuries'
 import { defaultLedgerAccountCode } from './accountsChart'
+import { salePayShareSql } from './salePayments'
 import { accountLedgerReport, balanceSheetReport, incomeStatementReport, journalReport, trialBalanceReport } from './ledger'
 import type { ReportResult } from '../../shared/types'
 
@@ -111,10 +112,10 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
                      SUM(i.subtotal) AS subtotal, SUM(i.discount_total) AS discount, SUM(i.tax_total) AS tax,
                      COALESCE(SUM((SELECT SUM(si.discount) FROM sales_items si WHERE si.invoice_id = i.id)), 0) AS itemsDiscount,
                      SUM(i.delivery_fee) AS delivery, SUM(i.service_charge_total) AS service, SUM(i.total) AS total,
-                     SUM(CASE WHEN i.payment_method = 'cash' THEN i.total ELSE 0 END) AS cash,
-                     SUM(CASE WHEN i.payment_method IN ('card') THEN i.total ELSE 0 END) AS card,
-                     SUM(CASE WHEN i.payment_method IN ('wallet','vodafone_cash','instapay') THEN i.total ELSE 0 END) AS wallet,
-                     SUM(CASE WHEN i.payment_method = 'credit' THEN i.total ELSE 0 END) AS credit
+                     SUM(${salePayShareSql('i', ['cash'])}) AS cash,
+                     SUM(${salePayShareSql('i', ['card'])}) AS card,
+                     SUM(${salePayShareSql('i', ['wallet', 'vodafone_cash', 'instapay'])}) AS wallet,
+                     SUM(${salePayShareSql('i', ['credit'])}) AS credit
               FROM sales_invoices i WHERE i.deleted_at IS NULL AND ${dateCond('i.created_at', f, args, 'i.branch_id')}
               GROUP BY date(i.created_at) ORDER BY day`,
         args: args as any
@@ -351,7 +352,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
         // الرصيد المستحق بيتوزّع على أحدث الفواتير الآجلة رجوعًا (الأحدث هو اللي لسه ما اتسددش)
         const inv = await db.execute({
           sql: isCustomer
-            ? `SELECT created_at, total - paid AS due FROM sales_invoices WHERE customer_id = ? AND deleted_at IS NULL AND payment_method = 'credit' ORDER BY created_at DESC`
+            ? `SELECT created_at, total - paid AS due FROM sales_invoices WHERE customer_id = ? AND deleted_at IS NULL AND payment_method IN ('credit', 'mixed') ORDER BY created_at DESC`
             : `SELECT created_at, total - paid AS due FROM purchase_invoices WHERE vendor_id = ? ORDER BY created_at DESC`,
           args: [p.id]
         })

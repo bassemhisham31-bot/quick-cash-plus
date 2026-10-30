@@ -1,5 +1,6 @@
 import { getDb } from '../db'
 import { currentBranchId } from './branchScope'
+import { creditShare } from './salePayments'
 import { loadTreasuryRows, resolveTreasury } from './treasuries'
 import { ensureAccounts, listAccounts, loadResolver, type AccountResolver, type AccountRole, type AccountRow, type AccountType } from './accountsChart'
 import type { ReportResult } from '../../shared/types'
@@ -67,6 +68,14 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
     ...(memo !== undefined ? { memo } : {})
   })
 
+  // أجزاء الدفع المقسّم (فاتورة -> [وسيلة، مبلغ]) — الفواتير العادية مالهاش صفوف هنا
+  const payRowsByInvoice = new Map<number, { method: string; amount: number }[]>()
+  for (const p of (await db.execute('SELECT invoice_id, method, amount FROM sales_invoice_payments ORDER BY id')).rows as any[]) {
+    const list = payRowsByInvoice.get(Number(p.invoice_id)) ?? []
+    list.push({ method: String(p.method), amount: Number(p.amount) })
+    payRowsByInvoice.set(Number(p.invoice_id), list)
+  }
+
   // ---------- المبيعات + تكلفتها ----------
   const sales = await db.execute(
     `SELECT i.id, i.number, i.created_at, i.subtotal, i.discount_total, i.tax_total, i.total, i.paid, i.payment_method, i.branch_id,
@@ -91,8 +100,11 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
     const paid = Math.min(Number(r.paid), total)
     const cashPart = Math.max(0, paid - settled)
     const arPart = Math.max(0, total - paid)
+    const splitRows = payRowsByInvoice.get(Number(r.id))
     const lines: LedgerLine[] = [
-      T(r.payment_method, null, Number(r.branch_id), cashPart, 0),
+      ...(splitRows?.length
+        ? splitRows.map((p) => T(p.method, null, Number(r.branch_id), p.amount, 0))
+        : [T(r.payment_method, null, Number(r.branch_id), cashPart, 0)]),
       L('ar', arPart, 0, r.customerName),
       L('ap', settled, 0, 'تسوية مع مورد مرتبط'),
       L('sales_discounts', itemsDiscount + invoiceDiscount + redeem, 0),
@@ -149,7 +161,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
 
   // ---------- مرتجعات المبيعات ----------
   const salesReturns = await db.execute(
-    `SELECT r.id, r.created_at, r.amount, r.branch_id, i.number, i.payment_method, c.name AS customerName,
+    `SELECT r.id, r.created_at, r.amount, r.branch_id, i.id AS invoice_id, i.number, i.payment_method, i.total AS inv_total, i.paid AS inv_paid, c.name AS customerName,
             COALESCE((SELECT SUM(ri.qty * COALESCE(si.cost_price, p.cost_price, 0)) FROM sales_return_items ri
                       JOIN sales_items si ON si.id = ri.sales_item_id LEFT JOIN products p ON p.id = si.product_id
                       WHERE ri.return_id = r.id), 0) AS cogs
@@ -157,6 +169,15 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
   )
   for (const r of salesReturns.rows as any[]) {
     const credit = r.payment_method === 'credit'
+    const splitRows = payRowsByInvoice.get(Number(r.invoice_id))
+    const refund = Number(r.amount)
+    const refundLines: LedgerLine[] = splitRows?.length
+      ? [
+          // مرتجع فاتورة مقسّمة: بيتوزّع على وسائل الدفع بنسبتها، والجزء الآجل على رصيد العميل
+          ...splitRows.map((p) => T(p.method, null, Number(r.branch_id), 0, refund * (p.amount / Number(r.inv_total)))),
+          L('ar', 0, refund * creditShare({ payment_method: 'mixed', total: r.inv_total, paid: r.inv_paid }))
+        ]
+      : [credit ? L('ar', 0, refund) : T(r.payment_method, null, Number(r.branch_id), 0, refund)]
     entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `SR-${r.id}`,
@@ -165,7 +186,7 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
       lines: balanced(
         [
           L('sales_returns', Number(r.amount), 0),
-          credit ? L('ar', 0, Number(r.amount)) : T(r.payment_method, null, Number(r.branch_id), 0, Number(r.amount)),
+          ...refundLines,
           L('inventory', Number(r.cogs), 0),
           L('cogs', 0, Number(r.cogs))
         ],

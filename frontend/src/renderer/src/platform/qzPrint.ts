@@ -5,11 +5,39 @@ import qz from 'qz-tray'
  * تكامل QZ Tray (خطة التحويل، المرحلة 4): برنامج صغير مجاني بيتركب على جهاز كل فرع فيه طابعة،
  * وبيسمح لصفحة الويب تطبع عليها مباشرة (المتصفح لوحده مايقدرش يوصل لطابعة حرارية).
  *
- * ملحوظة أمان صادقة: النسخة دي بتتصل بدون شهادة توقيع رقمي (unsigned) — يعني QZ Tray هيظهر
- * للمستخدم رسالة "Action Required" مرة كل جلسة يطلب فيها يوافق يدويًا على الاتصال. ده مقبول
- * للاختبار والاستخدام المحلي، لكن لإنتاج حقيقي على نطاق واسع الأفضل شهادة موقّعة من QZ Industries
- * عشان الموافقة تبقى تلقائية بالكامل — ده تحسين لاحق، مش حظر لاستخدام الميزة دلوقتي.
+ * التوقيع: السيرفر بيولّد شهادة موقّعة ذاتيًا للعميل (backend/src/main/services/qzSigning.ts) وبيوقّع رسايل QZ Tray.
+ * من غير كده QZ Tray بيطلّع "Untrusted website / anonymous request" مع كل طباعة. بعد التوقيع المستخدم بيوافق مرة واحدة
+ * على الجهاز مع "Remember this decision" (أو يحط الشهادة كـoverride.crt في فولدر QZ Tray) ومن بعدها الطباعة صامتة.
+ * لو التوقيع فشل (مفيش تسجيل دخول مثلًا) بنكمّل بدون توقيع زي الأول.
  */
+
+function authHeaders(): Record<string, string> {
+  let token: string | null = null
+  try {
+    token = localStorage.getItem('qcp_web_token')
+  } catch {
+    token = null
+  }
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+qz.security.setCertificatePromise((resolve: (cert?: string) => void) => {
+  fetch('/api/qz/certificate', { headers: authHeaders() })
+    .then((r) => (r.ok ? r.text() : undefined))
+    .then((cert) => resolve(cert || undefined))
+    .catch(() => resolve(undefined))
+})
+qz.security.setSignatureAlgorithm('SHA512')
+qz.security.setSignaturePromise((toSign: string) => (resolve: (sig?: string) => void) => {
+  fetch('/api/qz/sign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ message: toSign })
+  })
+    .then((r) => (r.ok ? r.json() : undefined))
+    .then((j) => resolve(j?.signature || undefined))
+    .catch(() => resolve(undefined))
+})
 
 let connecting: Promise<void> | null = null
 
