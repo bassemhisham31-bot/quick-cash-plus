@@ -2,7 +2,7 @@ import { getDb } from '../db'
 import { currentBranchId } from './branchScope'
 import { creditShare } from './salePayments'
 import { loadTreasuryRows, resolveTreasury } from './treasuries'
-import { ensureAccounts, listAccounts, loadResolver, type AccountResolver, type AccountRole, type AccountRow, type AccountType } from './accountsChart'
+import { ensureAccounts, listAccounts, loadResolver, makeFixedAssetMatcher, type AccountResolver, type AccountRole, type AccountRow, type AccountType } from './accountsChart'
 import type { ReportResult } from '../../shared/types'
 
 export type { AccountRow, AccountType }
@@ -266,18 +266,23 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
 
   // ---------- مصروفات ----------
   const expenses = await db.execute(
-    `SELECT e.id, e.created_at, e.amount, e.method, e.treasury_id, e.branch_id, e.category_id, e.note, ec.name AS categoryName
+    `SELECT e.id, e.created_at, e.amount, e.method, e.treasury_id, e.branch_id, e.category_id, e.note, ec.name AS categoryName,
+            COALESCE(ec.is_fixed_asset, 0) AS isFixedAsset
      FROM expenses e LEFT JOIN expense_categories ec ON ec.id = e.category_id WHERE e.deleted_at IS NULL`
   )
   for (const r of expenses.rows as any[]) {
     const catId = r.category_id != null ? Number(r.category_id) : null
+    // تصنيف "شراء أصل": مدين الأصول الثابتة بدل المصروفات (مبيأثرش على الأرباح)
+    const expenseLine: LedgerLine = Number(r.isFixedAsset)
+      ? L('fixed_assets', Number(r.amount), 0)
+      : { role: catId != null ? 'expense' : 'misc_expense', code: R.expense(catId), debit: Number(r.amount), credit: 0 }
     entries.push({ branchId: branchOf(r),
       date: r.created_at,
       ref: `E-${r.id}`,
       description: `${r.categoryName ?? 'مصروف'}${r.note ? ` — ${r.note}` : ''}`,
       source: 'مصروف',
       lines: [
-        { role: catId != null ? 'expense' : 'misc_expense', code: R.expense(catId), debit: Number(r.amount), credit: 0 },
+        expenseLine,
         T(r.method, r.treasury_id != null ? Number(r.treasury_id) : null, Number(r.branch_id), 0, Number(r.amount))
       ]
     })
@@ -614,7 +619,24 @@ export async function balanceSheetReport(to?: string): Promise<ReportResult> {
     }
     return r2(total)
   }
-  const assets = block('الأصول', ['asset'], 1)
+  // الأصول: ثابتة (الحساب المربوط بدور fixed_assets وفروعه) ومتداولة (الباقي)
+  const isFixed = makeFixedAssetMatcher((await loadResolver()).code('fixed_assets'))
+  rows.push({ item: 'الأصول', amount: '' })
+  const assetPart = (title: string, pick: (code: string) => boolean): number => {
+    rows.push({ item: `   ▸ ${title}`, amount: '' })
+    let total = 0
+    for (const [code, v] of [...net.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+      const acc = accounts.get(code)
+      if (!acc || acc.type !== 'asset' || !pick(code) || r2(v) === 0) continue
+      rows.push({ item: `      ${acc.name}`, amount: r2(v) })
+      total += v
+    }
+    rows.push({ item: `   إجمالي ${title}`, amount: r2(total) })
+    return total
+  }
+  const fixedAssets = assetPart('الأصول الثابتة', isFixed)
+  const currentAssets = assetPart('الأصول المتداولة', (code) => !isFixed(code))
+  const assets = r2(fixedAssets + currentAssets)
   rows.push({ item: 'إجمالي الأصول', amount: assets })
   const liabilities = block('الخصوم', ['liability'], -1)
   rows.push({ item: 'إجمالي الخصوم', amount: liabilities })

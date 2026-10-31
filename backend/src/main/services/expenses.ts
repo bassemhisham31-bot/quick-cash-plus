@@ -5,14 +5,14 @@ import type { ExpenseCategory, ExpenseInput, ExpenseResult, ExpensesByMethodSumm
 
 export async function listExpenseCategories(): Promise<ExpenseCategory[]> {
   const db = getDb()
-  const rs = await db.execute('SELECT id, name FROM expense_categories WHERE deleted_at IS NULL ORDER BY name')
-  return rs.rows.map((r: any) => ({ id: Number(r.id), name: r.name }))
+  const rs = await db.execute('SELECT id, name, is_fixed_asset FROM expense_categories WHERE deleted_at IS NULL ORDER BY name')
+  return rs.rows.map((r: any) => ({ id: Number(r.id), name: r.name, isFixedAsset: !!r.is_fixed_asset }))
 }
 
-export async function createExpenseCategory(name: string): Promise<ExpenseCategory> {
+export async function createExpenseCategory(name: string, isFixedAsset = false): Promise<ExpenseCategory> {
   const db = getDb()
-  const rs = await db.execute({ sql: 'INSERT INTO expense_categories (name) VALUES (?)', args: [name] })
-  return { id: Number(rs.lastInsertRowid), name }
+  const rs = await db.execute({ sql: 'INSERT INTO expense_categories (name, is_fixed_asset) VALUES (?, ?)', args: [name, isFixedAsset ? 1 : 0] })
+  return { id: Number(rs.lastInsertRowid), name, isFixedAsset }
 }
 
 export async function listExpenses(limit = 200): Promise<ExpenseView[]> {
@@ -21,7 +21,7 @@ export async function listExpenses(limit = 200): Promise<ExpenseView[]> {
   const rs = await db.execute({
     sql: `SELECT e.id, e.amount, e.method, e.note, e.created_at AS createdAt,
                  e.attachment_path AS attachmentPath, e.attachment_name AS attachmentName,
-                 COALESCE(c.name, 'بدون تصنيف') AS categoryName, u.full_name AS cashierName,
+                 COALESCE(c.name, 'بدون تصنيف') AS categoryName, COALESCE(c.is_fixed_asset, 0) AS isFixedAsset, u.full_name AS cashierName,
                  COALESCE(br.name, '') AS branchName
           FROM expenses e
           LEFT JOIN branches br ON br.id = e.branch_id
@@ -35,6 +35,7 @@ export async function listExpenses(limit = 200): Promise<ExpenseView[]> {
   return rs.rows.map((r: any) => ({
     id: Number(r.id),
     categoryName: r.categoryName,
+    isFixedAsset: !!r.isFixedAsset,
     amount: Number(r.amount),
     method: r.method,
     note: r.note,

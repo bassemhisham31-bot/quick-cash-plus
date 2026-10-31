@@ -476,12 +476,13 @@ function VoucherForm({
             </div>
             {type === 'payment' && (
               <div className="qcp-field">
-                <label>تصنيف المصروف</label>
+                <label>تصنيف المصروف (أو "شراء أصول ثابتة" لو بتشتري أصل)</label>
                 <select className="qcp-select" value={categoryId} onChange={(e) => setCategoryId(e.target.value ? Number(e.target.value) : '')}>
                   <option value="">— بدون —</option>
                   {categories.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
+                      {c.isFixedAsset ? ' (أصل ثابت)' : ''}
                     </option>
                   ))}
                 </select>

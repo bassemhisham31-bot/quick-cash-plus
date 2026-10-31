@@ -1,7 +1,7 @@
 import { getDb } from '../db'
 import { branchesEnabled, branchFilter, currentBranchId } from './branchScope'
 import { listTreasuries, getTreasuryStatement } from './treasuries'
-import { defaultLedgerAccountCode } from './accountsChart'
+import { defaultLedgerAccountCode, notFixedAssetSql } from './accountsChart'
 import { salePayShareSql } from './salePayments'
 import { accountLedgerReport, balanceSheetReport, incomeStatementReport, journalReport, trialBalanceReport } from './ledger'
 import type { ReportResult } from '../../shared/types'
@@ -271,7 +271,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
         sql: `SELECT COALESCE(ec.name, 'بدون تصنيف') AS category, COUNT(*) AS cnt, SUM(e.amount) AS total,
                      SUM(CASE WHEN e.method = 'cash' THEN e.amount ELSE 0 END) AS cash
               FROM expenses e LEFT JOIN expense_categories ec ON ec.id = e.category_id
-              WHERE e.deleted_at IS NULL AND ${dateCond('e.created_at', f, args, 'e.branch_id')}
+              WHERE e.deleted_at IS NULL AND ${notFixedAssetSql('e.category_id')} AND ${dateCond('e.created_at', f, args, 'e.branch_id')}
               GROUP BY ec.id ORDER BY total DESC`,
         args: args as any
       })

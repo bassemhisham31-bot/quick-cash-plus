@@ -25,6 +25,7 @@ export interface AccountRow {
 
 export const AR = '1200'
 export const INVENTORY = '1300'
+export const FIXED_ASSETS = '1500'
 export const AP = '2100'
 export const VAT = '2200'
 export const TIPS = '2300'
@@ -45,6 +46,7 @@ export const MISC_EXPENSE = '6900'
 const SYSTEM_ACCOUNTS: [string, string, AccountType][] = [
   [AR, 'العملاء (المدينون)', 'asset'],
   [INVENTORY, 'المخزون', 'asset'],
+  [FIXED_ASSETS, 'الأصول الثابتة', 'asset'],
   [AP, 'الموردون (الدائنون)', 'liability'],
   [VAT, 'ضريبة القيمة المضافة المستحقة', 'liability'],
   [TIPS, 'إكراميات مستحقة للعاملين', 'liability'],
@@ -66,6 +68,22 @@ const SYSTEM_ACCOUNTS: [string, string, AccountType][] = [
 export const treasuryCode = (id: number): string => String(1100 + id)
 export const expenseCategoryCode = (id: number): string => String(6000 + id)
 
+/**
+ * شرط SQL بيستبعد مشتريات الأصول الثابتة (تصنيفات is_fixed_asset) من المصروفات — الأصل مش مصروف فمبيدخلش في الأرباح وتقارير المصروفات.
+ * col = عمود التصنيف في الاستعلام (مع الـalias لو فيه). الخزينة وإقفال اليوم بيحسبوا المبلغ عادي لأن الفلوس خرجت فعلًا.
+ */
+export const notFixedAssetSql = (col = 'category_id'): string =>
+  `(${col} IS NULL OR ${col} NOT IN (SELECT id FROM expense_categories WHERE is_fixed_asset = 1))`
+
+/**
+ * هل حساب الأصل ده "ثابت"؟ هو الحساب المربوط بدور fixed_assets + أي حساب تحته بنفس بداية الكود
+ * (4000 → 4100 سيارات، 4200 أجهزة...) — بالظبط زي ما الحسابات الفرعية للمتداولة (5100 خزينة...) بتبدأ بـ5.
+ */
+export function makeFixedAssetMatcher(fixedCode: string): (code: string) => boolean {
+  const stem = fixedCode.replace(/0+$/, '')
+  return (code) => code === fixedCode || (stem.length > 0 && code.startsWith(stem))
+}
+
 /** الحسابات الأساسية السبعة للشجرة المبسّطة */
 export const BASE_ACCOUNTS: { code: string; name: string; type: AccountType }[] = [
   { code: '1000', name: 'الايرادات', type: 'revenue' },
@@ -81,7 +99,7 @@ const BASE_CODE_BY_TYPE: Record<AccountType, string> = {
   revenue: '1000',
   cogs: '2000',
   expense: '3000',
-  asset: '5000', // المتداولة: العملاء والمخزون والخزائن — الثابتة (4000) بيحط عليها المستخدم يدويًا
+  asset: '5000', // المتداولة: العملاء والمخزون والخزائن — الثابتة (4000) ليها دور fixed_assets لمشتريات الأصول
   liability: '6000',
   equity: '7000'
 }
@@ -92,6 +110,7 @@ export type AccountRole =
   | 'treasury'
   | 'ar'
   | 'inventory'
+  | 'fixed_assets'
   | 'ap'
   | 'vat'
   | 'tips'
@@ -127,6 +146,7 @@ const ROLE_DEFS: RoleDef[] = [
   { role: 'treasury', label: 'الخزائن (النقدية والبنك والمحافظ)', type: 'asset', legacy: null, base: '5000' },
   { role: 'ar', label: 'العملاء (المدينون)', type: 'asset', legacy: AR, base: '5000' },
   { role: 'inventory', label: 'المخزون', type: 'asset', legacy: INVENTORY, base: '5000' },
+  { role: 'fixed_assets', label: 'الأصول الثابتة (شراء الأصول: معدات، أجهزة، سيارات...)', type: 'asset', legacy: FIXED_ASSETS, base: '4000' },
   { role: 'ap', label: 'الموردون (الدائنون)', type: 'liability', legacy: AP, base: '6000' },
   { role: 'vat', label: 'ضريبة القيمة المضافة المستحقة', type: 'liability', legacy: VAT, base: '6000' },
   { role: 'tips', label: 'إكراميات مستحقة للعاملين', type: 'liability', legacy: TIPS, base: '6000', restaurantOnly: true },
@@ -197,7 +217,8 @@ export async function ensureAccounts(): Promise<void> {
   for (const [code, name, type] of SYSTEM_ACCOUNTS) await upsert(code, name, type, 1)
   const treasuries = await db.execute('SELECT id, name FROM treasuries WHERE deleted_at IS NULL')
   for (const t of treasuries.rows as any[]) await upsert(treasuryCode(Number(t.id)), `خزينة: ${t.name}`, 'asset', 1)
-  const cats = await db.execute('SELECT id, name FROM expense_categories')
+  // تصنيفات "شراء أصل" مالهاش حساب مصروف — قيدها على حساب الأصول الثابتة
+  const cats = await db.execute('SELECT id, name FROM expense_categories WHERE is_fixed_asset = 0')
   for (const c of cats.rows as any[]) await upsert(expenseCategoryCode(Number(c.id)), `مصروف: ${c.name}`, 'expense', 1)
 }
 

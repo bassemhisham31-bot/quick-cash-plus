@@ -9,7 +9,8 @@
 import { existsSync, mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import ExcelJS from 'exceljs'
-import { initDatabaseAtPath } from '../src/main/db'
+import { getDb, initDatabaseAtPath } from '../src/main/db'
+import { FIXED_ASSET_ROLE_BACKFILL_SQL } from '../src/main/db/migrations/074_fixed_assets'
 import { startHttpServer } from '../src/http/server'
 
 const PORT = 4997
@@ -107,9 +108,20 @@ async function main(): Promise<void> {
     const exp = (await call('expenses:create', [{ categoryId: cat.id, amount: 70, method: 'cash', note: 'إيجار' }, adminId])).body.result
     const exp2 = (await call('expenses:create', [{ categoryId: null, amount: 20, method: 'cash', note: 'متنوع' }, adminId])).body.result
     assert(exp?.ok && exp2?.ok, 'مصروفات بتصنيف وبدون تصنيف اتسجلت')
+    const assetCat = (await result('expenses:listCategories')).find((c: any) => c.isFixedAsset)
+    assert(assetCat?.name === 'شراء أصول ثابتة', 'تصنيف "شراء أصول ثابتة" جاهز في قايمة تصنيفات المصروفات (isFixedAsset)')
+    assert((await result('expenses:listCategories')).filter((c: any) => !c.isFixedAsset).length === 1, 'التصنيفات العادية مش متعلّمة أصل ثابت')
+    const assetExp = (await call('expenses:create', [{ categoryId: assetCat.id, amount: 30, method: 'cash', note: 'تلاجة' }, adminId])).body.result
+    assert(assetExp?.ok && assetExp.expense.isFixedAsset === true, 'شراء أصل ثابت (30) اتسجل من شاشة المصروفات')
 
     const oldAccounts = await result('ledger:listAccounts')
     assert(oldAccounts.length > 18 && oldAccounts.some((a: any) => a.code === '4100') && oldAccounts.some((a: any) => a.code === `${6000 + cat.id}`), 'الشجرة القديمة: حسابات النظام + حساب لكل تصنيف مصروف')
+    assert(oldAccounts.some((a: any) => a.code === '1500' && a.type === 'asset'), 'الشجرة القديمة: حساب نظام للأصول الثابتة (1500)')
+    assert(!oldAccounts.some((a: any) => a.code === `${6000 + assetCat.id}`), 'الشجرة القديمة: تصنيف "شراء أصل" مالوش حساب مصروف')
+    const legacyTb = await report('trial_balance')
+    assert(near(Number(legacyTb.rows.find((r: any) => String(r.code) === '1500')?.cd ?? NaN), 30), 'الشجرة القديمة: شراء الأصل (30) اتسجل مدين على 1500')
+    const legacyInc = await report('income_statement')
+    assert(near(rowOf(legacyInc, 'إجمالي المصروفات'), 90), `الشجرة القديمة: شراء الأصل مش داخل في المصروفات (${rowOf(legacyInc, 'إجمالي المصروفات')} = 70 + 20)`)
     const treasuries = await result('treasury:list')
     const cashTreasury = treasuries.find((t: any) => t.methods?.includes?.('cash')) ?? treasuries[0]
     const tCode = String(1100 + cashTreasury.id)
@@ -124,6 +136,12 @@ async function main(): Promise<void> {
     assert((await call('ledger:updateAccount', ['4100', { name: 'x', type: 'revenue' }])).body.ok === false, 'حساب النظام القديم مينفعش يتعدل')
     assert((await call('ledger:deleteAccount', ['4100'])).body.ok === false, 'حساب النظام القديم مينفعش يتحذف')
     assert((await result('ledger:listAccountRoles')).custom === false, 'الوضع القديم: مفيش ربط أدوار')
+    await getDb().execute(FIXED_ASSET_ROLE_BACKFILL_SQL)
+    assert((await result('ledger:listAccountRoles')).custom === false, 'الوضع القديم: ترحيل ربط الأصول الثابتة مبيعملش حاجة لما الشجرة مش مبسّطة')
+    const plRep = await result('reports:run', ['profit_loss', {}])
+    assert(near(plRep.rows.reduce((s: number, r: any) => s + Number(r.expenses), 0), 90), `تقرير الأرباح والخسائر: شراء الأصل مش محسوب كمصروف (${plRep.rows.reduce((s: number, r: any) => s + Number(r.expenses), 0)})`)
+    const catRep = await result('accounting:run', ['expenses_by_category', {}])
+    assert(!catRep.rows.some((r: any) => String(r.category).includes('أصول')), 'المصروفات حسب التصنيف: مفيهاش شراء الأصول')
 
     console.log('\n2) خطة التحويل (من غير تغيير) + حماية endpoint الداخلي...')
     const noSecret = await fetch(`${BASE}/internal/chart`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"action":"plan"}' })
@@ -209,6 +227,57 @@ async function main(): Promise<void> {
     assert(sale3?.ok, 'بيع جديد بعد الربط')
     const tb3 = await report('trial_balance')
     assert(Number(tb3.rows.find((r: any) => String(r.code) === '5120').cd) > Number(row('5120').cd), 'البيع الجديد دخل على حساب الخزائن المربوط (5120)')
+
+    console.log('\n5ب) الأصول الثابتة: ربط بحركات النظام + تقسيم الميزانية...')
+    const cdOf = (rep: any, code: string): number => Number(rep.rows.find((r: any) => String(r.code) === code)?.cd ?? 0)
+    const fixedRole = (await result('ledger:listAccountRoles')).roles.find((r: any) => r.role === 'fixed_assets')
+    assert(fixedRole?.accountCode === '4000' && fixedRole.type === 'asset', 'ربط الأصول الثابتة الافتراضي = 4000 (ظاهر في ربط حسابات النظام)')
+    assert((await result('ledger:listAccounts')).find((a: any) => a.code === '4000')?.roles.includes('fixed_assets'), '4000 عليه ربط بحركات النظام (🔗) زي باقي الحسابات الأساسية')
+    assert(await fails('ledger:deleteAccount', ['4000'], 'مربوط'), '4000 بقى مربوط فمينفعش يتحذف')
+    assert(await fails('ledger:setAccountRoles', [{ fixed_assets: '1000' }], 'نوع'), 'ربط الأصول الثابتة بحساب إيرادات اتمنع (نوع غلط)')
+    assert(near(cdOf(await report('trial_balance'), '4000'), 30), 'شراء الأصل القديم (30) انتقل مدين على 4000 بعد التحويل')
+    const bsA = await report('balance_sheet')
+    assert(bsA.rows.some((r: any) => String(r.item).trim() === '▸ الأصول الثابتة') && bsA.rows.some((r: any) => String(r.item).trim() === '▸ الأصول المتداولة'), 'الميزانية: قسمين "الأصول الثابتة" و"الأصول المتداولة"')
+    assert(
+      near(rowOf(bsA, 'إجمالي الأصول الثابتة'), 30) && near(rowOf(bsA, 'إجمالي الأصول الثابتة') + rowOf(bsA, 'إجمالي الأصول المتداولة'), rowOf(bsA, 'إجمالي الأصول')),
+      `الميزانية: الأصول الثابتة 30 + المتداولة ${rowOf(bsA, 'إجمالي الأصول المتداولة')} = إجمالي الأصول ${rowOf(bsA, 'إجمالي الأصول')}`
+    )
+    const car = (await call('expenses:createCategory', ['سيارة توصيل', true])).body.result
+    assert(car?.isFixedAsset === true, 'إنشاء تصنيف جديد متعلّم "أصل ثابت" من الشاشة')
+    const preBuy = await figures()
+    const tbPre = await report('trial_balance')
+    const buy = (await call('expenses:create', [{ categoryId: car.id, amount: 20, method: 'cash', note: 'عربية' }, adminId])).body.result
+    assert(buy?.ok, 'شراء أصل جديد (20) اتسجل')
+    const postBuy = await figures()
+    const tbPost = await report('trial_balance')
+    assert(near(cdOf(tbPost, '4000'), cdOf(tbPre, '4000') + 20), 'الشراء دخل مدين على حساب الأصول الثابتة 4000')
+    assert(near(cdOf(tbPost, '5120'), cdOf(tbPre, '5120') - 20), 'والخزينة اتخصم منها نفس المبلغ')
+    assert(near(postBuy.profit, preBuy.profit) && near(postBuy.assets, preBuy.assets) && near(postBuy.liabilities, preBuy.liabilities) && near(postBuy.equity, preBuy.equity), 'شراء الأصل ما غيّرش صافي الربح ولا إجمالي الأصول')
+    assert(near(postBuy.trialD, postBuy.trialC) && near(postBuy.journalD, postBuy.journalC), 'ميزان المراجعة ودفتر اليومية متوازنين بعد شراء الأصل')
+    const plAfter = await result('reports:run', ['profit_loss', {}])
+    assert(near(plAfter.rows.reduce((s: number, r: any) => s + Number(r.expenses), 0), 90), 'الأرباح والخسائر: لسه المصروفات 90 بس بعد شراء الأصل')
+    const treasuryNow = (await result('treasury:list')).find((t: any) => t.methods?.includes?.('cash')) ?? (await result('treasury:list'))[0]
+    const pv = await call('treasury:createVoucher', [{ type: 'payment', treasuryId: treasuryNow.id, amount: 4, partyType: 'other', partyName: 'جهاز كاشير', categoryId: assetCat.id, note: '' }, adminId])
+    assert(pv.body.ok, 'سند صرف بتصنيف "شراء أصول ثابتة" اتسجل')
+    assert(near(cdOf(await report('trial_balance'), '4000'), cdOf(tbPost, '4000') + 4), 'سند الصرف دخل مدين على 4000 كمان')
+    // حساب فرعي للأصول الثابتة (4100) بيظهر تحت "الأصول الثابتة" في الميزانية، والخزينة 5120 تفضل متداولة
+    assert((await call('ledger:createAccount', [{ code: '4100', name: 'سيارات', type: 'asset' }])).body.ok, 'إضافة حساب فرعي 4100 للأصول الثابتة')
+    assert((await call('ledger:createEntry', [{ date: '2026-10-30', description: 'سيارة بالأجل', lines: [{ code: '4100', debit: 50, credit: 0 }, { code: '7000', debit: 0, credit: 50 }] }, adminId])).body.ok, 'قيد يدوي 50 على 4100')
+    const bsB = await report('balance_sheet')
+    assert(near(rowOf(bsB, 'إجمالي الأصول الثابتة'), 30 + 20 + 4 + 50), `الميزانية: الأصول الثابتة (4000 + 4100) = ${rowOf(bsB, 'إجمالي الأصول الثابتة')}`)
+    assert(near(rowOf(bsB, 'سيارات'), 50), 'الحساب الفرعي 4100 ظاهر في الميزانية')
+    assert(near(rowOf(bsB, 'إجمالي الأصول المتداولة'), rowOf(bsB, 'إجمالي الأصول') - rowOf(bsB, 'إجمالي الأصول الثابتة')) && rowOf(bsB, 'الخزينة والبنوك') > 0, 'الخزينة (5120) فضلت في الأصول المتداولة')
+    // إعادة ربط الدور بحساب فرعي: الشراء الجديد يروح عليه
+    assert((await call('ledger:setAccountRoles', [{ fixed_assets: '4100' }])).body.ok, 'ربط الأصول الثابتة بـ4100')
+    const tbMap = await report('trial_balance')
+    await call('expenses:create', [{ categoryId: car.id, amount: 10, method: 'cash', note: 'ملحقات' }, adminId])
+    assert(near(cdOf(await report('trial_balance'), '4100'), cdOf(tbMap, '4100') + 10), 'بعد إعادة الربط: شراء الأصل الجديد بيروح على 4100')
+    assert((await call('ledger:setAccountRoles', [{ fixed_assets: '4000' }])).body.ok, 'رجّعت الربط على 4000')
+    // ترحيل 074 على قاعدة فيها شجرة مبسّطة بدون الدور: بيضيف الربط 4000 (ومبيغيّرش ربط موجود)
+    await getDb().execute("DELETE FROM account_roles WHERE role = 'fixed_assets'")
+    await getDb().execute(FIXED_ASSET_ROLE_BACKFILL_SQL)
+    assert((await result('ledger:listAccountRoles')).roles.find((r: any) => r.role === 'fixed_assets')?.accountCode === '4000', 'ترحيل 074: ربط fixed_assets → 4000 اتضاف لقاعدة محوّلة قبل كده')
+    assert(Number((await getDb().execute("SELECT COUNT(*) AS c FROM account_roles WHERE role = 'fixed_assets'")).rows[0].c) === 1, 'والترحيل مبيكررش الربط')
 
     console.log('\n6) استيراد الأصناف من الإكسل من غير باركود...')
     const header = ['الاسم', 'الباركود', 'التصنيف', 'الوحدة', 'سعر الشراء', 'سعر البيع (قطاعي)', 'سعر الجملة', 'سعر جملة الجملة', 'سعر العبوة', 'حد التنبيه', 'الكمية الحالية', 'تاريخ الصلاحية', 'الرقم التسلسلي']

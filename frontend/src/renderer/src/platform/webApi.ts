@@ -847,7 +847,7 @@ const api = {
   },
   expenses: {
     listCategories: (): Promise<ExpenseCategory[]> => invoke('expenses:listCategories'),
-    createCategory: (name: string): Promise<ExpenseCategory> => invoke('expenses:createCategory', name),
+    createCategory: (name: string, isFixedAsset?: boolean): Promise<ExpenseCategory> => invoke('expenses:createCategory', name, !!isFixedAsset),
     list: (limit?: number): Promise<ExpenseView[]> => invoke('expenses:list', limit),
     create: (input: ExpenseInput, userId: number): Promise<ExpenseResult> =>
       invoke('expenses:create', input, userId),

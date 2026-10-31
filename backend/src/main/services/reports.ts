@@ -6,6 +6,7 @@ import { getCustomerStatement } from './customers'
 import { getVendorStatement } from './vendors'
 import { assertReportInEdition } from './edition'
 import { SALE_PAY_LINES_SQL } from './salePayments'
+import { notFixedAssetSql } from './accountsChart'
 import { customerDueDatesReport, salesRepCommissionDetailReport, serviceSalesReport, vendorDueDatesReport } from './reportsExtra'
 import type { OverviewMetric, OverviewSummary, ReportFilter, ReportResult, ReportType } from '../../shared/types'
 
@@ -619,7 +620,7 @@ async function profitLoss(filter: ReportFilter): Promise<ReportResult> {
   const { sql: expenseDateSql, args: expenseDateArgs } = dateConditions(filter, 'created_at', 'branch_id')
   const expensesRs = await db.execute({
     sql: `SELECT date(created_at) AS day, COALESCE(SUM(amount), 0) AS expenses
-          FROM expenses WHERE deleted_at IS NULL ${expenseDateSql}
+          FROM expenses WHERE deleted_at IS NULL AND ${notFixedAssetSql()} ${expenseDateSql}
           GROUP BY day`,
     args: expenseDateArgs
   })
@@ -671,7 +672,7 @@ async function monthlyExpenses(filter: ReportFilter): Promise<ReportResult> {
                  SUM(e.amount) AS amount
           FROM expenses e
           LEFT JOIN expense_categories c ON c.id = e.category_id
-          WHERE e.deleted_at IS NULL ${dateSql}
+          WHERE e.deleted_at IS NULL AND ${notFixedAssetSql('e.category_id')} ${dateSql}
           GROUP BY month, category
           ORDER BY month DESC, amount DESC`,
     args: dateArgs
@@ -1037,7 +1038,7 @@ async function financialSummary(filter: ReportFilter): Promise<ReportResult> {
     args: dateArgs
   })
   const expensesRs = await db.execute({
-    sql: `SELECT COALESCE(SUM(amount), 0) AS expenses FROM expenses WHERE deleted_at IS NULL ${dateSql}`,
+    sql: `SELECT COALESCE(SUM(amount), 0) AS expenses FROM expenses WHERE deleted_at IS NULL AND ${notFixedAssetSql()} ${dateSql}`,
     args: dateArgs
   })
   const customersDebtRs = await db.execute(
@@ -1310,7 +1311,7 @@ async function periodFlowTotals(
 
   const expensesRs = await db.execute({
     sql: `SELECT COALESCE(SUM(amount), 0) AS expenses
-          FROM expenses WHERE deleted_at IS NULL AND date(created_at) >= date(?) AND date(created_at) <= date(?) AND ${bse.sql}`,
+          FROM expenses WHERE deleted_at IS NULL AND ${notFixedAssetSql()} AND date(created_at) >= date(?) AND date(created_at) <= date(?) AND ${bse.sql}`,
     args: [dateFrom, dateTo, ...bse.args]
   })
 
@@ -1405,7 +1406,7 @@ async function branchComparison(filter: ReportFilter): Promise<ReportResult> {
   )
   const se = d('e.created_at')
   const expenses = await byBranch(
-    `SELECT e.branch_id AS b, COALESCE(SUM(e.amount), 0) AS total FROM expenses e WHERE e.deleted_at IS NULL ${se.sql} GROUP BY e.branch_id`,
+    `SELECT e.branch_id AS b, COALESCE(SUM(e.amount), 0) AS total FROM expenses e WHERE e.deleted_at IS NULL AND ${notFixedAssetSql('e.category_id')} ${se.sql} GROUP BY e.branch_id`,
     se.args
   )
   const sp = d('pi.created_at')

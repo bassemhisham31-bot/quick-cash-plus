@@ -940,6 +940,8 @@ export type ExpenseMethod = 'cash' | 'card' | 'wallet' | 'transfer'
 export interface ExpenseCategory {
   id: number
   name: string
+  /** تصنيف "شراء أصل ثابت": بيتسجّل على حساب الأصول الثابتة وملوش علاقة بالمصروفات والأرباح */
+  isFixedAsset?: boolean
 }
 
 export interface ExpenseInput {
@@ -962,6 +964,7 @@ export interface ExpenseView {
   branchName?: string
   id: number
   categoryName: string
+  isFixedAsset?: boolean
   amount: number
   method: ExpenseMethod
   note: string | null

@@ -432,7 +432,8 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'stockPermits:delete': (permitId: number, userId: number) => deleteStockPermit(permitId, userId),
 
     'expenses:listCategories': () => listExpenseCategories(),
-    'expenses:createCategory': (name: string) => createExpenseCategory(name),
+    // القنوات المعدِّلة بتاخد actor كآخر argument تلقائي (server.ts) — فالعلامة لازم تتقارن بـ true بالظبط
+    'expenses:createCategory': (name: string, isFixedAsset?: unknown) => createExpenseCategory(name, isFixedAsset === true),
     'expenses:list': (limit?: number) => listExpenses(limit),
     'expenses:create': (input: ExpenseInput, userId: number) => createExpense(input, userId),
     'expenses:delete': (expenseId: number) => deleteExpense(expenseId),

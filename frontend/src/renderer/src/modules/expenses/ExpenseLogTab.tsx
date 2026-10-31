@@ -25,6 +25,7 @@ export function ExpenseLogTab(): JSX.Element {
   const [form, setForm] = useState(emptyForm)
   const [attachment, setAttachment] = useState<{ path: string; name: string } | null>(null)
   const [newCategoryName, setNewCategoryName] = useState('')
+  const [newCategoryFixed, setNewCategoryFixed] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   async function refresh(): Promise<void> {
@@ -44,10 +45,11 @@ export function ExpenseLogTab(): JSX.Element {
 
   async function handleAddCategory(): Promise<void> {
     if (!newCategoryName.trim()) return
-    const cat = await window.api.expenses.createCategory(newCategoryName.trim())
+    const cat = await window.api.expenses.createCategory(newCategoryName.trim(), newCategoryFixed)
     setCategories((prev) => [...prev, cat])
     setForm((f) => ({ ...f, categoryId: cat.id }))
     setNewCategoryName('')
+    setNewCategoryFixed(false)
   }
 
   async function handleAttach(): Promise<void> {
@@ -91,7 +93,9 @@ export function ExpenseLogTab(): JSX.Element {
     refresh()
   }
 
-  const total = expenses.reduce((sum, e) => sum + e.amount, 0)
+  // شراء الأصول الثابتة مش مصروف — مبيدخلش في إجمالي المصروفات
+  const total = expenses.reduce((sum, e) => sum + (e.isFixedAsset ? 0 : e.amount), 0)
+  const selectedCategory = categories.find((c) => c.id === form.categoryId)
 
   return (
     <div>
@@ -138,7 +142,14 @@ export function ExpenseLogTab(): JSX.Element {
             {expenses.map((e) => (
               <tr key={e.id}>
                 {showBranch && <td>{e.branchName}</td>}
-                <td>{e.categoryName}</td>
+                <td>
+                  {e.categoryName}
+                  {e.isFixedAsset && (
+                    <span className="qcp-pill accent" style={{ marginInlineStart: 6, fontSize: 11 }} title="شراء أصل ثابت — مسجّل على حساب الأصول الثابتة ومش محسوب كمصروف">
+                      أصل ثابت
+                    </span>
+                  )}
+                </td>
                 <td>{currency(e.amount)}</td>
                 <td>{e.method}</td>
                 <td>{e.note ?? '—'}</td>
@@ -199,9 +210,15 @@ export function ExpenseLogTab(): JSX.Element {
                 {categories.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
+                    {c.isFixedAsset ? ' (أصل ثابت)' : ''}
                   </option>
                 ))}
               </select>
+              {selectedCategory?.isFixedAsset && (
+                <div style={{ fontSize: 12, color: 'var(--qcp-ink-faint)', marginTop: 4 }}>
+                  شراء أصل ثابت: بيتخصم من الخزينة وبيتسجّل على حساب الأصول الثابتة، ومش بيتحسب كمصروف في الأرباح.
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
@@ -212,6 +229,10 @@ export function ExpenseLogTab(): JSX.Element {
                 value={newCategoryName}
                 onChange={(e) => setNewCategoryName(e.target.value)}
               />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, whiteSpace: 'nowrap' }} title="التصنيف ده بيتسجّل على حساب الأصول الثابتة بدل المصروفات">
+                <input type="checkbox" checked={newCategoryFixed} onChange={(e) => setNewCategoryFixed(e.target.checked)} />
+                أصل ثابت
+              </label>
               <button type="button" className="qcp-btn qcp-btn-secondary" onClick={handleAddCategory}>
                 +
               </button>
