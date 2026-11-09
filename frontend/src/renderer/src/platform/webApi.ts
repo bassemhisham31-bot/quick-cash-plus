@@ -340,7 +340,8 @@ async function runPrintJob(job: PrintJob): Promise<void> {
     openPreviewTab(job.html)
     return
   }
-  const { printHtmlViaQz, openCashDrawerViaQz } = await import('./qzPrint')
+  const { printHtmlViaQz, printHtmlAsImageViaQz, openCashDrawerViaQz } = await import('./qzPrint')
+  const { isPrintAsImageEnabled } = await import('./printImageMode')
   if (job.kind === 'drawer') {
     await openCashDrawerViaQz(job.printer, job.pin)
     return
@@ -348,8 +349,11 @@ async function runPrintJob(job: PrintJob): Promise<void> {
   const widthMm = job.pageSizeMm?.width ?? job.thermalWidthMm ?? widthMmOf(job.printSettings)
   // نكرر النداء بعدد النسخ بدل نسخ الطابعة نفسها (تعريفات الطابعات الحرارية بتطبع نسخ فاضية مع copies > 1)
   const copies = Math.max(1, job.printSettings.copies ?? 1)
+  // "طباعة كصورة" (اختيار الجهاز ده) للورق الحراري بس — الليبل و A4/A5 بيفضلوا HTML عادي
+  const asImage = isPrintAsImageEnabled() && !job.pageSizeMm && widthMm <= 80
   for (let i = 0; i < copies; i++) {
-    await printHtmlViaQz(job.html, { printerName: job.printSettings.defaultPrinter, widthMm })
+    if (asImage) await printHtmlAsImageViaQz(job.html, { printerName: job.printSettings.defaultPrinter, widthMm })
+    else await printHtmlViaQz(job.html, { printerName: job.printSettings.defaultPrinter, widthMm })
   }
 }
 

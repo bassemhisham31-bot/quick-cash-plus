@@ -37,6 +37,7 @@ import type {
 import { PERMISSIONS } from '../../../../shared/types'
 import { confirmDialog } from '../../components/ConfirmDialogHost'
 import { QzCertificateCard } from '../../components/QzCertificateCard'
+import { PrintAsImageCard } from '../../components/PrintAsImageCard'
 
 type Section =
   | 'store'
@@ -1144,6 +1145,7 @@ function PrintSection(): JSX.Element {
       </label>
 
       <QzCertificateCard />
+      <PrintAsImageCard />
 
       <h3>{t('settings.thermalCalibration')}</h3>
       <p style={{ marginTop: -6, fontSize: 12.5, color: 'var(--qcp-ink-faint)' }}>{t('settings.thermalCalibrationHint')}</p>

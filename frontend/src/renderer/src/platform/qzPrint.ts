@@ -83,6 +83,90 @@ export async function printHtmlViaQz(html: string, options: QzPrintOptions): Pro
   await qz.print(config, [{ type: 'pixel', format: 'html', flavor: 'plain', data: html }])
 }
 
+const CSS_PX_PER_MM = 96 / 25.4
+/** دقة الطابعات الحرارية (203dpi = 8 نقط/مم) — بنرسم الصورة بنفس عدد نقط الطابعة عشان الخط يطلع حاد. */
+const THERMAL_DOTS_PER_MM = 8
+
+/** بيرسم الـHTML جوه المتصفح ويرجّعه صورة PNG (base64) مع ارتفاعها بالمليمتر. */
+export async function renderHtmlToImage(html: string, widthMm: number): Promise<{ base64: string; heightMm: number }> {
+  const widthPx = Math.round(widthMm * CSS_PX_PER_MM)
+  const iframe = document.createElement('iframe')
+  iframe.setAttribute('aria-hidden', 'true')
+  iframe.style.cssText = `position:fixed;left:-10000px;top:0;width:${widthPx}px;height:10px;border:0;visibility:hidden;`
+  document.body.appendChild(iframe)
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('تعذر تجهيز الورقة للطباعة كصورة')), 15000)
+      iframe.onload = () => {
+        clearTimeout(timer)
+        resolve()
+      }
+      iframe.srcdoc = html
+    })
+    const doc = iframe.contentDocument
+    if (!doc) throw new Error('تعذر تجهيز الورقة للطباعة كصورة')
+
+    await Promise.all(
+      Array.from(doc.images).map((img) => (img.complete ? Promise.resolve() : new Promise<void>((r) => { img.onload = img.onerror = () => r() })))
+    )
+    try {
+      await (doc as any).fonts?.ready
+    } catch {
+      // مش مهم
+    }
+
+    const heightPx = Math.ceil(Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight))
+    if (!heightPx) throw new Error('الورقة فاضية — مفيش حاجة تتطبع')
+
+    // نفس تخطيط المتصفح بالظبط: الصفحة بتتحط جوه SVG (foreignObject) وتترسم على canvas
+    doc.documentElement.style.background = '#fff'
+    const xhtml = new XMLSerializer().serializeToString(doc.documentElement)
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${heightPx}">` +
+      `<foreignObject x="0" y="0" width="${widthPx}" height="${heightPx}">${xhtml}</foreignObject></svg>`
+    const image = new Image()
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new Error('تعذر تحويل الورقة لصورة'))
+      image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+    })
+
+    const scale = (THERMAL_DOTS_PER_MM * 25.4) / 96
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(widthMm * THERMAL_DOTS_PER_MM)
+    canvas.height = Math.ceil(heightPx * scale)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('تعذر تحويل الورقة لصورة')
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height)
+
+    const dataUrl = canvas.toDataURL('image/png')
+    return { base64: dataUrl.slice(dataUrl.indexOf(',') + 1), heightMm: heightPx / CSS_PX_PER_MM }
+  } finally {
+    iframe.remove()
+  }
+}
+
+/** زي printHtmlViaQz بس الورقة بتتبعت صورة مرسومة في المتصفح (للورق الحراري). */
+export async function printHtmlAsImageViaQz(html: string, options: QzPrintOptions): Promise<void> {
+  await ensureConnected()
+
+  const printerName = options.printerName || (await qz.printers.getDefault())
+  if (!printerName) throw new Error('مفيش طابعة افتراضية متعرّفة على الجهاز ده')
+
+  const { base64, heightMm } = await renderHtmlToImage(html, options.widthMm)
+  const config = qz.configs.create(printerName, {
+    size: { width: options.widthMm, height: Math.ceil(heightMm) },
+    units: 'mm',
+    margins: 0,
+    scaleContent: true,
+    interpolation: 'nearest-neighbor'
+  })
+
+  await qz.print(config, [{ type: 'pixel', format: 'image', flavor: 'base64', data: base64 }])
+}
+
 /** بيتأكد إن QZ Tray شغال أصلًا من غير ما يعمل أي طباعة — مفيد لعرض حالة الاتصال في الواجهة. */
 export async function isQzAvailable(): Promise<boolean> {
   try {
