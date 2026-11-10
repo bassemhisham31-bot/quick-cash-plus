@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
 import type { NetworkStatus, StoreSettings } from '../../../../shared/types'
 import { NetworkSection } from '../settings/SettingsPage'
+import { BRAND_INITIAL, BRAND_NAME } from '../../platform/brand'
 
 const FEATURE_ICONS: Record<string, string> = {
   customersVendors: '👥',
@@ -311,7 +312,7 @@ export function LoginPage(): JSX.Element {
           <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)', marginBottom: 4 }}>
             {t('auth.developedBy')}
           </div>
-          <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>Quick Cash Plus</div>
+          <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 10 }}>{BRAND_NAME}</div>
           {whatsappLink && (
             <a
               href={whatsappLink}
@@ -362,7 +363,7 @@ export function LoginPage(): JSX.Element {
               fontFamily: 'var(--qcp-mono)'
             }}
           >
-            Q
+            {BRAND_INITIAL}
           </div>
         </div>
 

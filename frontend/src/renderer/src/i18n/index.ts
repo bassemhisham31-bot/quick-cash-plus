@@ -2,6 +2,7 @@ import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import ar from './ar.json'
 import en from './en.json'
+import { BRAND_NAME } from '../platform/brand'
 
 i18n.use(initReactI18next).init({
   resources: {
@@ -10,7 +11,7 @@ i18n.use(initReactI18next).init({
   },
   lng: 'ar',
   fallbackLng: 'ar',
-  interpolation: { escapeValue: false }
+  interpolation: { escapeValue: false, defaultVariables: { brand: BRAND_NAME } }
 })
 
 export function applyDocumentDirection(locale: 'ar' | 'en'): void {

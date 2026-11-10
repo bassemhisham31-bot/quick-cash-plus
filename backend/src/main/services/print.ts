@@ -1,3 +1,4 @@
+import { brandName } from './brand'
 import { getDb } from '../db'
 import { branchesEnabled } from './branchScope'
 import { getInvoiceView, getReceiptQr } from './invoices'
@@ -1561,7 +1562,7 @@ function buildFormalInvoiceHtml(
 
   <div class="footer">
     <div class="thanks">${escapeHtml(store.thankYouMessage)}</div>
-    ${qr ? `<div class="qr"><img src="${qr}" width="90" height="90" /><p>Quick Cash Plus</p></div>` : ''}
+    ${qr ? `<div class="qr"><img src="${qr}" width="90" height="90" /><p>${escapeHtml(brandName())}</p></div>` : ''}
   </div>
 </body>
 </html>`

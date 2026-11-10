@@ -1,3 +1,4 @@
+import { brandName } from './brand'
 import { getDb } from '../db'
 import { assertBranchAccess, branchFilter } from './branchScope'
 import { getTaxSettings } from './settings'
@@ -473,7 +474,7 @@ export async function getReceiptQr(invoiceId: number): Promise<string | null> {
 
   const taxSettings = await getTaxSettings()
   const payload = [
-    `Quick Cash Plus`,
+    brandName(),
     `INV:${invoice.number}`,
     `DATE:${invoice.createdAt}`,
     `TOTAL:${invoice.total.toFixed(2)}`,

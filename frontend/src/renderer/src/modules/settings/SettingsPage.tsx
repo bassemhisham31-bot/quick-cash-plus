@@ -38,6 +38,7 @@ import { PERMISSIONS } from '../../../../shared/types'
 import { confirmDialog } from '../../components/ConfirmDialogHost'
 import { QzCertificateCard } from '../../components/QzCertificateCard'
 import { PrintAsImageCard } from '../../components/PrintAsImageCard'
+import { BRAND_NAME } from '../../platform/brand'
 
 type Section =
   | 'store'
@@ -2742,7 +2743,7 @@ function WhatsAppSection(): JSX.Element {
     setTestSending(true)
     setTestResult(null)
     try {
-      setTestResult(await window.api.whatsapp.sendTest(testPhone.trim(), t('settings.whatsappTestMessage') ?? 'رسالة تجربة من Quick Cash Plus'))
+      setTestResult(await window.api.whatsapp.sendTest(testPhone.trim(), t('settings.whatsappTestMessage') ?? `رسالة تجربة من ${BRAND_NAME}`))
     } finally {
       setTestSending(false)
     }
@@ -3302,7 +3303,7 @@ function AboutSection(): JSX.Element {
             {t('settings.aboutDescription')}
           </p>
         </div>
-        <span className="qcp-pill accent">Quick Cash Plus v0.1.0</span>
+        <span className="qcp-pill accent">{BRAND_NAME} v0.1.0</span>
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 18, borderBottom: '1px solid var(--qcp-border)' }}>
@@ -3378,7 +3379,7 @@ function AboutSection(): JSX.Element {
         </div>
         <div className="qcp-card">
           <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)' }}>{t('settings.aboutDeveloperName')}</div>
-          <div style={{ fontWeight: 800, fontSize: 15 }}>Quick Cash Plus</div>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>{BRAND_NAME}</div>
         </div>
         <div className="qcp-card">
           <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)' }}>{t('settings.aboutSubscriptionStatus')}</div>

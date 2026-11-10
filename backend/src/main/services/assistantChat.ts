@@ -1,3 +1,4 @@
+import { brandName } from './brand'
 import { getDb } from '../db'
 import { getAssistantSettings } from './settings'
 import { getDashboardSummary, getExpiringProducts, getPaymentMethodsBreakdown, getTopSellingProducts } from './dashboard'
@@ -74,7 +75,7 @@ async function buildStoreContext(allowedSections: string[]): Promise<string> {
 
 function buildSystemPrompt(storeContext: string): string {
   const base =
-    'إنت "مساعد Quick Cash Plus" — مساعد ذكاء اصطناعي جوه نظام ERP/POS لإدارة متجر. جاوب بالعربية دايمًا، باختصار ووضوح ومباشر. ' +
+    `إنت "مساعد ${brandName()}" — ` + 'مساعد ذكاء اصطناعي جوه نظام ERP/POS لإدارة متجر. جاوب بالعربية دايمًا، باختصار ووضوح ومباشر. ' +
     'دورك استشاري وتحليلي بس (قراءة وشرح وتحليل) — مفيش عندك أي صلاحية لتنفيذ أي عملية فعلية جوه النظام (بيع، حذف، تعديل سعر أو بيانات...). ' +
     'لو حد طلب منك تنفّذ حاجة فعليًا، اعتذر بوضوح ووجّهه للشاشة المناسبة عشان ينفّذها بنفسه.'
   if (!storeContext.trim()) return base

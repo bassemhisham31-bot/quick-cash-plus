@@ -1,3 +1,4 @@
+import { brandName } from './brand'
 import ExcelJS from 'exceljs'
 import type { ExportResult, ReportResult } from '../../shared/types'
 
@@ -72,7 +73,7 @@ export function buildReportHtml(report: ReportResult): string {
 </style>
 </head>
 <body>
-  <h1>Quick Cash Plus — ${escape(report.title)}</h1>
+  <h1>${escape(brandName())} — ${escape(report.title)}</h1>
   <p class="meta">${new Date().toLocaleString('ar-EG')}</p>
   <table>
     <thead><tr>${headHtml}</tr></thead>

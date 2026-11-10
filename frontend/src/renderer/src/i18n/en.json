@@ -1,5 +1,5 @@
 {
-  "app": { "name": "Quick Cash Plus" },
+  "app": { "name": "{{brand}}" },
   "nav": {
     "dashboard": "Dashboard",
     "pos": "Sales",
@@ -546,7 +546,7 @@
     "shortcutLabel": "Shortcut name",
     "shortcutKey": "Key",
     "noCustomShortcuts": "No custom shortcuts yet",
-    "assistantSection": "Quick Cash Plus Assistant",
+    "assistantSection": "{{brand}} Assistant",
     "whatsappSection": "WhatsApp settings",
     "whatsappSubtitle": "Send an automatic message with the invoice details to the customer on WhatsApp after checkout.",
     "whatsappConnected": "Connected",
@@ -563,7 +563,7 @@
     "whatsappTestPhonePlaceholder": "Test mobile number (e.g. 01012345678)",
     "whatsappSendTest": "Send",
     "whatsappTestSent": "Sent successfully ✅",
-    "whatsappTestMessage": "Test message from Quick Cash Plus ✅",
+    "whatsappTestMessage": "Test message from {{brand}} ✅",
     "dataResetSection": "Reset app data",
     "posUiSection": "Customize POS screen",
     "restaurantSection": "Restaurant Settings",
@@ -799,13 +799,13 @@
     "confirmConvert": "Confirm conversion"
   },
   "assistantChat": {
-    "title": "Quick Cash Plus Assistant",
+    "title": "{{brand}} Assistant",
     "readOnlyBadge": "Advisory only — no actions taken",
     "placeholder": "Ask the assistant anything about your store...",
     "send": "Send",
     "thinking": "Assistant is typing...",
     "empty": "Start the conversation — ask about today's sales, low-stock items, or anything else.",
-    "openButton": "Open Quick Cash Plus Assistant",
+    "openButton": "Open {{brand}} Assistant",
     "clear": "Clear chat",
     "clearConfirm": "Are you sure you want to clear all messages in this conversation?"
   }

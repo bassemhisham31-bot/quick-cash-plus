@@ -1,3 +1,4 @@
+import { BRAND_INITIAL, BRAND_NAME } from '../platform/brand'
 import { useTranslation } from 'react-i18next'
 import { useAppStore, type ViewName } from '../store/appStore'
 import { isViewAllowed } from '../lib/permissions'
@@ -41,10 +42,10 @@ export function Sidebar(): JSX.Element {
   return (
     <aside className="qcp-sidebar">
       <div className="qcp-sidebar-brand">
-        <div className="qcp-sidebar-logo">Q</div>
+        <div className="qcp-sidebar-logo">{BRAND_INITIAL}</div>
         <div>
           <strong>{t('app.name')}</strong>
-          <span>Quick Cash Plus</span>
+          <span>{BRAND_NAME}</span>
         </div>
       </div>
 

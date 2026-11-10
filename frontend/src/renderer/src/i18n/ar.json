@@ -1,5 +1,5 @@
 {
-  "app": { "name": "Quick Cash Plus" },
+  "app": { "name": "{{brand}}" },
   "nav": {
     "dashboard": "لوحة التحكم",
     "pos": "البيع",
@@ -546,7 +546,7 @@
     "shortcutLabel": "اسم الاختصار",
     "shortcutKey": "الزر",
     "noCustomShortcuts": "لا توجد اختصارات مخصصة بعد",
-    "assistantSection": "مساعد Quick Cash Plus",
+    "assistantSection": "مساعد {{brand}}",
     "whatsappSection": "إعدادات واتساب",
     "whatsappSubtitle": "إرسال رسالة تلقائية بتفاصيل الفاتورة للعميل على واتساب بعد إتمام عملية البيع.",
     "whatsappConnected": "متصل",
@@ -563,7 +563,7 @@
     "whatsappTestPhonePlaceholder": "رقم موبايل للتجربة (مثال: 01012345678)",
     "whatsappSendTest": "إرسال",
     "whatsappTestSent": "تم الإرسال بنجاح ✅",
-    "whatsappTestMessage": "رسالة تجربة من Quick Cash Plus ✅",
+    "whatsappTestMessage": "رسالة تجربة من {{brand}} ✅",
     "dataResetSection": "إعادة ضبط البرنامج",
     "posUiSection": "تخصيص شاشة البيع",
     "restaurantSection": "إعدادات المطاعم",
@@ -799,13 +799,13 @@
     "confirmConvert": "تأكيد التحويل"
   },
   "assistantChat": {
-    "title": "مساعد Quick Cash Plus",
+    "title": "مساعد {{brand}}",
     "readOnlyBadge": "استشاري فقط — من غير تنفيذ عمليات",
     "placeholder": "اسأل المساعد عن أي حاجة في المتجر...",
     "send": "إرسال",
     "thinking": "المساعد بيكتب...",
     "empty": "ابدأ المحادثة — اسأل عن مبيعات اليوم، الأصناف الأقرب لنفاد المخزون، أو أي حاجة تانية.",
-    "openButton": "افتح مساعد Quick Cash Plus",
+    "openButton": "افتح مساعد {{brand}}",
     "clear": "مسح المحادثة",
     "clearConfirm": "متأكد إنك عايز تمسح كل رسائل المحادثة دي؟"
   }
