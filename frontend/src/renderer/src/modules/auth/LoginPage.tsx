@@ -144,7 +144,7 @@ export function LoginPage(): JSX.Element {
               boxShadow: '0 8px 20px -6px rgba(79, 70, 229, 0.55)'
             }}
           >
-            Q
+            {BRAND_INITIAL}
           </div>
           <h1 style={{ margin: '0 0 2px', fontSize: '1.5rem' }}>{t('auth.title')}</h1>
           <p style={{ margin: '0 0 22px', color: 'var(--qcp-ink-muted)', fontSize: 13.5 }}>{t('auth.subtitle')}</p>

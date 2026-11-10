@@ -1,3 +1,4 @@
+import { BRAND_INITIAL } from '../../platform/brand'
 import { FormEvent, useState } from 'react'
 
 /** صفحة تعيين كلمة المرور الجديدة — بتظهر لما المستخدم يفتح رابط الاستعادة اللي وصله بالإيميل. */
@@ -51,7 +52,7 @@ export function ResetPasswordPage({ token, onDone }: { token: string; onDone: ()
             marginBottom: 14
           }}
         >
-          Q
+          {BRAND_INITIAL}
         </div>
         <h1 style={{ margin: '0 0 2px', fontSize: '1.4rem' }}>🔑 كلمة مرور جديدة</h1>
 
