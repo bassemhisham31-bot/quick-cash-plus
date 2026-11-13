@@ -1727,7 +1727,7 @@ function buildDocumentReceiptHtml(d: DocReceiptData, printSettings: PrintSetting
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   @page { size: ${widthMm}mm auto; margin: 0; }
   body { font-family: Tahoma, Arial, sans-serif; margin: 0; padding: 0; color: #000; font-size: ${narrow ? 10.5 : 12}px; }
-  .receipt { width: ${contentWidthMm}mm; margin-left: ${offsetMm}mm; margin-right: auto; }
+  .receipt { width: ${contentWidthMm}mm; margin-left: ${offsetMm}mm; margin-right: auto; padding-left: ${narrow ? 4 : 6}mm; padding-right: 1.5mm; }
   .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 4px; }
   .fields { flex: 1; min-width: 0; }
   .f-row { display: flex; gap: 4px; margin: 1.5px 0; }
