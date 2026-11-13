@@ -2814,14 +2814,8 @@ function WhatsAppSection(): JSX.Element {
         />
         {t('settings.whatsappSendOnSale')}
       </label>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
-        <input
-          type="checkbox"
-          checked={settings.sendInvoicePdf}
-          onChange={(e) => setSettings({ ...settings, sendInvoicePdf: e.target.checked })}
-        />
-        {t('settings.whatsappSendInvoicePdf')}
-      </label>
+      {/* إرسال الفاتورة PDF غير مدعوم على نسخة الويب لسه — الرسالة النصية بس */}
+      <p style={{ fontSize: 12, color: 'var(--qcp-ink-faint)', margin: '0 0 18px' }}>الرسالة بتتبعت نصية — إرسال الفاتورة PDF غير متاح في نسخة الويب حاليًا.</p>
 
       <div className="qcp-field" style={{ marginBottom: 18 }}>
         <label>{t('settings.whatsappTemplate')}</label>

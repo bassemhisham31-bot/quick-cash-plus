@@ -14,6 +14,8 @@ const { scheduleAutoBackup } = await import('./main/services/backup')
 async function main(): Promise<void> {
   await initDatabase()
   await scheduleAutoBackup().catch(() => {})
+  // واتساب: لو فيه جلسة محفوظة بتتصل تلقائيًا (من غير ما تعطّل الإقلاع)
+  import('./main/services/whatsapp').then((m) => m.initWhatsApp()).catch(() => {})
 
   const port = Number(process.env.PORT ?? 4000)
   startHttpServer(port)

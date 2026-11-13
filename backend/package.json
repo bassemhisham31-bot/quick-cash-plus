@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@libsql/client": "^0.14.0",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
     "bcryptjs": "^2.4.3",
     "bwip-js": "^4.5.1",
     "cors": "^2.8.5",
