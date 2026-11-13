@@ -103,7 +103,15 @@ export function PosPage(): JSX.Element {
   const dataVersion = useAppStore((s) => s.dataVersion)
   const [lineStocks, setLineStocks] = useState<Record<number, Record<number, number>>>({})
   const [heldList, setHeldList] = useState<HeldInvoice[]>([])
+  const [heldSearch, setHeldSearch] = useState('')
+  const heldQuery = heldSearch.trim().toLowerCase()
+  const filteredHeld = heldQuery
+    ? heldList.filter((h) => `${h.customerLabel ?? ''} ${h.id} ${h.userName ?? ''}`.toLowerCase().includes(heldQuery))
+    : heldList
   const [showHeld, setShowHeld] = useState(false)
+  useEffect(() => {
+    if (!showHeld) setHeldSearch('')
+  }, [showHeld])
   const [heldMessage, setHeldMessage] = useState<string | null>(null)
   const posOpenHeld = useAppStore((s) => s.posOpenHeld)
   const setPosOpenHeld = useAppStore((s) => s.setPosOpenHeld)
@@ -1364,9 +1372,26 @@ export function PosPage(): JSX.Element {
         <div className="qcp-modal-backdrop" onClick={() => setShowHeld(false)}>
           <div className="qcp-modal" style={{ width: 'min(640px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0 }}>📋 {unpostedMode ? 'فواتير غير مرحّلة (محفوظة بدون ترحيل)' : 'الفواتير المعلّقة'}</h3>
+            {heldList.length > 0 && (
+              <div style={{ position: 'relative', marginBottom: 10 }}>
+                <span style={{ position: 'absolute', insetInlineStart: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>🔍</span>
+                <input
+                  className="qcp-input"
+                  style={{ width: '100%', paddingInlineStart: 34 }}
+                  autoFocus
+                  placeholder="بحث باسم العميل أو رقم الفاتورة..."
+                  value={heldSearch}
+                  onChange={(e) => setHeldSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && filteredHeld.length === 1) void recallHeld(filteredHeld[0])
+                  }}
+                />
+              </div>
+            )}
             {heldList.length === 0 && <div className="rst-empty">{unpostedMode ? 'مفيش فواتير غير مرحّلة' : 'مفيش فواتير معلّقة'}</div>}
+            {heldList.length > 0 && filteredHeld.length === 0 && <div className="rst-empty">مفيش نتائج للبحث</div>}
             <div style={{ display: 'grid', gap: 8, maxHeight: '60vh', overflow: 'auto' }}>
-              {heldList.map((h) => (
+              {filteredHeld.map((h) => (
                 <div key={h.id} className="qcp-card" style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
                   <div>
                     <div style={{ fontWeight: 700 }}>
