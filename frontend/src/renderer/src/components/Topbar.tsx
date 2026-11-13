@@ -16,13 +16,17 @@ function HeldInvoicesButton(): JSX.Element | null {
   const setPosOpenHeld = useAppStore((s) => s.setPosOpenHeld)
   const disabledFeatures = useAppStore((s) => s.disabledFeatures)
   const [count, setCount] = useState(0)
+  const [unposted, setUnposted] = useState(false)
   const allowed = isViewAllowed(user, 'pos', disabledFeatures)
 
   useEffect(() => {
     if (!allowed) return
     window.api.settings
       .getPosUi()
-      .then((s) => (s.holdInvoicesEnabled ? window.api.held.list() : []))
+      .then((s) => {
+        setUnposted(s.unpostedMode !== false)
+        return s.holdInvoicesEnabled ? window.api.held.list() : []
+      })
       .then((list) => setCount(list.length))
       .catch(() => setCount(0))
   }, [allowed, dataVersion])
@@ -32,13 +36,13 @@ function HeldInvoicesButton(): JSX.Element | null {
     <button
       className="qcp-btn qcp-btn-secondary"
       style={{ borderColor: 'var(--qcp-critical)', color: 'var(--qcp-critical)' }}
-      title="فواتير معلّقة لسه ما اتدفعتش"
+      title={unposted ? 'فواتير محفوظة بدون ترحيل — محتاجة حفظ نهائي' : 'فواتير معلّقة لسه ما اتدفعتش'}
       onClick={() => {
         setPosOpenHeld(true)
         setView('pos')
       }}
     >
-      ⏸ معلّقة ({count})
+      {unposted ? '📋 غير مرحّلة' : '⏸ معلّقة'} ({count})
     </button>
   )
 }

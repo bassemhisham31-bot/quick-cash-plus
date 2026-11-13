@@ -1324,10 +1324,17 @@ async function periodFlowTotals(
     args: [dateFrom, dateTo, ...warehouseArgs, ...bsi.args]
   })
 
+  const directReturnsRs = await db.execute({
+    sql: `SELECT COALESCE(SUM(r.amount), 0) AS returns
+          FROM direct_sales_returns r
+          WHERE date(r.created_at) >= date(?) AND date(r.created_at) <= date(?) ${warehouseId ? 'AND r.warehouse_id = ?' : ''} AND ${bsr.sql}`,
+    args: [dateFrom, dateTo, ...warehouseArgs, ...bsr.args]
+  })
+
   return {
     sales: Number((salesRs.rows[0] as any).sales),
     cogs: Number((salesRs.rows[0] as any).cogs),
-    returns: Number((returnsRs.rows[0] as any).returns),
+    returns: Number((returnsRs.rows[0] as any).returns) + Number((directReturnsRs.rows[0] as any).returns),
     expenses: Number((expensesRs.rows[0] as any).expenses),
     wholesaleSales: Number((wholesaleRs.rows[0] as any).wholesaleSales)
   }
@@ -1401,8 +1408,12 @@ async function branchComparison(filter: ReportFilter): Promise<ReportResult> {
   )
   const sr = d('r.created_at')
   const returns = await byBranch(
-    `SELECT r.branch_id AS b, COALESCE(SUM(r.amount), 0) AS total FROM sales_returns r WHERE 1 = 1 ${sr.sql} GROUP BY r.branch_id`,
-    sr.args
+    `SELECT b, SUM(total) AS total FROM (
+       SELECT r.branch_id AS b, COALESCE(SUM(r.amount), 0) AS total FROM sales_returns r WHERE 1 = 1 ${sr.sql} GROUP BY r.branch_id
+       UNION ALL
+       SELECT r.branch_id AS b, COALESCE(SUM(r.amount), 0) AS total FROM direct_sales_returns r WHERE 1 = 1 ${sr.sql} GROUP BY r.branch_id
+     ) GROUP BY b`,
+    [...sr.args, ...sr.args]
   )
   const se = d('e.created_at')
   const expenses = await byBranch(

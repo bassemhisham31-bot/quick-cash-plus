@@ -1,5 +1,5 @@
 import { getDb } from '../db'
-import type { CustomerInput, CustomerView, PaymentMethod, StatementEntry, StatementView } from '../../shared/types'
+import type { CustomerInput, CustomerView, PaymentMethod, StatementEntry, StatementFilter, StatementView } from '../../shared/types'
 
 const CUSTOMER_SELECT = `
   SELECT c.*, v.name AS linkedVendorName, v.balance AS linkedVendorBalance
@@ -96,6 +96,117 @@ export async function unlinkCustomerVendor(customerId: number): Promise<Customer
   const db = getDb()
   await db.execute({ sql: 'UPDATE customers SET linked_vendor_id = NULL WHERE id = ?', args: [customerId] })
   return fetchCustomerView(customerId)
+}
+
+/**
+ * كارت حساب العميل الكامل (ويب): كل الفواتير (نقدي وآجل) + المرتجعات (على فاتورة وبدون فاتورة) + السداد،
+ * برصيد جاري بعد كل حركة. الرصيد الافتتاحي = الرصيد الحالي − صافي كل الحركات (بيغطي رصيد أول المدة والأرصدة المنقولة).
+ * الفلتر (من/إلى) بيعرض حركات الفترة بس، وكل اللي قبلها بيتجمع في «رصيد سابق».
+ */
+export async function getCustomerLedger(customerId: number, filter: StatementFilter = {}): Promise<StatementView & { customerName: string; customerPhone: string | null; customerAddress: string | null }> {
+  const db = getDb()
+  const customerRs = await db.execute({ sql: 'SELECT * FROM customers WHERE id = ?', args: [customerId] })
+  const customer = customerRs.rows[0] as any
+  if (!customer) throw new Error('العميل غير موجود')
+
+  const all: StatementEntry[] = []
+  const invoicesRs = await db.execute({
+    sql: `SELECT id, number, total, paid, payment_method AS paymentMethod, created_at AS createdAt
+          FROM sales_invoices WHERE customer_id = ? AND deleted_at IS NULL`,
+    args: [customerId]
+  })
+  for (const r of invoicesRs.rows as any[]) {
+    const total = Number(r.total)
+    // المحصّل وقت البيع: الآجل = 0، المقسّم = المدفوع، غير كده الفاتورة مدفوعة بالكامل
+    const paidNow = r.paymentMethod === 'credit' ? 0 : r.paymentMethod === 'mixed' ? Math.min(total, Number(r.paid)) : total
+    all.push({
+      type: 'invoice',
+      id: Number(r.id),
+      date: r.createdAt,
+      description: `فاتورة ${r.number} (${paymentMethodLabel(r.paymentMethod)})`,
+      debit: total,
+      credit: paidNow
+    })
+  }
+  const returnsRs = await db.execute({
+    sql: `SELECT r.id, r.amount, r.created_at AS createdAt, i.number, i.payment_method AS paymentMethod, i.total, i.paid
+          FROM sales_returns r JOIN sales_invoices i ON i.id = r.invoice_id WHERE i.customer_id = ?`,
+    args: [customerId]
+  })
+  for (const r of returnsRs.rows as any[]) {
+    const amount = Number(r.amount)
+    // الجزء اللي اترد نقدًا (غير الآجل) مابيأثرش على الرصيد: بيظهر مدين ودائن بنفس القيمة
+    const total = Number(r.total)
+    const creditPart =
+      r.paymentMethod === 'credit' ? 1 : r.paymentMethod === 'mixed' && total > 0 ? Math.min(1, Math.max(0, (total - Number(r.paid)) / total)) : 0
+    const cashBack = amount * (1 - creditPart)
+    all.push({
+      type: 'return',
+      id: Number(r.id),
+      date: r.createdAt,
+      description: `مرتجع على فاتورة ${r.number}${cashBack > 0.005 ? ' (رد نقدي)' : ''}`,
+      debit: cashBack,
+      credit: amount
+    })
+  }
+  const directRs = await db.execute({
+    sql: `SELECT id, number, amount, refund_method AS refundMethod, created_at AS createdAt FROM direct_sales_returns WHERE customer_id = ?`,
+    args: [customerId]
+  })
+  for (const r of directRs.rows as any[]) {
+    const amount = Number(r.amount)
+    all.push({
+      type: 'return',
+      id: -Number(r.id),
+      date: r.createdAt,
+      description: `مرتجع بدون فاتورة ${r.number}${r.refundMethod === 'cash' ? ' (رد نقدي)' : ''}`,
+      debit: r.refundMethod === 'cash' ? amount : 0,
+      credit: amount
+    })
+  }
+  const paymentsRs = await db.execute({
+    sql: `SELECT id, amount, method, note, created_at AS createdAt FROM payments WHERE party_type = 'customer' AND party_id = ?`,
+    args: [customerId]
+  })
+  for (const r of paymentsRs.rows as any[]) {
+    all.push({
+      type: 'payment',
+      id: Number(r.id),
+      date: r.createdAt,
+      description: `سداد (${paymentMethodLabel(r.method)})${r.note ? ' — ' + r.note : ''}`,
+      debit: 0,
+      credit: Number(r.amount)
+    })
+  }
+  all.sort((a, b) => a.date.localeCompare(b.date))
+
+  const balance = Number(customer.balance)
+  const net = all.reduce((s, e) => s + e.debit - e.credit, 0)
+  const from = filter.from ? `${filter.from} 00:00:00` : null
+  const to = filter.to ? `${filter.to} 23:59:59` : null
+  let running = balance - net // رصيد أول المدة
+  const entries: StatementEntry[] = []
+  let openingBalance = running
+  for (const e of all) {
+    running += e.debit - e.credit
+    if (from && e.date < from) {
+      openingBalance = running
+      continue
+    }
+    if (to && e.date > to) continue
+    entries.push({ ...e, balance: Math.round(running * 100) / 100 })
+  }
+  openingBalance = Math.round(openingBalance * 100) / 100
+  return {
+    customerName: customer.name,
+    customerPhone: customer.phone ?? null,
+    customerAddress: customer.address ?? null,
+    balance,
+    openingBalance,
+    entries,
+    totalDebit: entries.reduce((s, e) => s + e.debit, 0),
+    totalCredit: entries.reduce((s, e) => s + e.credit, 0)
+  }
 }
 
 export async function getCustomerStatement(customerId: number): Promise<StatementView> {

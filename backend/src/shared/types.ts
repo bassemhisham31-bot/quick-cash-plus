@@ -255,6 +255,8 @@ export interface SalesReturnListRow {
   reasonNote: string | null
   amount: number
   createdAt: string
+  /** مرتجع بدون فاتورة: رقم المرتجع المباشر (invoiceId = 0 في الحالة دي) */
+  directReturnId?: number
 }
 
 export interface PurchaseReturnListRow {
@@ -775,6 +777,9 @@ export interface InvoiceView {
   customerLoyaltyBalance: number | null
   customerBalanceBefore: number | null
   customerBalanceAfter: number | null
+  /** (ويب، تصميم المستند) عنوان العميل + رصيده الحالي لو عميل مسجّل */
+  customerAddress?: string | null
+  customerCurrentBalance?: number | null
   orderType: string
   tableName: string | null
   deliveryDriverName: string | null
@@ -848,17 +853,53 @@ export interface PaymentInput {
 }
 
 export interface StatementEntry {
-  type: 'invoice' | 'payment' | 'opening'
+  type: 'invoice' | 'payment' | 'opening' | 'return'
   id: number
   date: string
   description: string
   debit: number
   credit: number
+  /** الرصيد بعد الحركة (كشف حساب العميل) */
+  balance?: number
 }
 
 export interface StatementView {
   balance: number
   entries: StatementEntry[]
+  /** الرصيد قبل أول حركة معروضة (كشف حساب العميل بفلتر تاريخ) */
+  openingBalance?: number
+  totalDebit?: number
+  totalCredit?: number
+}
+
+export interface StatementFilter {
+  from?: string
+  to?: string
+}
+
+/** مرتجع مبيعات بدون فاتورة (ويب) */
+export interface DirectReturnLineInput {
+  productId: number
+  qty: number
+  unitPrice: number
+}
+
+export interface DirectReturnInput {
+  customerId: number | null
+  customerLabel?: string
+  warehouseId: number
+  /** cash = رد نقدي من الخزينة، credit = خصم من رصيد العميل (لازم عميل مسجّل) */
+  refundMethod: 'cash' | 'credit'
+  note?: string
+  lines: DirectReturnLineInput[]
+}
+
+export interface DirectReturnResult {
+  ok: boolean
+  error?: string
+  returnId?: number
+  number?: string
+  amount?: number
 }
 
 export interface InvoiceListItem {
@@ -1443,6 +1484,12 @@ export interface PosUiSettings {
   currencySymbol: string
   /** كل قطعة بتتباع بتتسجل تلقائيًا في قائمة "مطلوب شراؤه" (للبيع الأول والشراء بعدين) */
   purchaseListEnabled: boolean
+  /** (ويب) بدل «تعليق»: «حفظ بدون ترحيل وطباعة» + قايمة «غير مرحّلة» فيها «حفظ نهائي» — الافتراضي مفعّل */
+  unpostedMode?: boolean
+  /** (ويب) اختيار «المحل المسوّق» في شاشة البيع — الافتراضي ظاهر */
+  salesRepPosEnabled?: boolean
+  /** (ويب) تصميم الإيصال الحراري: classic الافتراضي، document = شكل المستند (جدول كمية/سعر/قيمة/خصم + رصيد العميل) */
+  receiptStyle?: 'classic' | 'document'
 }
 
 export interface DataResetResult {

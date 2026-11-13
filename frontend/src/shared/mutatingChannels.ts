@@ -53,6 +53,8 @@ export const MUTATING_CHANNELS = new Set<string>([
   'invoices:restore',
   'invoices:update',
   'invoices:returnLines',
+  'returns:createDirect',
+  'print:directReturn',
   'cash:openDay',
   'cash:closeDay',
   'customers:create',

@@ -15,6 +15,9 @@ import {
   getTaxSettings
 } from './settings'
 import { getHeldInvoice } from './heldInvoices'
+import { getDirectReturn } from './directReturns'
+import { getCustomerLedger } from './customers'
+import { hasCreditPart } from './salePayments'
 import { getVoucher } from './treasuries'
 import { getBooking } from './events'
 import { generateBarcodeDataUrl } from './barcode'
@@ -109,7 +112,9 @@ export async function buildInvoiceHtml(
   const isThermal = printSettings.paperSize === '80mm' || printSettings.paperSize === '58mm'
 
   const html = isThermal
-    ? buildThermalReceiptHtml(invoice, printSettings, storeSettings, taxSettings, qr, invoiceBarcode)
+    ? posUiSettings.receiptStyle === 'document'
+      ? buildDocumentReceiptHtml(invoiceToDocReceipt(invoice, taxSettings, qr), printSettings, storeSettings)
+      : buildThermalReceiptHtml(invoice, printSettings, storeSettings, taxSettings, qr, invoiceBarcode)
     : buildFormalInvoiceHtml(invoice, printSettings, storeSettings, taxSettings, qr, invoiceBarcode)
 
   return { html, printSettings }
@@ -490,6 +495,10 @@ export async function printHeldInvoice(id: number, preview = false): Promise<Pri
   const held = await getHeldInvoice(id)
   if (!held) return { ok: false, error: 'الفاتورة المعلّقة غير موجودة' }
   const taxSettings = await getTaxSettings()
+  const [posUi, printSettingsForStyle] = await Promise.all([getPosUiSettings(), getPrintSettings()])
+  if (posUi.receiptStyle === 'document' && thermalWidthMm(printSettingsForStyle.paperSize)) {
+    return printUnpostedDocument(held, taxSettings, preview)
+  }
   const lines = held.payload.lines.map((l) => ({
     name: l.name,
     qty: l.qty,
@@ -1616,4 +1625,347 @@ function wrapLabelsHtml(labelsHtml: string, settings: BarcodeLabelSettings): str
 </head>
 <body>${labelsHtml}</body>
 </html>`
+}
+
+/* ---------------------------- إيصال حراري بشكل «مستند» (ويب — receipt_style = document) ---------------------------- */
+
+interface DocReceiptData {
+  title?: string
+  number: string
+  userName: string
+  statusLabel: string
+  date: string
+  customerName: string
+  customerAddress: string | null
+  lines: { name: string; qty: number; unitPrice: number; value: number; discount: number; extra?: string }[]
+  gross: number
+  discountTotal: number
+  extras: { label: string; value: number }[]
+  net: number
+  netLabel: string
+  balanceBefore: number | null
+  balanceAfter: number | null
+  extraHtml?: string
+  qr?: string | null
+}
+
+const docNum = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const docQty = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 })
+const docPlain = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
+
+function invoiceToDocReceipt(invoice: InvoiceView, tax: TaxSettings, qr: string | null): DocReceiptData {
+  const gross = invoice.lines.reduce((s, l) => s + l.qty * l.unitPrice, 0)
+  const lineDiscounts = invoice.lines.reduce((s, l) => s + (l.discount || 0), 0)
+  const discountTotal = lineDiscounts + invoice.discountTotal
+  const extras: { label: string; value: number }[] = []
+  if (invoice.taxTotal > 0) extras.push({ label: taxLabel(tax), value: invoice.taxTotal })
+  if (invoice.serviceChargeTotal > 0) extras.push({ label: 'خدمة', value: invoice.serviceChargeTotal })
+  if (invoice.deliveryFee > 0) extras.push({ label: 'رسوم التوصيل', value: invoice.deliveryFee })
+  const other = invoice.total - (gross - discountTotal + extras.reduce((s, e) => s + e.value, 0))
+  if (Math.abs(other) > 0.005) extras.push({ label: other < 0 ? 'استبدال نقاط / تسوية' : 'تسوية', value: other })
+  const current = invoice.customerCurrentBalance ?? null
+  const outstanding = hasCreditPart(invoice.paymentMethod) ? Math.max(0, invoice.total - invoice.paid) : 0
+  const status =
+    invoice.status === 'returned' ? 'مرتجعة بالكامل' : invoice.status === 'partial_return' ? 'تم ترحيله (مرتجع جزئي)' : 'تم ترحيله'
+  return {
+    number: invoice.number,
+    userName: invoice.cashierName,
+    statusLabel: status,
+    date: invoice.createdAt,
+    customerName: invoice.customerName,
+    customerAddress: invoice.customerAddress ?? null,
+    lines: invoice.lines.map((l) => ({
+      name: l.productName,
+      qty: l.qty,
+      unitPrice: l.unitPrice,
+      value: l.qty * l.unitPrice,
+      discount: l.discount || 0,
+      extra: l.serialNumber ? `S/N: ${l.serialNumber}` : undefined
+    })),
+    gross,
+    discountTotal,
+    extras,
+    net: invoice.total,
+    netLabel: 'صافي الفاتورة',
+    balanceBefore: current != null ? current - outstanding : null,
+    balanceAfter: current,
+    extraHtml: paymentDetailsHtml(invoice, 'totals-row') + orderTypeInfoLinesHtml(invoice),
+    qr
+  }
+}
+
+function buildDocumentReceiptHtml(d: DocReceiptData, printSettings: PrintSettings, store: StoreSettings): string {
+  const { widthMm, contentWidthMm, offsetMm } = thermalCalibration(printSettings)
+  const narrow = widthMm < 70
+  const linesHtml = d.lines
+    .map(
+      (l) => `
+      <div class="item">
+        <div class="item-name">${escapeHtml(l.name)}</div>
+        ${l.extra ? `<div class="item-extra">${escapeHtml(l.extra)}</div>` : ''}
+        <div class="cols">
+          <span class="c-qty"><b class="shade">${docQty.format(l.qty)}</b></span>
+          <span class="c-price">${docPlain.format(l.unitPrice)}</span>
+          <span class="c-val">${docPlain.format(l.value)}</span>
+          <span class="c-disc">${docPlain.format(l.discount)}</span>
+        </div>
+      </div>`
+    )
+    .join('')
+  const row = (label: string, value: string, shade = false): string =>
+    `<div class="t-row"><span class="t-label">${label} :</span><span class="t-val${shade ? ' shade big' : ''}">${value}</span></div>`
+  const phones = (store.phone ?? '')
+    .split(/[\n,،;/|]+|\s+-\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+
+  return `<!doctype html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  @page { size: ${widthMm}mm auto; margin: 0; }
+  body { font-family: Tahoma, Arial, sans-serif; margin: 0; padding: 0; color: #000; font-size: ${narrow ? 10.5 : 12}px; }
+  .receipt { width: ${contentWidthMm}mm; margin-left: ${offsetMm}mm; margin-right: auto; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 4px; }
+  .fields { flex: 1; min-width: 0; }
+  .f-row { display: flex; gap: 4px; margin: 1.5px 0; }
+  .f-label { white-space: nowrap; }
+  .f-val { font-weight: bold; word-break: break-word; }
+  .brand { text-align: center; max-width: 38%; }
+  .brand img { max-width: 100%; max-height: 16mm; }
+  .brand .b-name { font-weight: bold; font-size: ${narrow ? 11 : 13}px; }
+  .doc-title { text-align: center; font-weight: bold; font-size: ${narrow ? 13 : 15}px; border: 1.5px solid #000; padding: 2px 0; margin: 3px 0; }
+  .line { border-top: 1.5px solid #000; margin: 4px 0; }
+  .cols { display: flex; align-items: center; }
+  .c-qty { width: 28%; text-align: start; }
+  .c-price { width: 22%; text-align: center; }
+  .c-val { width: 28%; text-align: center; }
+  .c-disc { width: 22%; text-align: end; }
+  .th { font-size: ${narrow ? 9.5 : 11}px; font-weight: bold; }
+  .item { margin: 3px 0; }
+  .item-name { font-weight: bold; }
+  .item-extra { font-size: 10px; }
+  .shade { background: #c8c8c8; padding: 0 6px; display: inline-block; }
+  .c-qty .shade { font-size: ${narrow ? 14 : 17}px; min-width: 60%; text-align: center; }
+  .t-row { display: flex; justify-content: space-between; align-items: center; margin: 2px 0; font-size: ${narrow ? 11.5 : 13.5}px; }
+  .t-label { font-weight: bold; }
+  .t-val { direction: ltr; }
+  .t-val.big { font-size: ${narrow ? 15 : 18}px; font-weight: bold; }
+  .totals-row, .info-line { display: flex; justify-content: space-between; font-size: 11px; margin: 1.5px 0; }
+  .foot { text-align: center; margin-top: 8px; font-size: ${narrow ? 11 : 12.5}px; }
+  .foot .f-name { font-weight: bold; }
+  .foot .f-last { font-size: ${narrow ? 14 : 17}px; font-weight: bold; }
+  .qr { text-align: center; margin-top: 6px; }
+</style>
+</head>
+<body>
+  <div class="receipt">
+    ${d.title ? `<div class="doc-title">${escapeHtml(d.title)}</div>` : ''}
+    <div class="head">
+      <div class="fields">
+        <div class="f-row"><span class="f-label">رقم المستند :</span><span class="f-val">${escapeHtml(d.number)}</span></div>
+        <div class="f-row"><span class="f-label">المستخدم :</span><span class="f-val">${escapeHtml(d.userName)}</span></div>
+        <div class="f-row"><span class="f-label">الحالة :</span><span class="f-val">${escapeHtml(d.statusLabel)}</span></div>
+        <div class="f-row"><span class="f-label">تاريخ المستند :</span><span class="f-val">${escapeHtml(d.date)}</span></div>
+      </div>
+      <div class="brand">
+        ${printSettings.showLogo !== false && store.logoDataUrl ? `<img src="${store.logoDataUrl}" />` : ''}
+        <div class="b-name">${escapeHtml(store.name)}</div>
+      </div>
+    </div>
+    <div class="f-row"><span class="f-label">العميل :</span><span class="f-val">${escapeHtml(d.customerName)}</span></div>
+    <div class="f-row"><span class="f-label">العنوان :</span><span class="f-val">${escapeHtml(d.customerAddress ?? '')}</span></div>
+    <div class="line"></div>
+    <div class="cols th"><span class="c-qty">الكمية</span><span class="c-price">السعر</span><span class="c-val">القيمة</span><span class="c-disc">خصم قيمة</span></div>
+    <div class="line"></div>
+    ${linesHtml}
+    <div class="line"></div>
+    ${row('الإجمالي', docNum.format(d.gross))}
+    ${row('إجمالي الخصم', docNum.format(d.discountTotal))}
+    ${d.extras.map((e) => row(e.label, docNum.format(e.value))).join('')}
+    ${row(d.netLabel, docNum.format(d.net), true)}
+    ${d.balanceBefore != null && d.balanceAfter != null ? row('رصيد العميل السابق', docNum.format(d.balanceBefore)) + row('إجمالي رصيد العميل', docNum.format(d.balanceAfter), true) : ''}
+    ${d.extraHtml ?? ''}
+    ${d.qr ? `<div class="qr"><img src="${d.qr}" width="100" height="100" /></div>` : ''}
+    <div class="foot">
+      <div class="f-name">${escapeHtml(store.name)}</div>
+      ${store.address ? `<div>${escapeHtml(store.address)}</div>` : ''}
+      ${phones.map((p, i) => `<div class="${i === phones.length - 1 && phones.length > 1 ? 'f-last' : ''}">${escapeHtml(p)}</div>`).join('')}
+      ${store.thankYouMessage ? `<div>${escapeHtml(store.thankYouMessage)}</div>` : ''}
+    </div>
+  </div>
+</body>
+</html>`
+}
+
+async function emitDocumentReceipt(d: DocReceiptData, kind: string, title: string, preview: boolean): Promise<PrintResult> {
+  const [printSettings, storeSettings] = await Promise.all([getPrintSettings(), getStoreSettings()])
+  // المستند ده حراري بس — لو إعداد الورق A4/A5 بنطبعه بعرض 80مم
+  const thermalSettings: PrintSettings = thermalWidthMm(printSettings.paperSize) ? printSettings : { ...printSettings, paperSize: '80mm' }
+  const html = buildDocumentReceiptHtml(d, thermalSettings, storeSettings)
+  if (preview) {
+    await openPreviewWindow(kind, title, html)
+    return { ok: true }
+  }
+  return printHtml(html, { ...thermalSettings, copies: 1 }, thermalWidthMm(thermalSettings.paperSize))
+}
+
+/** فاتورة «غير مرحّلة» (محفوظة بدون ترحيل) بتصميم المستند — مابتأثرش على المخزون ولا الرصيد */
+async function printUnpostedDocument(
+  held: NonNullable<Awaited<ReturnType<typeof getHeldInvoice>>>,
+  taxSettings: TaxSettings,
+  preview: boolean
+): Promise<PrintResult> {
+  const lines = held.payload.lines.map((l) => ({
+    name: l.name,
+    qty: l.qty,
+    unitPrice: l.unitPrice,
+    value: l.qty * l.unitPrice,
+    discount: l.discount || 0
+  }))
+  const gross = lines.reduce((s, l) => s + l.value, 0)
+  const itemsDiscount = lines.reduce((s, l) => s + l.discount, 0)
+  const afterItems = gross - itemsDiscount
+  const orderDiscount = Math.min(
+    afterItems,
+    held.payload.discountType === 'percent' ? afterItems * (held.payload.discountValue / 100) : held.payload.discountValue
+  )
+  const preTax = Math.max(0, afterItems - orderDiscount)
+  const tax = taxSettings.enabled ? preTax * (taxSettings.rate / 100) : 0
+  const net = preTax + tax
+  let customerName = held.customerLabel || 'عميل نقدي'
+  let customerAddress: string | null = null
+  let balanceBefore: number | null = null
+  if (held.payload.customerId != null) {
+    const rs = await getDb().execute({ sql: 'SELECT name, address, balance FROM customers WHERE id = ?', args: [held.payload.customerId] })
+    const c = rs.rows[0] as any
+    if (c) {
+      customerName = c.name
+      customerAddress = c.address ?? null
+      balanceBefore = Number(c.balance)
+    }
+  }
+  return emitDocumentReceipt(
+    {
+      number: String(held.id),
+      userName: held.userName ?? '',
+      statusLabel: 'لم يتم الترحيل',
+      date: held.createdAt,
+      customerName,
+      customerAddress,
+      lines,
+      gross,
+      discountTotal: itemsDiscount + orderDiscount,
+      extras: tax > 0 ? [{ label: taxLabel(taxSettings), value: tax }] : [],
+      net,
+      netLabel: 'صافي الفاتورة',
+      balanceBefore,
+      balanceAfter: balanceBefore != null ? balanceBefore + net : null
+    },
+    'orderCheck',
+    'معاينة فاتورة غير مرحّلة',
+    preview
+  )
+}
+
+/** طباعة/معاينة مرتجع مبيعات بدون فاتورة */
+export async function printDirectReturn(id: number, preview = false): Promise<PrintResult> {
+  const r = await getDirectReturn(id)
+  if (!r) return { ok: false, error: 'المرتجع غير موجود' }
+  const after = r.balanceBefore != null ? r.balanceBefore - (r.refundMethod === 'credit' ? r.amount : 0) : null
+  return emitDocumentReceipt(
+    {
+      title: 'مرتجع مبيعات',
+      number: r.number,
+      userName: r.userName,
+      statusLabel: r.refundMethod === 'credit' ? 'خصم من رصيد العميل' : 'رد نقدي',
+      date: r.createdAt,
+      customerName: r.customerName,
+      customerAddress: r.customerAddress,
+      lines: r.lines.map((l) => ({ name: l.productName, qty: l.qty, unitPrice: l.unitPrice, value: l.amount, discount: 0 })),
+      gross: r.amount,
+      discountTotal: 0,
+      extras: [],
+      net: r.amount,
+      netLabel: 'صافي المرتجع',
+      balanceBefore: r.isWalkIn ? null : r.balanceBefore,
+      balanceAfter: r.isWalkIn ? null : after,
+      extraHtml: r.note ? `<div class="info-line"><span>ملاحظات</span><span>${escapeHtml(r.note)}</span></div>` : ''
+    },
+    'receipt',
+    'معاينة المرتجع',
+    preview
+  )
+}
+
+/** كشف حساب عميل للطباعة (A4) — بيرجع HTML والمتصفح بيفتحه ويشغّل نافذة الطباعة */
+export async function buildCustomerStatementHtml(
+  customerId: number,
+  filter: { from?: string; to?: string } = {}
+): Promise<{ ok: boolean; html?: string; error?: string }> {
+  const [ledger, store] = await Promise.all([getCustomerLedger(customerId, filter), getStoreSettings()])
+  const n = (v: number): string => docNum.format(v)
+  const rows = ledger.entries
+    .map(
+      (e) =>
+        `<tr><td class="d">${escapeHtml(e.date)}</td><td>${escapeHtml(e.description)}</td><td class="n">${e.debit ? n(e.debit) : ''}</td><td class="n">${e.credit ? n(e.credit) : ''}</td><td class="n b">${n(e.balance ?? 0)}</td></tr>`
+    )
+    .join('')
+  const period =
+    filter.from || filter.to
+      ? `الفترة: ${filter.from ? 'من ' + escapeHtml(filter.from) : ''} ${filter.to ? 'إلى ' + escapeHtml(filter.to) : ''}`
+      : 'كل الحركات'
+  const closing = ledger.entries.length ? (ledger.entries[ledger.entries.length - 1].balance ?? 0) : (ledger.openingBalance ?? 0)
+  const html = `<!doctype html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8" />
+<title>كشف حساب — ${escapeHtml(ledger.customerName)}</title>
+<style>
+  @page { size: A4; margin: 10mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Tahoma, Arial, sans-serif; color: #000; font-size: 12px; margin: 0; padding: 12px; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px; }
+  .top img { max-height: 60px; max-width: 160px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 6px; text-align: center; }
+  .meta { font-size: 12px; margin: 2px 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { border: 1px solid #555; padding: 4px 6px; text-align: start; }
+  th { background: #e5e5e5; }
+  td.n, th.n { text-align: end; white-space: nowrap; direction: ltr; }
+  td.d { white-space: nowrap; }
+  td.b { font-weight: bold; }
+  tr.sum td { font-weight: bold; background: #f1f1f1; }
+  .final { margin-top: 10px; font-size: 15px; font-weight: bold; text-align: end; }
+  @media print { body { padding: 0; } }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div>
+      <h1>${escapeHtml(store.name)}</h1>
+      ${store.address ? `<div class="meta">${escapeHtml(store.address)}</div>` : ''}
+      ${store.phone ? `<div class="meta">${escapeHtml(store.phone)}</div>` : ''}
+    </div>
+    ${store.logoDataUrl ? `<img src="${store.logoDataUrl}" />` : ''}
+  </div>
+  <h2>كشف حساب عميل</h2>
+  <div class="meta"><b>العميل:</b> ${escapeHtml(ledger.customerName)}${ledger.customerPhone ? ' — ' + escapeHtml(ledger.customerPhone) : ''}</div>
+  ${ledger.customerAddress ? `<div class="meta"><b>العنوان:</b> ${escapeHtml(ledger.customerAddress)}</div>` : ''}
+  <div class="meta">${period} — تاريخ الطباعة: ${new Date().toLocaleString('ar-EG')}</div>
+  <table>
+    <thead><tr><th>التاريخ</th><th>البيان</th><th class="n">مدين</th><th class="n">دائن</th><th class="n">الرصيد</th></tr></thead>
+    <tbody>
+      <tr class="sum"><td></td><td>رصيد سابق</td><td class="n"></td><td class="n"></td><td class="n">${n(ledger.openingBalance ?? 0)}</td></tr>
+      ${rows}
+      <tr class="sum"><td></td><td>الإجمالي</td><td class="n">${n(ledger.totalDebit ?? 0)}</td><td class="n">${n(ledger.totalCredit ?? 0)}</td><td class="n">${n(closing)}</td></tr>
+    </tbody>
+  </table>
+  <div class="final">الرصيد ${filter.to ? 'في نهاية الفترة' : 'الحالي'}: ${n(closing)}</div>
+</body>
+</html>`
+  return { ok: true, html }
 }

@@ -2998,6 +2998,25 @@ function PosUiSection(): JSX.Element {
         onChange={(v) => handleSave({ ...settings, holdInvoicesEnabled: v })}
       />
       <ToggleRow
+        title="حفظ بدون ترحيل (بدل التعليق)"
+        hint="زرار «حفظ بدون ترحيل وطباعة» في شاشة البيع: الفاتورة بتتحفظ وتتطبع من غير ما تأثر على المخزون أو رصيد العميل، وبعد التحصيل تفتح قايمة «غير مرحّلة» وتعمل «حفظ نهائي»."
+        checked={settings.unpostedMode !== false}
+        onChange={(v) => handleSave({ ...settings, unpostedMode: v })}
+        locked={!settings.holdInvoicesEnabled}
+      />
+      <ToggleRow
+        title="اختيار «المحل المسوّق» في شاشة البيع"
+        hint="قايمة المحل/المندوب المسوّق وزرار «✚ محل» في شاشة البيع (لحساب العمولة). لو مقفول بيختفوا من شاشة البيع والفاتورة بتتسجل من غير محل."
+        checked={settings.salesRepPosEnabled !== false}
+        onChange={(v) => handleSave({ ...settings, salesRepPosEnabled: v })}
+      />
+      <ToggleRow
+        title="تصميم الإيصال الحراري: شكل المستند"
+        hint="إيصال برقم المستند والحالة (تم ترحيله / لم يتم الترحيل) وجدول كمية/سعر/قيمة/خصم ورصيد العميل السابق والإجمالي. لو مقفول بيتطبع التصميم العادي."
+        checked={settings.receiptStyle === 'document'}
+        onChange={(v) => handleSave({ ...settings, receiptStyle: v ? 'document' : 'classic' })}
+      />
+      <ToggleRow
         title="تنبيه الفاتورة المنسية"
         hint="لو خرجت من شاشة البيع وفيها فاتورة ما اتحفظتش، بتتعلّق تلقائيًا ويظهر زرار تنبيه «معلّقة» في الشريط العلوي."
         checked={settings.autoHoldOnLeave}

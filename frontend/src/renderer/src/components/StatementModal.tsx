@@ -9,6 +9,10 @@ interface Props {
   onClose: () => void
   onRecordPayment: (amount: number, method: PaymentMethod, note: string, invoiceId?: number | null) => Promise<void>
   unpaidInvoices?: PurchaseInvoiceListItem[]
+  /** كارت حساب العميل الكامل: فلتر تاريخ + عمود الرصيد + طباعة الكشف */
+  filter?: { from: string; to: string }
+  onFilterChange?: (filter: { from: string; to: string }) => void
+  onPrint?: () => void
 }
 
 export function StatementModal({
@@ -16,8 +20,12 @@ export function StatementModal({
   statement,
   onClose,
   onRecordPayment,
-  unpaidInvoices
+  unpaidInvoices,
+  filter,
+  onFilterChange,
+  onPrint
 }: Props): JSX.Element {
+  const withBalance = statement.openingBalance !== undefined
   const { t } = useTranslation()
   const [amount, setAmount] = useState('')
   const [method, setMethod] = useState<PaymentMethod>('cash')
@@ -41,7 +49,7 @@ export function StatementModal({
 
   return (
     <div className="qcp-modal-backdrop" onClick={onClose}>
-      <div className="qcp-modal" style={{ width: 'min(640px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
+      <div className="qcp-modal" style={{ width: withBalance ? 'min(820px, 96vw)' : 'min(640px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
           <h2 style={{ margin: 0 }}>{t('parties.statement')}</h2>
           <span style={{ fontWeight: 700 }}>{partyName}</span>
@@ -61,28 +69,75 @@ export function StatementModal({
           {t('parties.balance')}: {currency(statement.balance)}
         </div>
 
-        <div className="qcp-table-wrap" style={{ maxHeight: 260, overflowY: 'auto' }}>
+        {(filter && onFilterChange) || onPrint ? (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+            {filter && onFilterChange && (
+              <>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                  من
+                  <input className="qcp-input" type="date" value={filter.from} onChange={(e) => onFilterChange({ ...filter, from: e.target.value })} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                  إلى
+                  <input className="qcp-input" type="date" value={filter.to} onChange={(e) => onFilterChange({ ...filter, to: e.target.value })} />
+                </label>
+                {(filter.from || filter.to) && (
+                  <button type="button" className="qcp-btn qcp-btn-secondary" onClick={() => onFilterChange({ from: '', to: '' })}>
+                    كل الحركات
+                  </button>
+                )}
+              </>
+            )}
+            {onPrint && (
+              <button type="button" className="qcp-btn qcp-btn-primary" style={{ marginInlineStart: 'auto' }} onClick={onPrint}>
+                🖨 طباعة كشف الحساب
+              </button>
+            )}
+          </div>
+        ) : null}
+
+        <div className="qcp-table-wrap" style={{ maxHeight: withBalance ? 320 : 260, overflowY: 'auto' }}>
           <table className="qcp-table">
             <thead>
               <tr>
                 <th>{t('invoices.date')}</th>
-                <th>{t('parties.name')}</th>
+                <th>{withBalance ? 'البيان' : t('parties.name')}</th>
                 <th>مدين</th>
                 <th>دائن</th>
+                {withBalance && <th>الرصيد</th>}
               </tr>
             </thead>
             <tbody>
+              {withBalance && (
+                <tr style={{ fontWeight: 700 }}>
+                  <td></td>
+                  <td>رصيد سابق</td>
+                  <td></td>
+                  <td></td>
+                  <td>{currency(statement.openingBalance ?? 0)}</td>
+                </tr>
+              )}
               {statement.entries.map((e) => (
                 <tr key={`${e.type}-${e.id}`}>
                   <td style={{ whiteSpace: 'nowrap' }}>{e.date}</td>
                   <td>{e.description}</td>
                   <td>{e.debit ? currency(e.debit) : '—'}</td>
                   <td>{e.credit ? currency(e.credit) : '—'}</td>
+                  {withBalance && <td style={{ fontWeight: 700 }}>{currency(e.balance ?? 0)}</td>}
                 </tr>
               ))}
+              {withBalance && statement.entries.length > 0 && (
+                <tr style={{ fontWeight: 700 }}>
+                  <td></td>
+                  <td>الإجمالي</td>
+                  <td>{currency(statement.totalDebit ?? 0)}</td>
+                  <td>{currency(statement.totalCredit ?? 0)}</td>
+                  <td></td>
+                </tr>
+              )}
               {statement.entries.length === 0 && (
                 <tr>
-                  <td colSpan={4} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                  <td colSpan={withBalance ? 5 : 4} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                     {t('parties.noEntries')}
                   </td>
                 </tr>

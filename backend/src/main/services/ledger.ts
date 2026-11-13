@@ -196,6 +196,32 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
     })
   }
 
+  // ---------- مرتجعات مبيعات بدون فاتورة (ويب) ----------
+  const directReturns = await db.execute(
+    `SELECT r.id, r.number, r.created_at, r.amount, r.branch_id, r.refund_method, c.name AS customerName,
+            COALESCE((SELECT SUM(ri.qty * ri.cost_price) FROM direct_sales_return_items ri WHERE ri.return_id = r.id), 0) AS cogs
+     FROM direct_sales_returns r JOIN customers c ON c.id = r.customer_id`
+  )
+  for (const r of directReturns.rows as any[]) {
+    const refund = Number(r.amount)
+    entries.push({ branchId: branchOf(r),
+      date: r.created_at,
+      ref: r.number,
+      description: `مرتجع بدون فاتورة — ${r.customerName}`,
+      source: 'مرتجع مبيعات',
+      lines: balanced(
+        [
+          L('sales_returns', refund, 0),
+          r.refund_method === 'credit' ? L('ar', 0, refund) : T('cash', null, Number(r.branch_id), 0, refund),
+          L('inventory', Number(r.cogs), 0),
+          L('cogs', 0, Number(r.cogs))
+        ],
+        'sales_returns',
+        R
+      )
+    })
+  }
+
   // ---------- المشتريات ومرتجعاتها ----------
   const purchases = await db.execute(
     `SELECT pi.number, pi.created_at, pi.total, pi.payment_method, pi.branch_id, v.name AS vendorName,

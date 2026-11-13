@@ -16,6 +16,9 @@ import type {
   VoucherView,
   HeldInvoice,
   HeldInvoiceInput,
+  DirectReturnInput,
+  DirectReturnResult,
+  StatementFilter,
   ActivateLicenseResult,
   KitchenNotification,
   AssistantChatMessage,
@@ -247,6 +250,7 @@ const PRINT_CHANNELS = new Set([
   'print:previewStockPermit',
   'print:kitchenTicket',
   'print:heldInvoice',
+  'print:directReturn',
   'print:voucher',
   'print:eventBooking',
   'restaurant:printCheck',
@@ -762,7 +766,11 @@ const api = {
     getReceiptQr: (invoiceId: number): Promise<string | null> =>
       invoke('invoices:getReceiptQr', invoiceId),
     listReturns: (filter?: { from?: string; to?: string }): Promise<SalesReturnListRow[]> =>
-      invoke('invoices:listReturns', filter)
+      invoke('invoices:listReturns', filter),
+    createDirectReturn: (input: DirectReturnInput, userId: number): Promise<DirectReturnResult> =>
+      invoke('returns:createDirect', input, userId),
+    printDirectReturn: (id: number, preview = false): Promise<{ ok: boolean; error?: string }> =>
+      invoke('print:directReturn', id, preview)
   },
   cash: {
     getOpenSession: (): Promise<CashSessionView | null> => invoke('cash:getOpenSession'),
@@ -792,6 +800,21 @@ const api = {
     create: (input: CustomerInput): Promise<CustomerView> => invoke('customers:create', input),
     getStatement: (customerId: number): Promise<StatementView> =>
       invoke('customers:getStatement', customerId),
+    getLedger: (customerId: number, filter?: StatementFilter): Promise<StatementView> =>
+      invoke('customers:getLedger', customerId, filter),
+    /** طباعة كشف الحساب: بيفتح تاب جديد بالكشف ويشغّل نافذة الطباعة */
+    printStatement: async (customerId: number, filter?: StatementFilter): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        const r = await invoke('customers:statementHtml', customerId, filter)
+        if (!r?.ok || !r.html) return { ok: false, error: r?.error ?? 'تعذر تجهيز كشف الحساب' }
+        openPreviewTab(
+          String(r.html).replace('</body>', "<script>window.addEventListener('load',function(){setTimeout(function(){window.print()},300)})</script></body>")
+        )
+        return { ok: true }
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? 'تعذر تجهيز كشف الحساب' }
+      }
+    },
     recordPayment: (
       customerId: number,
       amount: number,

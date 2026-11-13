@@ -251,8 +251,13 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
           FROM sales_returns WHERE created_at >= ? AND created_at <= ${session.closedAt ? '?' : rangeEnd}${brSql}`,
     args: [...(session.closedAt ? [session.openedAt, session.closedAt] : [session.openedAt]), ...brArgs]
   })
-  const totalReturns = Number((returnsRs.rows[0] as any).total)
-  const returnCount = Number((returnsRs.rows[0] as any).cnt)
+  const directReturnsRs = await db.execute({
+    sql: `SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS total
+          FROM direct_sales_returns WHERE created_at >= ? AND created_at <= ${session.closedAt ? '?' : rangeEnd}${brSql}`,
+    args: [...(session.closedAt ? [session.openedAt, session.closedAt] : [session.openedAt]), ...brArgs]
+  })
+  const totalReturns = Number((returnsRs.rows[0] as any).total) + Number((directReturnsRs.rows[0] as any).total)
+  const returnCount = Number((returnsRs.rows[0] as any).cnt) + Number((directReturnsRs.rows[0] as any).cnt)
 
   return {
     sessionId,

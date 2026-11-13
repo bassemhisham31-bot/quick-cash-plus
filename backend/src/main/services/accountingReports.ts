@@ -175,6 +175,28 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
         user: r.userName ?? '',
         amount: n(r.amount)
       }))
+      // مرتجعات بدون فاتورة (ويب)
+      const dArgs: unknown[] = []
+      const drs = await db.execute({
+        sql: `SELECT r.created_at, r.amount, r.number, c.name AS customerName, r.refund_method, u.full_name AS userName, COALESCE(br.name, '') AS branchName
+              FROM direct_sales_returns r JOIN customers c ON c.id = r.customer_id
+              LEFT JOIN branches br ON br.id = r.branch_id
+              LEFT JOIN users u ON u.id = r.user_id WHERE ${dateCond('r.created_at', f, dArgs, 'r.branch_id')} ORDER BY r.id`,
+        args: dArgs as any
+      })
+      for (const r of drs.rows as any[]) {
+        rows.push({
+          branch: r.branchName,
+          date: r.created_at,
+          number: r.number,
+          customer: r.customerName,
+          kind: 'بدون فاتورة',
+          method: r.refund_method,
+          user: r.userName ?? '',
+          amount: n(r.amount)
+        })
+      }
+      rows.sort((a, b) => String(a.date).localeCompare(String(b.date)))
       return {
         title: `مرتجعات المبيعات ${range(f)}`,
         columns: [

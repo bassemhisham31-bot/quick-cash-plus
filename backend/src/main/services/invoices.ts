@@ -21,7 +21,7 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
                  i.tax_total AS taxTotal, i.total, i.paid, i.payment_method AS paymentMethod, i.status, i.note,
                  i.created_at AS createdAt, c.name AS customerName, c.phone AS customerPhone, u.full_name AS cashierName,
                  i.loyalty_points_earned AS loyaltyPointsEarned, i.loyalty_points_redeemed AS loyaltyPointsRedeemed,
-                 c.loyalty_points AS customerLoyaltyBalance, c.balance AS customerBalance, c.is_walk_in AS isWalkIn, i.customer_label AS customerLabel,
+                 c.loyalty_points AS customerLoyaltyBalance, c.balance AS customerBalance, c.address AS customerAddress, c.is_walk_in AS isWalkIn, i.customer_label AS customerLabel,
                  i.order_type AS orderType, t.name AS tableName, d.name AS deliveryDriverName,
                  COALESCE(ro.delivery_address, i.delivery_address) AS deliveryAddress,
                  COALESCE(ro.special_mark, i.delivery_mark) AS deliveryMark, i.delivery_fee AS deliveryFee, i.service_charge_total AS serviceChargeTotal, cap.name AS captainName,
@@ -75,6 +75,8 @@ export async function getInvoiceView(invoiceId: number): Promise<InvoiceView | n
           const before = after - (Number(header.total) - Number(header.paid))
           return { customerBalanceBefore: before, customerBalanceAfter: after }
         })()),
+    customerAddress: header.isWalkIn ? null : (header.customerAddress ?? null),
+    customerCurrentBalance: header.isWalkIn ? null : Number(header.customerBalance ?? 0),
     orderType: header.orderType ?? 'retail',
     tableName: header.tableName ?? null,
     deliveryDriverName: header.deliveryDriverName ?? null,
@@ -456,7 +458,7 @@ export async function listSalesReturns(filter: { from?: string; to?: string } = 
     args
   })
 
-  return rs.rows.map((r: any) => ({
+  const rows: SalesReturnListRow[] = rs.rows.map((r: any) => ({
     id: Number(r.id),
     invoiceId: Number(r.invoiceId),
     invoiceNumber: r.invoiceNumber,
@@ -466,6 +468,34 @@ export async function listSalesReturns(filter: { from?: string; to?: string } = 
     createdAt: r.createdAt,
     branchName: r.branchName
   }))
+
+  // مرتجعات بدون فاتورة (ويب)
+  const directRs = await db.execute({
+    sql: `SELECT sr.id, sr.number, sr.amount, sr.note, sr.refund_method AS refundMethod, sr.created_at AS createdAt,
+                 CASE WHEN c.is_walk_in = 1 AND sr.customer_label IS NOT NULL THEN sr.customer_label ELSE c.name END AS customerName,
+                 COALESCE(br.name, '') AS branchName
+          FROM direct_sales_returns sr
+          LEFT JOIN branches br ON br.id = sr.branch_id
+          JOIN customers c ON c.id = sr.customer_id
+          ${where}
+          ORDER BY sr.id DESC`,
+    args
+  })
+  for (const r of directRs.rows as any[]) {
+    rows.push({
+      id: -Number(r.id),
+      invoiceId: 0,
+      directReturnId: Number(r.id),
+      invoiceNumber: `${r.number} (بدون فاتورة)`,
+      customerName: r.customerName,
+      reasonNote: [r.refundMethod === 'credit' ? 'خصم من رصيد العميل' : 'رد نقدي', r.note].filter(Boolean).join(' — '),
+      amount: Number(r.amount),
+      createdAt: r.createdAt,
+      branchName: r.branchName
+    })
+  }
+  rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  return rows
 }
 
 export async function getReceiptQr(invoiceId: number): Promise<string | null> {

@@ -160,6 +160,19 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
     )
   }
 
+  // مرتجعات بدون فاتورة مردودة نقدًا (ويب)
+  const directReturns = await db.execute(
+    `SELECT r.number, r.created_at, r.amount, r.branch_id FROM direct_sales_returns r WHERE r.refund_method = 'cash'`
+  )
+  for (const r of directReturns.rows as any[]) {
+    push(
+      { ts: r.created_at, kind: 'مرتجع مبيعات', ref: r.number, description: 'مرتجع مبيعات بدون فاتورة', inAmount: 0, outAmount: Number(r.amount) },
+      'cash',
+      null,
+      Number(r.branch_id)
+    )
+  }
+
   // تحصيل من عملاء / سداد لموردين
   const payments = await db.execute(
     `SELECT p.id, p.party_type, p.amount, p.method, p.treasury_id, p.branch_id, p.created_at, p.note,

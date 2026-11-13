@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
 import { StatementModal } from '../../components/StatementModal'
+import { alertDialog } from '../../components/ConfirmDialogHost'
 import { formatCurrency as currency } from '../../lib/currency'
 import { playSound } from '../../lib/sounds'
 import type { CustomerView, PaymentMethod, StatementView, VendorView } from '../../../../shared/types'
@@ -17,6 +18,7 @@ export function CustomersPage(): JSX.Element {
   const [form, setForm] = useState(emptyForm)
   const [statementFor, setStatementFor] = useState<CustomerView | null>(null)
   const [statement, setStatement] = useState<StatementView | null>(null)
+  const [statementFilter, setStatementFilter] = useState<{ from: string; to: string }>({ from: '', to: '' })
   const [vendors, setVendors] = useState<VendorView[]>([])
   const [linkChoice, setLinkChoice] = useState<Record<number, string>>({})
   const [allCustomers, setAllCustomers] = useState<CustomerView[]>([])
@@ -57,16 +59,30 @@ export function CustomersPage(): JSX.Element {
     refresh()
   }
 
+  const ledgerFilter = (f: { from: string; to: string }): { from?: string; to?: string } => ({ from: f.from || undefined, to: f.to || undefined })
+
   async function openStatement(customer: CustomerView): Promise<void> {
     setStatementFor(customer)
-    setStatement(await window.api.customers.getStatement(customer.id))
+    setStatementFilter({ from: '', to: '' })
+    setStatement(await window.api.customers.getLedger(customer.id, {}))
+  }
+
+  async function changeStatementFilter(f: { from: string; to: string }): Promise<void> {
+    setStatementFilter(f)
+    if (statementFor) setStatement(await window.api.customers.getLedger(statementFor.id, ledgerFilter(f)))
+  }
+
+  async function printStatement(): Promise<void> {
+    if (!statementFor) return
+    const r = await window.api.customers.printStatement(statementFor.id, ledgerFilter(statementFilter))
+    if (!r.ok && r.error) await alertDialog(r.error)
   }
 
   async function handleRecordPayment(amount: number, method: PaymentMethod, note: string): Promise<void> {
     if (!statementFor || !user) return
     const updated = await window.api.customers.recordPayment(statementFor.id, amount, method, note, user.id)
     setStatementFor(updated)
-    setStatement(await window.api.customers.getStatement(updated.id))
+    setStatement(await window.api.customers.getLedger(updated.id, ledgerFilter(statementFilter)))
     refresh()
   }
 
@@ -281,6 +297,9 @@ export function CustomersPage(): JSX.Element {
             setStatement(null)
           }}
           onRecordPayment={handleRecordPayment}
+          filter={statementFilter}
+          onFilterChange={changeStatementFilter}
+          onPrint={printStatement}
         />
       )}
     </div>

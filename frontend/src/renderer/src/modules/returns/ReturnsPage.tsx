@@ -3,6 +3,7 @@ import { useAppStore } from '../../store/appStore'
 import { formatCurrency as currency } from '../../lib/currency'
 import { InvoiceDetailModal } from '../invoices/InvoiceDetailModal'
 import { PurchaseReturnModal } from './PurchaseReturnModal'
+import { DirectReturnModal } from './DirectReturnModal'
 import type {
   InvoiceListItem,
   InvoiceView,
@@ -33,6 +34,7 @@ export function ReturnsPage(): JSX.Element {
   const [to, setTo] = useState(todayIso())
 
   const [pickingInvoice, setPickingInvoice] = useState(false)
+  const [directReturnOpen, setDirectReturnOpen] = useState(false)
   const [invoiceSearch, setInvoiceSearch] = useState('')
   const [invoiceMatches, setInvoiceMatches] = useState<InvoiceListItem[]>([])
   const [openInvoice, setOpenInvoice] = useState<InvoiceView | null>(null)
@@ -97,9 +99,14 @@ export function ReturnsPage(): JSX.Element {
       <div className="qcp-page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1>إدارة المرتجعات</h1>
         {tab === 'sales' ? (
-          <button type="button" className="qcp-btn qcp-btn-primary" onClick={() => setPickingInvoice(true)}>
-            + تسجيل مرتجع مبيعات جديد
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="qcp-btn qcp-btn-secondary" onClick={() => setDirectReturnOpen(true)}>
+              ↩️ مرتجع بدون فاتورة
+            </button>
+            <button type="button" className="qcp-btn qcp-btn-primary" onClick={() => setPickingInvoice(true)}>
+              + تسجيل مرتجع مبيعات جديد
+            </button>
+          </div>
         ) : (
           <button type="button" className="qcp-btn qcp-btn-primary" onClick={() => setPickingPurchase(true)}>
             + تسجيل مرتجع مشتريات جديد
@@ -159,9 +166,20 @@ export function ReturnsPage(): JSX.Element {
                   <td>{r.reasonNote ?? '—'}</td>
                   <td style={{ color: 'var(--qcp-critical)' }}>{currency(r.amount)}</td>
                   <td>
-                    <button type="button" className="qcp-btn qcp-btn-secondary" onClick={() => openSalesInvoice(r.invoiceId)}>
-                      تفاصيل
-                    </button>
+                    {r.directReturnId ? (
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button type="button" className="qcp-btn qcp-btn-secondary" title="طباعة" onClick={() => window.api.invoices.printDirectReturn(r.directReturnId!, false)}>
+                          🖨
+                        </button>
+                        <button type="button" className="qcp-btn qcp-btn-secondary" title="معاينة" onClick={() => window.api.invoices.printDirectReturn(r.directReturnId!, true)}>
+                          👁
+                        </button>
+                      </div>
+                    ) : (
+                      <button type="button" className="qcp-btn qcp-btn-secondary" onClick={() => openSalesInvoice(r.invoiceId)}>
+                        تفاصيل
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -289,6 +307,8 @@ export function ReturnsPage(): JSX.Element {
           </div>
         </div>
       )}
+
+      {directReturnOpen && <DirectReturnModal onClose={() => setDirectReturnOpen(false)} onSaved={refresh} />}
 
       {openInvoice && (
         <InvoiceDetailModal

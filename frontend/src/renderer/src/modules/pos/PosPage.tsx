@@ -317,6 +317,15 @@ export function PosPage(): JSX.Element {
   /* ------------------------------ الفواتير المعلّقة ------------------------------ */
 
   const holdEnabled = posUiSettings?.holdInvoicesEnabled !== false
+  // (ويب) وضع «حفظ بدون ترحيل»: الفاتورة بتتحفظ وتتطبع من غير ما تأثر على المخزون/الرصيد، وبعدين «حفظ نهائي» من قايمة غير المرحّلة
+  const unpostedMode = posUiSettings?.unpostedMode !== false && !!posUiSettings
+  // اختيار «المحل المسوّق» في شاشة البيع (بيتقفل من الإعدادات)
+  const salesRepPosEnabled = posUiSettings?.salesRepPosEnabled !== false
+  // الفاتورة غير المرحّلة اللي اتفتحت للحفظ النهائي — بتفضل محفوظة لحد ما الدفع ينجح (عشان ما تضيعش لو اتقفلت الشاشة)
+  const [finalizingHeldId, setFinalizingHeldId] = useState<number | null>(null)
+  const finalizingHeldRef = useRef<number | null>(null)
+  finalizingHeldRef.current = finalizingHeldId
+  const [pendingFinalize, setPendingFinalize] = useState(false)
   const cartRef = useRef({ cart, discountType, discountValue, customerId, customerLabel, warehouseId, total: 0 })
   cartRef.current = { cart, discountType, discountValue, customerId, customerLabel, warehouseId, total }
   const autoHoldRef = useRef(false)
@@ -355,6 +364,7 @@ export function PosPage(): JSX.Element {
   }
 
   function resetCart(): void {
+    setFinalizingHeldId(null)
     setCart([])
     setDiscountValue('')
     setCustomerLabel('')
@@ -364,7 +374,18 @@ export function PosPage(): JSX.Element {
 
   async function holdCurrent(): Promise<void> {
     if (!user || !cart.length) return
-    await window.api.held.hold(buildHeldInput(), user.id)
+    const newId = await window.api.held.hold(buildHeldInput(), user.id)
+    if (unpostedMode) {
+      // لو دي فاتورة غير مرحّلة اتفتحت واتعدّلت: النسخة الجديدة بتحل محل القديمة
+      const oldId = finalizingHeldRef.current
+      if (oldId != null) await window.api.held.delete(oldId).catch(() => {})
+      resetCart()
+      setHeldMessage(`💾 الفاتورة اتحفظت بدون ترحيل (رقم ${newId}) — بعد التحصيل افتح «غير مرحّلة» واعمل حفظ نهائي`)
+      refreshHeld()
+      const pr = await window.api.held.print(newId, false)
+      if (pr && !pr.ok && pr.error) setHeldMessage(`💾 اتحفظت بدون ترحيل (رقم ${newId}) — الطباعة فشلت: ${pr.error}`)
+      return
+    }
     resetCart()
     setHeldMessage('⏸ الفاتورة اتعلّقت — ترجعلها من زرار "معلّقة"')
     refreshHeld()
@@ -372,6 +393,22 @@ export function PosPage(): JSX.Element {
 
   async function recallHeld(held: HeldInvoice): Promise<void> {
     if (!user) return
+    if (unpostedMode) {
+      // السلة الحالية (لو مش هي نفسها فاتورة غير مرحّلة مفتوحة) تتحفظ بدون ترحيل الأول عشان ما تضيعش
+      if (cart.length && finalizingHeldRef.current == null) await window.api.held.hold(buildHeldInput(), user.id)
+      const p = held.payload
+      setCart(p.lines)
+      setDiscountType(p.discountType)
+      setDiscountValue(p.discountValue ? String(p.discountValue) : '')
+      setCustomerId(p.customerId)
+      setCustomerLabel(p.customerLabel ?? '')
+      if (p.warehouseId) setWarehouseId(p.warehouseId)
+      setFinalizingHeldId(held.id)
+      setShowHeld(false)
+      setPendingFinalize(true)
+      refreshHeld()
+      return
+    }
     // اللي في السلة دلوقتي يتعلّق الأول عشان ما يضيعش
     if (cart.length) await window.api.held.hold(buildHeldInput(), user.id)
     const p = held.payload
@@ -387,17 +424,27 @@ export function PosPage(): JSX.Element {
   }
 
   async function deleteHeld(held: HeldInvoice): Promise<void> {
-    if (!(await confirmDialog(`مسح الفاتورة المعلّقة #${held.id}؟`, { danger: true, confirmLabel: 'مسح' }))) return
+    if (!(await confirmDialog(`مسح الفاتورة ${unpostedMode ? 'غير المرحّلة' : 'المعلّقة'} #${held.id}؟`, { danger: true, confirmLabel: 'مسح' }))) return
     await window.api.held.delete(held.id)
+    if (finalizingHeldRef.current === held.id) setFinalizingHeldId(null)
     refreshHeld()
   }
+
+  // بعد فتح فاتورة غير مرحّلة للحفظ النهائي: شاشة الدفع بتفتح أول ما السلة تتحمّل
+  useEffect(() => {
+    if (pendingFinalize && cart.length) {
+      setPendingFinalize(false)
+      openPayment()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingFinalize, cart])
 
   useEffect(() => {
     refreshHeld()
     // خرج من الشاشة وفيها فاتورة ما اتحفظتش → تتعلّق تلقائيًا (لو الخيار مفعّل)
     return () => {
       const c = cartRef.current
-      if (autoHoldRef.current && c.cart.length && user) {
+      if (autoHoldRef.current && c.cart.length && user && finalizingHeldRef.current == null) {
         window.api.held
           .hold(
             {
@@ -734,7 +781,7 @@ export function PosPage(): JSX.Element {
           dueDate: needsDueDate ? dueDate : null,
           tipAmount,
           redeemPoints: redeemPointsUsed,
-          salesRepId,
+          salesRepId: salesRepPosEnabled ? salesRepId : null,
           vendorSettlementAmount: vendorSettlementUsed,
           orderType: delivery ? 'delivery' : tableId ? 'dine_in' : 'retail',
           tableId: delivery ? null : tableId,
@@ -763,6 +810,12 @@ export function PosPage(): JSX.Element {
       setReceipt(view)
       if (printSettings?.autoPrintAfterSale) {
         window.api.print.receipt(result.invoiceId)
+      }
+      // الحفظ النهائي نجح → الفاتورة غير المرحّلة تتشال من القايمة
+      if (finalizingHeldRef.current != null) {
+        await window.api.held.delete(finalizingHeldRef.current).catch(() => {})
+        setFinalizingHeldId(null)
+        refreshHeld()
       }
       setCart([])
       setDiscountValue('')
@@ -1035,7 +1088,7 @@ export function PosPage(): JSX.Element {
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
+          <div style={{ display: salesRepPosEnabled ? 'flex' : 'none', gap: 6, alignItems: 'center', marginTop: 6 }}>
             <select
               className="qcp-select"
               style={{ flex: 1, minWidth: 0 }}
@@ -1283,7 +1336,7 @@ export function PosPage(): JSX.Element {
           {holdEnabled && (
             <div style={{ display: 'flex', gap: 8 }}>
               <button type="button" className="qcp-btn qcp-btn-secondary" style={{ flex: 1 }} disabled={!cart.length} onClick={holdCurrent}>
-                ⏸ تعليق
+                {unpostedMode ? '💾 حفظ بدون ترحيل وطباعة' : '⏸ تعليق'}
               </button>
               <button
                 type="button"
@@ -1294,8 +1347,13 @@ export function PosPage(): JSX.Element {
                   setShowHeld(true)
                 }}
               >
-                📋 معلّقة ({heldList.length})
+                📋 {unpostedMode ? 'غير مرحّلة' : 'معلّقة'} ({heldList.length})
               </button>
+            </div>
+          )}
+          {unpostedMode && finalizingHeldId != null && (
+            <div style={{ fontSize: 12, color: 'var(--qcp-warning, #a8701e)', fontWeight: 700 }}>
+              ✍️ فاتورة غير مرحّلة رقم {finalizingHeldId} مفتوحة للحفظ النهائي — اضغط «دفع» لترحيلها
             </div>
           )}
           {heldMessage && <div style={{ fontSize: 12, color: 'var(--qcp-ink-muted)' }}>{heldMessage}</div>}
@@ -1305,8 +1363,8 @@ export function PosPage(): JSX.Element {
       {showHeld && (
         <div className="qcp-modal-backdrop" onClick={() => setShowHeld(false)}>
           <div className="qcp-modal" style={{ width: 'min(640px, 94vw)' }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginTop: 0 }}>📋 الفواتير المعلّقة</h3>
-            {heldList.length === 0 && <div className="rst-empty">مفيش فواتير معلّقة</div>}
+            <h3 style={{ marginTop: 0 }}>📋 {unpostedMode ? 'فواتير غير مرحّلة (محفوظة بدون ترحيل)' : 'الفواتير المعلّقة'}</h3>
+            {heldList.length === 0 && <div className="rst-empty">{unpostedMode ? 'مفيش فواتير غير مرحّلة' : 'مفيش فواتير معلّقة'}</div>}
             <div style={{ display: 'grid', gap: 8, maxHeight: '60vh', overflow: 'auto' }}>
               {heldList.map((h) => (
                 <div key={h.id} className="qcp-card" style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
@@ -1322,7 +1380,7 @@ export function PosPage(): JSX.Element {
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button type="button" className="qcp-btn qcp-btn-primary" onClick={() => recallHeld(h)}>
-                      استرجاع
+                      {unpostedMode ? '✓ حفظ نهائي' : 'استرجاع'}
                     </button>
                     <button type="button" className="qcp-btn qcp-btn-secondary" title="طباعة" onClick={() => window.api.held.print(h.id, false)}>
                       🖨
@@ -1517,7 +1575,7 @@ export function PosPage(): JSX.Element {
               </div>
             </div>
 
-            {selectedShop && (
+            {salesRepPosEnabled && selectedShop && (
               <div style={{ fontSize: 12.5, color: 'var(--qcp-ink-muted)', margin: '4px 0' }}>
                 🏪 المحل المسوّق: <strong>{selectedShop.name}</strong>
               </div>

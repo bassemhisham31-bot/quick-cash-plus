@@ -230,7 +230,10 @@ import {
   upsertTable
 } from './services/restaurant'
 import { getRecipe, setRecipe } from './services/recipes'
-import { printKitchenTicket, printHeldInvoice, printVoucher, printEventBooking } from './services/print'
+import { printKitchenTicket, printHeldInvoice, printVoucher, printEventBooking, printDirectReturn, buildCustomerStatementHtml } from './services/print'
+import { createDirectReturn } from './services/directReturns'
+import { getCustomerLedger } from './services/customers'
+import type { DirectReturnInput, StatementFilter } from '../shared/types'
 import {
   addBookingPayment,
   deletePackage,
@@ -379,6 +382,8 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
       returnInvoiceLines(invoiceId, lines, userId),
     'invoices:getReceiptQr': (invoiceId: number) => getReceiptQr(invoiceId),
     'invoices:listReturns': (filter?: { from?: string; to?: string }) => listSalesReturns(filter ?? {}),
+    'returns:createDirect': (input: DirectReturnInput, userId: number) => createDirectReturn(input, userId),
+    'print:directReturn': (id: number, preview?: boolean) => printDirectReturn(id, preview === true),
 
     'cash:getOpenSession': () => getOpenSession(),
     'cash:openDay': (userId: number, openingBalance: number) => openDay(userId, openingBalance),
@@ -397,6 +402,8 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'customers:list': (search: string) => listCustomers(search),
     'customers:create': (input: CustomerInput) => createCustomer(input),
     'customers:getStatement': (customerId: number) => getCustomerStatement(customerId),
+    'customers:getLedger': (customerId: number, filter?: StatementFilter) => getCustomerLedger(customerId, filter ?? {}),
+    'customers:statementHtml': (customerId: number, filter?: StatementFilter) => buildCustomerStatementHtml(customerId, filter ?? {}),
     'customers:recordPayment': (customerId: number, amount: number, method: PaymentMethod, note: string, userId: number) =>
       recordCustomerPayment(customerId, amount, method, note, userId),
     'customers:updateLoyaltyEnabled': (customerId: number, enabled: boolean) =>

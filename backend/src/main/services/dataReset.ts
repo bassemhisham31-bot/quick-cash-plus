@@ -60,6 +60,8 @@ export async function resetProducts(userId: number): Promise<DataResetResult> {
 
 export async function resetSales(userId: number): Promise<DataResetResult> {
   return withMandatoryBackupAndTransaction(userId, async (tx) => {
+    await tx.execute('DELETE FROM direct_sales_return_items')
+    await tx.execute('DELETE FROM direct_sales_returns')
     await tx.execute('DELETE FROM sales_return_items')
     await tx.execute('DELETE FROM sales_returns')
     await tx.execute('DELETE FROM sales_items')
@@ -104,6 +106,8 @@ export async function factoryReset(userId: number): Promise<DataResetResult> {
     const walkInId = await getWalkInCustomerId(getDb())
 
     // مبيعات ومرتجعاتها
+    await tx.execute('DELETE FROM direct_sales_return_items')
+    await tx.execute('DELETE FROM direct_sales_returns')
     await tx.execute('DELETE FROM sales_return_items')
     await tx.execute('DELETE FROM sales_returns')
     await tx.execute('DELETE FROM sales_items')
