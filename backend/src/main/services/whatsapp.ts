@@ -9,6 +9,7 @@ import { existsSync, rmSync } from 'fs'
 import QRCode from 'qrcode'
 import { getCustomerPhoneAndName } from './customers'
 import { getStoreSettings, getWhatsAppSettings } from './settings'
+import { getInvoiceView } from './invoices'
 import type { WhatsAppSendResult, WhatsAppStatus } from '../../shared/types'
 
 let sock: any = null
@@ -163,7 +164,7 @@ function renderTemplate(template: string, vars: Record<string, string>): string 
 /** بعد كل عملية بيع ناجحة — رسالة نصية للعميل (لو مفعّل وله رقم). أي فشل هنا مابيأثرش على البيع. */
 export async function notifySaleByWhatsApp(
   customerId: number | null,
-  _invoiceId: number,
+  invoiceId: number,
   invoiceNumber: string,
   total: number
 ): Promise<void> {
@@ -174,7 +175,20 @@ export async function notifySaleByWhatsApp(
     const party = await getCustomerPhoneAndName(customerId)
     if (!party?.phone) return
     const store = await getStoreSettings()
-    const message = renderTemplate(settings.messageTemplate, {
+    const view = await getInvoiceView(invoiceId).catch(() => null)
+    const qtyFmt = (n: number): string => String(Math.round(n * 1000) / 1000)
+    const items = (view?.lines ?? []).map((l) => `• ${l.productName} × ${qtyFmt(l.qty)} — ${l.total.toFixed(2)}`).join('\n')
+    // لو القالب المحفوظ مفيهوش {items} بنضيف الأصناف قبل سطر الإجمالي (أو في الآخر) عشان تظهر من غير ما العميل يعدّل القالب
+    let template = settings.messageTemplate
+    if (items && !template.includes('{items}')) {
+      const rows = template.split('\n')
+      const at = rows.findIndex((r) => r.includes('{total}'))
+      if (at >= 0) rows.splice(at, 0, '{items}')
+      else rows.push('{items}')
+      template = rows.join('\n')
+    }
+    const message = renderTemplate(template, {
+      items,
       customerName: party.name,
       invoiceNumber,
       total: total.toFixed(2),

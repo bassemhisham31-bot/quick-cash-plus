@@ -558,7 +558,7 @@
     "whatsappSendOnSale": "إرسال تلقائي بعد كل عملية بيع",
     "whatsappSendInvoicePdf": "إرفاق فاتورة PDF مع الرسالة",
     "whatsappTemplate": "نص الرسالة",
-    "whatsappTemplateHint": "المتغيرات المتاحة: {customerName} اسم العميل، {invoiceNumber} رقم الفاتورة، {total} الإجمالي، {storeName} اسم المتجر.",
+    "whatsappTemplateHint": "المتغيرات المتاحة: {customerName} اسم العميل، {invoiceNumber} رقم الفاتورة، {total} الإجمالي، {items} قايمة الأصناف (بتتضاف تلقائيًا قبل الإجمالي لو مش مكتوبة)، {storeName} اسم المتجر.",
     "whatsappTestSection": "إرسال رسالة تجربة",
     "whatsappTestPhonePlaceholder": "رقم موبايل للتجربة (مثال: 01012345678)",
     "whatsappSendTest": "إرسال",

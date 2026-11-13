@@ -558,7 +558,7 @@
     "whatsappSendOnSale": "Send automatically after every sale",
     "whatsappSendInvoicePdf": "Attach invoice as PDF with the message",
     "whatsappTemplate": "Message template",
-    "whatsappTemplateHint": "Available variables: {customerName}, {invoiceNumber}, {total}, {storeName}.",
+    "whatsappTemplateHint": "Available variables: {customerName}, {invoiceNumber}, {total}, {items} (item list; added automatically before the total if absent), {storeName}.",
     "whatsappTestSection": "Send a test message",
     "whatsappTestPhonePlaceholder": "Test mobile number (e.g. 01012345678)",
     "whatsappSendTest": "Send",
