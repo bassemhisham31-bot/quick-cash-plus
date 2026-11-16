@@ -73,6 +73,15 @@ async function main(): Promise<void> {
   await new Promise((r) => setTimeout(r, 300))
   assert(sale.ok && sent.length === 1 && sent[0].text.includes('زيت عباد 1 لتر'), 'رسالة البيع اتبعتت بالأصناف')
   assert(sent[0].jid === '201012345678@s.whatsapp.net', 'الرقم اتحوّل لصيغة واتساب')
+  console.log(sent[0].text.split('\n').map((l) => '     ' + l).join('\n'))
+  assert(
+    sent[0].text.includes('وسيلة الدفع: آجل') && sent[0].text.includes('الرصيد السابق: 200.00') && sent[0].text.includes('الرصيد الحالي: 440.00'),
+    'فاتورة آجل: فيها وسيلة الدفع والرصيد السابق والحالي'
+  )
+  const cashSale = await checkout({ ...input, paymentMethod: 'cash', paid: 240 } as any, 1)
+  await new Promise((r) => setTimeout(r, 300))
+  const cashMsg = sent.pop()!.text
+  assert(cashSale.ok && cashMsg.includes('وسيلة الدفع: نقدًا') && !cashMsg.includes('الرصيد السابق'), 'فاتورة نقدي: وسيلة الدفع بس من غير أرصدة')
   const sale2 = await checkout({ ...input, skipWhatsApp: true }, 1)
   await new Promise((r) => setTimeout(r, 300))
   assert(sale2.ok && sent.length === 1, 'skipWhatsApp بيمنع تكرار الرسالة في الحفظ النهائي')
@@ -120,6 +129,21 @@ async function main(): Promise<void> {
   console.log(m4.split('\n').map((l) => '     ' + l).join('\n'))
   assert(h.ok && sent.length === 4 && m4.includes('240.00') && m4.includes('زيت عباد 1 لتر'), 'رسالة الفاتورة غير المرحّلة اتبعتت بالأصناف والإجمالي')
   const heldAfter = await getHeldInvoice(heldId)
+  assert(m4.includes('وسيلة الدفع: نقدًا') && !m4.includes('الرصيد السابق'), 'غير مرحّلة نقدي: وسيلة الدفع بس')
+  const heldCredit = await holdInvoice(
+    {
+      payload: {
+        lines: [line as any], discountType: 'value', discountValue: 0, customerId: customer.id, customerLabel: '', warehouseId: 1,
+        payment: { method: 'credit', received: '', splitRows: [], dueDate: '2026-12-16' }
+      },
+      total: 240
+    },
+    1
+  )
+  await sendHeldInvoiceByWhatsApp(heldCredit)
+  const m4b = sent.pop()!.text
+  console.log(m4b.split('\n').map((l) => '     ' + l).join('\n'))
+  assert(m4b.includes('وسيلة الدفع: آجل') && m4b.includes('الرصيد السابق: 440.00') && m4b.includes('الرصيد الحالي: 680.00'), 'غير مرحّلة آجل: الرصيد السابق والحالي المتوقع')
   assert(heldAfter?.payload.whatsappSent === true && heldAfter.payload.payment?.method === 'cash', 'اتعلّمت إنها اتبعتت واختيارات الدفع محفوظة')
 
   console.log('5) كشف الحساب')

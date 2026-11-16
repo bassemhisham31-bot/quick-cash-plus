@@ -279,8 +279,27 @@ export async function sendHeldInvoiceByWhatsApp(heldId: number): Promise<WhatsAp
     const items = held.payload.lines
       .map((l) => `• ${l.name} × ${qtyText(l.qty)} — ${money(l.qty * l.unitPrice - (l.discount || 0))}`)
       .join('\n')
-    const message = renderTemplate(withItemsPlaceholder(settings.messageTemplate, items), {
+    // نفس تفاصيل الفاتورة المطبوعة غير المرحّلة: وسيلة الدفع المختارة، ولو فيه جزء آجل → الرصيد السابق والحالي (المتوقع بعد الترحيل)
+    const details: string[] = []
+    const payment = held.payload.payment
+    if (payment) {
+      details.push(`وسيلة الدفع: ${PAYMENT_LABELS[payment.method] ?? payment.method}`)
+      const paidNow =
+        payment.method === 'credit'
+          ? 0
+          : payment.method === 'mixed'
+            ? Math.min(held.total, (payment.splitRows ?? []).reduce((s, r) => s + (Number(r.amount) || 0), 0))
+            : held.total
+      const creditPart = held.total - paidNow
+      if (creditPart > 0.005 && held.payload.customerId != null) {
+        const before = (await customerBalance(held.payload.customerId)) ?? 0
+        if (paidNow > 0.005) details.push(`المدفوع: ${money(paidNow)}`, `الباقي آجل: ${money(creditPart)}`)
+        details.push(`الرصيد السابق: ${money(before)}`, `الرصيد الحالي: ${money(before + creditPart)}`)
+      }
+    }
+    const message = renderTemplate(withDetailsPlaceholder(withItemsPlaceholder(settings.messageTemplate, items), details.length > 0), {
       items,
+      details: details.join('\n'),
       customerName: target.name,
       invoiceNumber: String(held.id),
       total: money(held.total),
@@ -371,8 +390,18 @@ export async function notifySaleByWhatsApp(
     const store = await getStoreSettings()
     const view = await getInvoiceView(invoiceId).catch(() => null)
     const items = (view?.lines ?? []).map((l) => `• ${l.productName} × ${qtyText(l.qty)} — ${l.total.toFixed(2)}`).join('\n')
-    const message = renderTemplate(withItemsPlaceholder(settings.messageTemplate, items), {
+    // زي الفاتورة المطبوعة: وسيلة الدفع، ولو فيه جزء آجل → المدفوع والرصيد السابق والحالي
+    const details: string[] = []
+    if (view) {
+      details.push(`وسيلة الدفع: ${PAYMENT_LABELS[view.paymentMethod] ?? view.paymentMethod}`)
+      if (view.customerBalanceBefore != null && view.customerBalanceAfter != null) {
+        if (view.paid > 0.005) details.push(`المدفوع: ${money(view.paid)}`, `الباقي آجل: ${money(view.total - view.paid)}`)
+        details.push(`الرصيد السابق: ${money(view.customerBalanceBefore)}`, `الرصيد الحالي: ${money(view.customerBalanceAfter)}`)
+      }
+    }
+    const message = renderTemplate(withDetailsPlaceholder(withItemsPlaceholder(settings.messageTemplate, items), details.length > 0), {
       items,
+      details: details.join('\n'),
       customerName: party.name,
       invoiceNumber,
       total: total.toFixed(2),
@@ -382,4 +411,24 @@ export async function notifySaleByWhatsApp(
   } catch {
     // إشعار واتساب اختياري بالكامل
   }
+}
+
+const PAYMENT_LABELS: Record<string, string> = {
+  cash: 'نقدًا',
+  credit: 'آجل',
+  card: 'بنكي',
+  wallet: 'محفظة',
+  mixed: 'تقسيم الدفع',
+  vodafone_cash: 'فودافون كاش',
+  instapay: 'InstaPay'
+}
+
+/** سطور وسيلة الدفع/الأرصدة بتتحط بعد سطر الإجمالي في القالب (أو في الآخر) — من غير ما العميل يعدّل القالب */
+function withDetailsPlaceholder(template: string, hasDetails: boolean): string {
+  if (!hasDetails || template.includes('{details}')) return template
+  const rows = template.split('\n')
+  const at = rows.findIndex((r) => r.includes('{total}'))
+  if (at >= 0) rows.splice(at + 1, 0, '{details}')
+  else rows.push('{details}')
+  return rows.join('\n')
 }

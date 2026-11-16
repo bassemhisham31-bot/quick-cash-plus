@@ -381,6 +381,7 @@ export function PosPage(): JSX.Element {
   function resetCart(): void {
     setFinalizingHeldId(null)
     finalizingWhatsAppSentRef.current = false
+    pendingPaymentRef.current = null
     setCart([])
     setDiscountValue('')
     setCustomerLabel('')
@@ -423,8 +424,13 @@ export function PosPage(): JSX.Element {
       refreshHeld()
       // رسالة واتساب للعميل زي البيع بالظبط (لو واتساب مفعّل والعميل له رقم) — فشلها مابيأثرش على الحفظ
       void window.api.held.sendWhatsApp(newId).catch(() => {})
-      const pr = await window.api.held.print(newId, false)
-      if (pr && !pr.ok && pr.error) setHeldMessage(`💾 اتحفظت بدون ترحيل (رقم ${newId}) — الطباعة فشلت: ${pr.error}`)
+      // الطباعة في الخلفية — ما تقفلش شاشة البيع لو الطابعة/QZ Tray اتأخروا
+      void window.api.held
+        .print(newId, false)
+        .then((pr) => {
+          if (pr && !pr.ok && pr.error) setHeldMessage(`💾 اتحفظت بدون ترحيل (رقم ${newId}) — الطباعة فشلت: ${pr.error}`)
+        })
+        .catch(() => {})
     } catch (err: any) {
       setError(err?.message ?? 'تعذر حفظ الفاتورة')
     } finally {
@@ -444,7 +450,8 @@ export function PosPage(): JSX.Element {
     refreshHeld()
   }
 
-  async function recallHeld(held: HeldInvoice): Promise<void> {
+  /** openForEdit: فتح الفاتورة غير المرحّلة في السلة للتعديل بس (من غير شاشة الدفع) — بعد التعديل «حفظ بدون ترحيل» بيحل محلها أو «دفع» بيرحّلها */
+  async function recallHeld(held: HeldInvoice, openForEdit = false): Promise<void> {
     if (!user) return
     if (unpostedMode) {
       // السلة الحالية (لو مش هي نفسها فاتورة غير مرحّلة مفتوحة) تتحفظ بدون ترحيل الأول عشان ما تضيعش
@@ -458,9 +465,13 @@ export function PosPage(): JSX.Element {
       if (p.warehouseId) setWarehouseId(p.warehouseId)
       setFinalizingHeldId(held.id)
       pendingPaymentRef.current = p.payment ?? null
-      finalizingWhatsAppSentRef.current = !!p.whatsappSent
+      // لو اتفتحت للتعديل فالفاتورة ممكن تتغير → رسالة الترحيل تتبعت عادي
+      finalizingWhatsAppSentRef.current = !openForEdit && !!p.whatsappSent
       setShowHeld(false)
-      setPendingFinalize(true)
+      if (openForEdit) {
+        setHeldMessage(null)
+        setTimeout(() => searchRef.current?.focus(), 0)
+      } else setPendingFinalize(true)
       refreshHeld()
       return
     }
@@ -491,15 +502,6 @@ export function PosPage(): JSX.Element {
       setPendingFinalize(false)
       setUnpostedPay(false)
       openPayment()
-      // نفس اختيارات الدفع اللي اتحفظت مع الفاتورة (تتعدّل عادي قبل الحفظ النهائي)
-      const saved = pendingPaymentRef.current
-      pendingPaymentRef.current = null
-      if (saved) {
-        setPaymentMethod(saved.method)
-        setPaid(saved.received ?? '')
-        setSplitRows(saved.splitRows ?? [])
-        if (saved.dueDate) setDueDate(saved.dueDate)
-      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingFinalize, cart])
@@ -791,6 +793,15 @@ export function PosPage(): JSX.Element {
     setDueDate(datePlusDays(30))
     setTipMode('return')
     setTipStr('')
+    // فاتورة غير مرحّلة مفتوحة: نفس اختيارات الدفع اللي اتحفظت معاها (تتعدّل عادي قبل التأكيد)
+    const saved = pendingPaymentRef.current
+    pendingPaymentRef.current = null
+    if (saved) {
+      setPaymentMethod(saved.method)
+      setPaid(saved.received ?? '')
+      setSplitRows(saved.splitRows ?? [])
+      if (saved.dueDate) setDueDate(saved.dueDate)
+    }
     setShowPayment(true)
   }
 
@@ -1440,7 +1451,7 @@ export function PosPage(): JSX.Element {
           )}
           {unpostedMode && finalizingHeldId != null && (
             <div style={{ fontSize: 12, color: 'var(--qcp-warning, #a8701e)', fontWeight: 700 }}>
-              ✍️ فاتورة غير مرحّلة رقم {finalizingHeldId} مفتوحة للحفظ النهائي — اضغط «دفع» لترحيلها
+              ✍️ فاتورة غير مرحّلة رقم {finalizingHeldId} مفتوحة — عدّل براحتك، وبعدها «حفظ بدون ترحيل» يحفظ التعديل أو «دفع» يرحّلها
             </div>
           )}
           {heldMessage && <div style={{ fontSize: 12, color: 'var(--qcp-ink-muted)' }}>{heldMessage}</div>}
@@ -1486,6 +1497,11 @@ export function PosPage(): JSX.Element {
                     <button type="button" className="qcp-btn qcp-btn-primary" onClick={() => recallHeld(h)}>
                       {unpostedMode ? '✓ حفظ نهائي' : 'استرجاع'}
                     </button>
+                    {unpostedMode && (
+                      <button type="button" className="qcp-btn qcp-btn-secondary" title="فتح الفاتورة للتعديل" onClick={() => recallHeld(h, true)}>
+                        ✏️ فتح
+                      </button>
+                    )}
                     <button type="button" className="qcp-btn qcp-btn-secondary" title="طباعة" onClick={() => window.api.held.print(h.id, false)}>
                       🖨
                     </button>
