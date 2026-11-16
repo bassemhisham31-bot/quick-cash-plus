@@ -1,6 +1,8 @@
 import { copyFile, mkdir, readdir, stat, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join, resolve, sep } from 'path'
+import { tmpdir } from 'os'
+import { randomBytes } from 'crypto'
 import { getDb, getDbPath } from '../db'
 import { getBackupSettings } from './settings'
 import type { BackupFileInfo, BackupResult } from '../../shared/types'
@@ -53,6 +55,21 @@ export async function runLocalBackup(): Promise<BackupResult> {
     }
     return { ok: false, error: message }
   }
+}
+
+/**
+ * نسخة كاملة لحظية من قاعدة البيانات في ملف مؤقت — للتحميل على جهاز العميل (الأدمن بس، من server.ts).
+ * نفس طريقة النسخ الدوري (VACUUM INTO من الاتصال الحي). اللي بينادي مسؤول يمسح الملف بعد الإرسال.
+ */
+export async function createDownloadSnapshot(): Promise<{ filePath: string; fileName: string }> {
+  if (/^(libsql|https?):\/\//.test(getDbPath())) throw new Error('قاعدة البيانات على سيرفر بعيد — التحميل غير مدعوم')
+  const dir = join(tmpdir(), 'qcp-download')
+  if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+  const fileName = `quick-cash-plus-backup-${stamp}.sqlite`
+  const filePath = join(dir, `${randomBytes(8).toString('hex')}-${fileName}`)
+  await getDb().execute(`VACUUM INTO '${filePath.replace(/'/g, "''")}'`)
+  return { filePath, fileName }
 }
 
 async function pruneOldBackups(folder: string): Promise<void> {

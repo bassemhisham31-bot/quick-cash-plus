@@ -80,6 +80,12 @@ const PAYMENT_ICONS: Record<string, string> = {
 /** الكمية اللي تحتها الصنف يتعلّم "قرب يخلص" على كارت البيع */
 const LOW_STOCK = 5
 
+/** المتاح للبيع: رصيد الصنف + اللي ممكن يتفكّ من الصنف الكبير (جركن ← كيلو) — السيرفر بيفكّ تلقائيًا وقت البيع */
+function sellableQty(product: Product): number {
+  const fromParent = product.parentProductId && product.unitsPerParent > 0 ? Math.max(0, Math.floor(product.parentQuantity)) * product.unitsPerParent : 0
+  return product.quantity + fromParent
+}
+
 function priceForTier(product: Product, tier: PriceTier): number {
   if (tier === 'retail') return product.retailPrice
   return product.prices[tier] ?? product.retailPrice
@@ -620,7 +626,7 @@ export function PosPage(): JSX.Element {
       setServicePrompt(product)
       return
     }
-    if (!product.isService && product.quantity <= 0 && !posUiSettings?.allowNegativeStock) return
+    if (!product.isService && sellableQty(product) <= 0 && !posUiSettings?.allowNegativeStock) return
     setCart((prev) => {
       const existing = prev.find((l) => l.productId === product.id)
       if (existing) {
@@ -1072,7 +1078,8 @@ export function PosPage(): JSX.Element {
 
         <div className="rst-products">
           {visibleProducts.map((p) => {
-            const out = !p.isService && p.quantity <= 0 && !posUiSettings?.allowNegativeStock
+            const sellable = sellableQty(p)
+            const out = !p.isService && sellable <= 0 && !posUiSettings?.allowNegativeStock
             const inCart = qtyInCart.get(p.id)
             return (
               <button
@@ -1094,8 +1101,8 @@ export function PosPage(): JSX.Element {
                   {p.isService ? (
                     <span className="pos-stock">🛠 خدمة</span>
                   ) : (
-                    <span className={`pos-stock ${out ? 'out' : p.quantity <= LOW_STOCK ? 'low' : ''}`}>
-                      {out ? 'نفذ' : p.quantity <= 0 ? `رصيد ${formatQty(p.quantity)} (بالسالب)` : `متاح ${formatQty(p.quantity)}`}
+                    <span className={`pos-stock ${out ? 'out' : sellable <= LOW_STOCK ? 'low' : ''}`}>
+                      {out ? 'نفذ' : sellable <= 0 ? `رصيد ${formatQty(p.quantity)} (بالسالب)` : `متاح ${formatQty(sellable)}`}
                     </span>
                   )}
                 </div>

@@ -47,7 +47,9 @@ const emptyForm = {
   commissionPercent: '0',
   commissionMin: '0',
   purchaseMode: 'every_sale' as PurchaseMode,
-  reorderQty: '0'
+  reorderQty: '0',
+  parentProductId: '' as number | '',
+  unitsPerParent: ''
 }
 
 function daysUntil(dateStr: string): number {
@@ -65,6 +67,9 @@ export function InventoryPage(): JSX.Element {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [warehouseId, setWarehouseId] = useState<number | null>(null)
   const [search, setSearch] = useState('')
+  /** كل الأصناف (من غير فلتر البحث) — لاختيار «الصنف الكبير» في فورم الصنف */
+  const [allProducts, setAllProducts] = useState<Product[]>([])
+  const [formError, setFormError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [newCategoryName, setNewCategoryName] = useState('')
@@ -116,6 +121,15 @@ export function InventoryPage(): JSX.Element {
     refreshAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (!showForm || !warehouseId) return
+    setFormError(null)
+    window.api.catalog
+      .listProducts('', warehouseId)
+      .then(setAllProducts)
+      .catch(() => {})
+  }, [showForm, warehouseId])
 
   useEffect(() => {
     if (!warehouseId) return
@@ -201,7 +215,9 @@ export function InventoryPage(): JSX.Element {
       commissionPercent: String(p.commissionPercent),
       commissionMin: String(p.commissionMin),
       purchaseMode: p.purchaseMode,
-      reorderQty: String(p.reorderQty)
+      reorderQty: String(p.reorderQty),
+      parentProductId: p.parentProductId ?? '',
+      unitsPerParent: p.parentProductId ? String(p.unitsPerParent) : ''
     })
     setShowForm(true)
   }
@@ -239,11 +255,15 @@ export function InventoryPage(): JSX.Element {
     commissionMin: number
     purchaseMode: PurchaseMode
     reorderQty: number
+    parentProductId: number | null
+    unitsPerParent: number
   } {
     const commission = form.isService && form.commissionEnabled
     return {
       purchaseMode: form.isService ? 'none' : form.purchaseMode,
       reorderQty: form.purchaseMode === 'min_stock' ? Number(form.reorderQty) || 0 : 0,
+      parentProductId: form.isService || form.parentProductId === '' ? null : Number(form.parentProductId),
+      unitsPerParent: form.isService || form.parentProductId === '' ? 0 : Number(form.unitsPerParent) || 0,
       isService: form.isService,
       commissionEnabled: commission,
       commissionPercent: commission ? Number(form.commissionPercent) || 0 : 0,
@@ -254,7 +274,13 @@ export function InventoryPage(): JSX.Element {
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault()
     if (!warehouseId) return
+    setFormError(null)
+    if (!form.isService && form.parentProductId !== '' && !(Number(form.unitsPerParent) > 0)) {
+      setFormError('اكتب الوحدة الكبيرة فيها كام من الصنف ده')
+      return
+    }
 
+    try {
     if (form.id === null) {
       await window.api.catalog.createProduct({
         name: form.name.trim(),
@@ -297,6 +323,10 @@ export function InventoryPage(): JSX.Element {
         imageDataUrl: form.imageDataUrl,
         ...servicePayload()
       })
+    }
+    } catch (err: any) {
+      setFormError(err?.message ?? 'تعذر حفظ الصنف')
+      return
     }
     playSound('save')
     setForm(emptyForm)
@@ -719,6 +749,48 @@ export function InventoryPage(): JSX.Element {
 
             {!form.isService && (
               <div className="qcp-card" style={{ padding: 10, marginBottom: 10, background: 'var(--qcp-bg-sunken)' }}>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                  <div className="qcp-field" style={{ flex: 2 }}>
+                    <label>📦 صنف فرعي من وحدة أكبر (اختياري)</label>
+                    <select
+                      className="qcp-select"
+                      value={form.parentProductId}
+                      onChange={(e) => setForm((f) => ({ ...f, parentProductId: e.target.value === '' ? '' : Number(e.target.value) }))}
+                    >
+                      <option value="">— مش فرعي (صنف عادي) —</option>
+                      {allProducts
+                        .filter((p) => !p.isService && p.id !== form.id && (p.parentProductId == null || p.id === form.parentProductId))
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  {form.parentProductId !== '' && (
+                    <div className="qcp-field" style={{ flex: 1 }}>
+                      <label>الوحدة الكبيرة فيها كام؟</label>
+                      <input
+                        className="qcp-input"
+                        type="number"
+                        min={0}
+                        step="any"
+                        placeholder="مثال: 100"
+                        value={form.unitsPerParent}
+                        onChange={(e) => setForm((f) => ({ ...f, unitsPerParent: e.target.value }))}
+                      />
+                    </div>
+                  )}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)', marginTop: 4 }}>
+                  مثال: «زيت كيلو» فرعي من «زيت جركن» والجركن فيه 100. بتبيع الجركن بسعره والكيلو بسعره، ولما رصيد الكيلو يخلص البرنامج بيفتح جركن
+                  تلقائيًا (ينقص جركن ويزوّد 100 كيلو).
+                </div>
+              </div>
+            )}
+
+            {!form.isService && (
+              <div className="qcp-card" style={{ padding: 10, marginBottom: 10, background: 'var(--qcp-bg-sunken)' }}>
                 <div className="qcp-field">
                   <label>📝 قائمة «مطلوب شراؤه»</label>
                   <select
@@ -848,6 +920,11 @@ export function InventoryPage(): JSX.Element {
               {t('inventory.serialTrackingEnabledHint')}
             </div>
 
+            {formError && (
+              <div className="qcp-pill critical" style={{ marginTop: 10 }}>
+                {formError}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
               <button className="qcp-btn qcp-btn-primary" type="submit">
                 {t('inventory.save')}

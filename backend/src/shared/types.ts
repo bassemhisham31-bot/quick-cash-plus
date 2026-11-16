@@ -72,6 +72,12 @@ export interface Product {
   purchaseMode: PurchaseMode
   /** كمية الشراء المطلوبة لما الرصيد يوصل للحد الأدنى (0 = يكمّل لضعف الحد الأدنى) */
   reorderQty: number
+  /** صنف فرعي: الصنف الكبير (مثلًا الجركن) اللي الصنف ده (الكيلو) بيتفكّ منه تلقائيًا لما رصيده يخلص */
+  parentProductId: number | null
+  /** الوحدة الكبيرة فيها كام من الصنف ده (مثلًا 100) */
+  unitsPerParent: number
+  /** رصيد الصنف الكبير في نفس المخزن (للعرض في شاشة البيع) */
+  parentQuantity: number
 }
 
 export interface ProductInput {
@@ -99,6 +105,8 @@ export interface ProductInput {
   commissionMin?: number
   purchaseMode?: PurchaseMode
   reorderQty?: number
+  parentProductId?: number | null
+  unitsPerParent?: number
 }
 
 export interface ProductUpdateInput {
@@ -124,6 +132,8 @@ export interface ProductUpdateInput {
   commissionMin?: number
   purchaseMode?: PurchaseMode
   reorderQty?: number
+  parentProductId?: number | null
+  unitsPerParent?: number
 }
 
 export type NotificationSeverity = 'critical' | 'warning'

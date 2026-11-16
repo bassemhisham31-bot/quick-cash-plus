@@ -39,6 +39,7 @@ import { confirmDialog } from '../../components/ConfirmDialogHost'
 import { QzCertificateCard } from '../../components/QzCertificateCard'
 import { PrintAsImageCard } from '../../components/PrintAsImageCard'
 import { BRAND_NAME } from '../../platform/brand'
+import { downloadBackupToDevice } from '../../platform/webApi'
 
 type Section =
   | 'store'
@@ -1719,6 +1720,7 @@ function BackupSection(): JSX.Element {
   const [message, setMessage] = useState<string | null>(null)
   const [clientId, setClientId] = useState('')
   const [cloudBusy, setCloudBusy] = useState(false)
+  const [downloading, setDownloading] = useState(false)
 
   async function refresh(): Promise<void> {
     const [s, b] = await Promise.all([window.api.backup.getSettings(), window.api.backup.list()])
@@ -1754,6 +1756,19 @@ function BackupSection(): JSX.Element {
     const result = await window.api.backup.runNow()
     setMessage(result.ok ? `تم إنشاء نسخة احتياطية: ${result.filePath}` : result.error ?? 'حدث خطأ')
     refresh()
+  }
+
+  async function handleDownload(): Promise<void> {
+    setMessage(null)
+    setDownloading(true)
+    try {
+      const name = await downloadBackupToDevice()
+      setMessage(`تم تحميل النسخة على جهازك: ${name}`)
+    } catch (err: any) {
+      setMessage(err?.message ?? 'تعذر تحميل النسخة الاحتياطية')
+    } finally {
+      setDownloading(false)
+    }
   }
 
   async function handleRestore(filePath: string): Promise<void> {
@@ -1855,7 +1870,14 @@ function BackupSection(): JSX.Element {
         <button className="qcp-btn qcp-btn-secondary" onClick={handleBackupNow}>
           {t('settings.backupNow')}
         </button>
+        <button className="qcp-btn qcp-btn-secondary" disabled={downloading} onClick={handleDownload}>
+          {downloading ? '⏳ جاري التحميل…' : '⬇️ تحميل نسخة على جهازي'}
+        </button>
       </div>
+      <p style={{ fontSize: 12.5, color: 'var(--qcp-ink-faint)', marginTop: -10 }}>
+        «تحميل نسخة على جهازي» بينزّل ملف فيه كل بياناتك لحد اللحظة دي (للمدير فقط). احفظه على فلاشة أو Google Drive — لو حصل أي مشكلة في
+        السيرفر بنرجّع بياناتك منه.
+      </p>
 
       {message && (
         <div className="qcp-pill accent" style={{ marginBottom: 16 }}>

@@ -76,6 +76,7 @@ import { migration072ServicesSplitDueDates } from './migrations/072_services_spl
 import { migration073PurchaseMode } from './migrations/073_purchase_mode'
 import { migration074FixedAssets } from './migrations/074_fixed_assets'
 import { migration075UnpostedDirectReturns } from './migrations/075_unposted_direct_returns'
+import { migration076ProductSubUnits } from './migrations/076_product_sub_units'
 import { seedDatabase } from './seed'
 
 let db: Client | null = null
@@ -209,7 +210,8 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
   { name: '072_services_split_due_dates', sql: migration072ServicesSplitDueDates },
   { name: '073_purchase_mode', sql: migration073PurchaseMode },
   { name: '074_fixed_assets', sql: migration074FixedAssets },
-  { name: '075_unposted_direct_returns', sql: migration075UnpostedDirectReturns }
+  { name: '075_unposted_direct_returns', sql: migration075UnpostedDirectReturns },
+  { name: '076_product_sub_units', sql: migration076ProductSubUnits }
 ]
 
 async function runMigrations(client: Client): Promise<void> {

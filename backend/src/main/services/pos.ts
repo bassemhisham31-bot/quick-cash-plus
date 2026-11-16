@@ -42,6 +42,58 @@ async function validateDiscounts(input: CheckoutInput, cashierId: number, subtot
   return null
 }
 
+/**
+ * فكّ وحدات كبيرة (جركن) لصنفها الفرعي (كيلو) جوه نفس معاملة البيع: −n من الكبير، +n×المعامل للفرعي في نفس المخزن.
+ * بيفكّ أقل عدد يغطي النقص وبحد أقصى المتاح من الكبير (بعد المحجوز في نفس الفاتورة). بيرجّع الكمية اللي اتضافت للفرعي.
+ * تكلفة الفرعي بتتحدّث = تكلفة الكبير ÷ المعامل (لو للكبير تكلفة) عشان قيمة المخزون وتكلفة المبيعات يفضلوا مظبوطين.
+ */
+async function breakParentUnits(
+  tx: { execute: (stmt: { sql: string; args: any[] }) => Promise<{ rows: unknown[] }> },
+  p: { productId: number; parentId: number; factor: number; warehouseId: number; shortage: number; reservedParent: number; userId: number }
+): Promise<number> {
+  const parentRs = await tx.execute({
+    sql: `SELECT pr.cost_price, COALESCE(s.quantity, 0) AS quantity
+          FROM products pr LEFT JOIN stock s ON s.product_id = pr.id AND s.warehouse_id = ?
+          WHERE pr.id = ? AND pr.deleted_at IS NULL`,
+    args: [p.warehouseId, p.parentId]
+  })
+  const parent = parentRs.rows[0] as any
+  if (!parent) return 0
+  const parentAvailable = Math.floor(Number(parent.quantity) - p.reservedParent + 1e-9)
+  const needed = Math.ceil(p.shortage / p.factor - 1e-9)
+  const count = Math.min(needed, parentAvailable)
+  if (!(count > 0)) return 0
+  const added = count * p.factor
+
+  await tx.execute({
+    sql: 'UPDATE stock SET quantity = quantity - ? WHERE product_id = ? AND warehouse_id = ?',
+    args: [count, p.parentId, p.warehouseId]
+  })
+  await tx.execute({
+    sql: `INSERT INTO stock (product_id, warehouse_id, quantity) VALUES (?, ?, ?)
+          ON CONFLICT(product_id, warehouse_id) DO UPDATE SET quantity = quantity + ?`,
+    args: [p.productId, p.warehouseId, added, added]
+  })
+  for (const [productId, qty] of [
+    [p.parentId, -count],
+    [p.productId, added]
+  ]) {
+    await tx.execute({
+      sql: `INSERT INTO stock_movements (product_id, warehouse_id, type, qty, ref_type, ref_id, user_id)
+            VALUES (?, ?, 'adjustment', ?, 'unit_break', ?, ?)`,
+      args: [productId, p.warehouseId, qty, p.parentId, p.userId]
+    })
+  }
+  const parentCost = Number(parent.cost_price) || 0
+  if (parentCost > 0) {
+    await tx.execute({
+      sql: 'UPDATE products SET cost_price = ? WHERE id = ?',
+      args: [Math.round((parentCost / p.factor) * 10000) / 10000, p.productId]
+    })
+  }
+  return added
+}
+
 export async function checkout(
   input: CheckoutInput,
   cashierId: number,
@@ -160,21 +212,46 @@ export async function checkout(
     // المطعم بيبعت allowNegativeStock بنفسه؛ البيع العادي بيسمح بالسالب بس لو الخيار مفعّل في الإعدادات (بيتفحص هنا مش في الواجهة)
     const allowNegative = input.allowNegativeStock === true || (await getPosUiSettings()).allowNegativeStock
     for (const line of input.lines) {
-      if (line.isTemp || allowNegative || isServiceLine(line)) continue
+      if (line.isTemp || isServiceLine(line)) continue
       const lineWarehouseId = line.warehouseId ?? warehouseId
-      const recipeCheck = await checkRecipeStock(tx, line.productId, line.qty, lineWarehouseId)
-      if (recipeCheck.hasRecipe) {
-        if (recipeCheck.insufficientMaterial) {
-          throw new Error(`الكمية غير كافية في المخزون للخامة: ${recipeCheck.insufficientMaterial}`)
+      if (!allowNegative) {
+        const recipeCheck = await checkRecipeStock(tx, line.productId, line.qty, lineWarehouseId)
+        if (recipeCheck.hasRecipe) {
+          if (recipeCheck.insufficientMaterial) {
+            throw new Error(`الكمية غير كافية في المخزون للخامة: ${recipeCheck.insufficientMaterial}`)
+          }
+          continue
         }
-        continue
       }
+      // صنف فرعي (كيلو من جركن): لو رصيده مايكفيش بنفكّ وحدات كبيرة تلقائيًا — حتى لو البيع بالسالب مسموح (الجركن موجود فعلًا)
+      const linkRs = await tx.execute({
+        sql: 'SELECT parent_product_id, units_per_parent FROM products WHERE id = ?',
+        args: [line.productId]
+      })
+      const link = linkRs.rows[0] as any
+      const parentId = link?.parent_product_id != null && Number(link.units_per_parent) > 0 ? Number(link.parent_product_id) : null
+      if (allowNegative && parentId == null) continue
       const stockRs = await tx.execute({
         sql: 'SELECT quantity FROM stock WHERE product_id = ? AND warehouse_id = ?',
         args: [line.productId, lineWarehouseId]
       })
-      const available = stockRs.rows[0] ? Number((stockRs.rows[0] as any).quantity) : 0
-      if (available < line.qty) {
+      let available = stockRs.rows[0] ? Number((stockRs.rows[0] as any).quantity) : 0
+      if (available < line.qty && parentId != null) {
+        // الوحدات الكبيرة المباعة في نفس الفاتورة من نفس المخزن محجوزة — ماتتفكّش
+        const reservedParent = input.lines
+          .filter((l) => !l.isTemp && l.productId === parentId && (l.warehouseId ?? warehouseId) === lineWarehouseId)
+          .reduce((s, l) => s + l.qty, 0)
+        available += await breakParentUnits(tx, {
+          productId: line.productId,
+          parentId,
+          factor: Number(link.units_per_parent),
+          warehouseId: lineWarehouseId,
+          shortage: line.qty - available,
+          reservedParent,
+          userId: cashierId
+        })
+      }
+      if (!allowNegative && available < line.qty) {
         throw new Error(`الكمية غير كافية في المخزون للصنف: ${line.name}`)
       }
     }

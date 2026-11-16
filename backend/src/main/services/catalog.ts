@@ -145,6 +145,8 @@ export async function listProducts(search = '', warehouseId?: number): Promise<P
                  p.is_service AS isService, p.commission_enabled AS commissionEnabled,
                  p.commission_percent AS commissionPercent, p.commission_min AS commissionMin,
                  p.purchase_mode AS purchaseMode, p.reorder_qty AS reorderQty,
+                 p.parent_product_id AS parentProductId, p.units_per_parent AS unitsPerParent,
+                 COALESCE((SELECT ps.quantity FROM stock ps WHERE ps.product_id = p.parent_product_id AND ps.warehouse_id = ?), 0) AS parentQuantity,
                  COALESCE(s.quantity, 0) AS quantity,
                  (SELECT price FROM product_prices WHERE product_id = p.id AND tier = 'wholesale') AS wholesalePrice,
                  (SELECT price FROM product_prices WHERE product_id = p.id AND tier = 'wholesale2') AS wholesale2Price,
@@ -154,7 +156,7 @@ export async function listProducts(search = '', warehouseId?: number): Promise<P
           WHERE p.deleted_at IS NULL
             AND (? = '%%' OR p.name LIKE ? OR p.barcode LIKE ?)
           ORDER BY p.name`,
-    args: [resolvedWarehouseId, term, term, term]
+    args: [resolvedWarehouseId, resolvedWarehouseId, term, term, term]
   })
 
   return rs.rows.map((r: any) => ({
@@ -184,8 +186,49 @@ export async function listProducts(search = '', warehouseId?: number): Promise<P
     commissionPercent: Number(r.commissionPercent) || 0,
     commissionMin: Number(r.commissionMin) || 0,
     purchaseMode: (['every_sale', 'min_stock', 'none'].includes(r.purchaseMode) ? r.purchaseMode : 'every_sale') as Product['purchaseMode'],
-    reorderQty: Number(r.reorderQty) || 0
+    reorderQty: Number(r.reorderQty) || 0,
+    parentProductId: r.parentProductId != null && Number(r.unitsPerParent) > 0 ? Number(r.parentProductId) : null,
+    unitsPerParent: r.parentProductId != null ? Number(r.unitsPerParent) || 0 : 0,
+    parentQuantity: r.parentProductId != null ? Number(r.parentQuantity) || 0 : 0
   }))
+}
+
+/**
+ * أعمدة الصنف الفرعي (parent_product_id, units_per_parent) بعد التحقق: مستوى واحد بس (الكبير مايبقاش هو نفسه فرعي،
+ * والصنف اللي ليه فروع مايبقاش فرعي)، والخدمة مالهاش وحدة كبيرة.
+ */
+async function parentColumns(
+  tx: { execute: (stmt: { sql: string; args: any[] }) => Promise<{ rows: unknown[] }> },
+  selfId: number | null,
+  input: { isService?: boolean; parentProductId?: number | null; unitsPerParent?: number }
+): Promise<[number | null, number]> {
+  // شاشات تانية بتعدّل الصنف من غير الحقل ده (undefined) → نسيب الربط زي ما هو
+  if (input.parentProductId === undefined && selfId != null && !input.isService) {
+    const cur = await tx.execute({ sql: 'SELECT parent_product_id, units_per_parent FROM products WHERE id = ?', args: [selfId] })
+    const row = cur.rows[0] as any
+    return [row?.parent_product_id != null ? Number(row.parent_product_id) : null, Number(row?.units_per_parent) || 0]
+  }
+  const parentId = input.parentProductId ? Number(input.parentProductId) : null
+  if (!parentId || input.isService) return [null, 0]
+  const factor = Number(input.unitsPerParent)
+  if (!(factor > 0)) throw new Error('اكتب الوحدة الكبيرة فيها كام من الصنف ده (رقم أكبر من صفر)')
+  if (selfId != null && parentId === selfId) throw new Error('الصنف مايبقاش فرعي من نفسه')
+  const rs = await tx.execute({
+    sql: 'SELECT id, parent_product_id, is_service FROM products WHERE id = ? AND deleted_at IS NULL',
+    args: [parentId]
+  })
+  const parent = rs.rows[0] as any
+  if (!parent) throw new Error('الصنف الكبير غير موجود')
+  if (Number(parent.is_service)) throw new Error('الصنف الكبير مايبقاش خدمة')
+  if (parent.parent_product_id != null) throw new Error('الصنف الكبير نفسه صنف فرعي — اختار الصنف الأصلي')
+  if (selfId != null) {
+    const kids = await tx.execute({
+      sql: 'SELECT 1 FROM products WHERE parent_product_id = ? AND deleted_at IS NULL LIMIT 1',
+      args: [selfId]
+    })
+    if (kids.rows.length) throw new Error('الصنف ده ليه أصناف فرعية — مايبقاش هو نفسه فرعي')
+  }
+  return [parentId, factor]
 }
 
 /** أعمدة الخدمة (isService, commissionEnabled, commissionPercent, commissionMin): العمولة مش بتتفعّل إلا لو الصنف خدمة */
@@ -214,8 +257,9 @@ export async function createProduct(input: ProductInput): Promise<Product> {
     const info = await tx.execute({
       sql: `INSERT INTO products
               (name, barcode, category_id, unit_id, vendor_id, cost_price, retail_price, reorder_point, expiry_date, serial_number, show_in_pos, serial_tracking_enabled, image_data_url,
-               is_service, commission_enabled, commission_percent, commission_min, purchase_mode, reorder_qty)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               is_service, commission_enabled, commission_percent, commission_min, purchase_mode, reorder_qty,
+               parent_product_id, units_per_parent)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         input.name.trim(),
         barcode,
@@ -231,7 +275,8 @@ export async function createProduct(input: ProductInput): Promise<Product> {
         input.serialTrackingEnabled ? 1 : 0,
         input.imageDataUrl || null,
         ...serviceColumns(input),
-        ...purchaseColumns(input)
+        ...purchaseColumns(input),
+        ...(await parentColumns(tx, null, input))
       ]
     })
     productId = Number(info.lastInsertRowid)
@@ -285,7 +330,7 @@ export async function updateProduct(id: number, input: ProductUpdateInput): Prom
             SET name = ?, barcode = ?, category_id = ?, unit_id = ?, vendor_id = ?, cost_price = ?, retail_price = ?,
                 reorder_point = ?, expiry_date = ?, serial_number = ?, show_in_pos = ?, serial_tracking_enabled = ?,
                 image_data_url = ?, is_service = ?, commission_enabled = ?, commission_percent = ?, commission_min = ?,
-                purchase_mode = ?, reorder_qty = ?, updated_at = datetime('now')
+                purchase_mode = ?, reorder_qty = ?, parent_product_id = ?, units_per_parent = ?, updated_at = datetime('now')
             WHERE id = ?`,
       args: [
         input.name.trim(),
@@ -303,6 +348,7 @@ export async function updateProduct(id: number, input: ProductUpdateInput): Prom
         input.imageDataUrl || null,
         ...serviceColumns(input),
         ...purchaseColumns(input),
+        ...(await parentColumns(tx, id, input)),
         id
       ]
     })

@@ -7,12 +7,12 @@ import { CATALOG_SYNC_CHANNELS, MANUALLY_LOGGED_CHANNELS } from '../shared/mutat
 import { ACTOR_META_KEY, type ActorMeta } from '../shared/activityActor'
 import { login } from '../main/services/auth'
 import { logUserActivity } from '../main/services/users'
-import { statfsSync } from 'fs'
+import { statfsSync, unlink } from 'fs'
 import { getDb, getDbPath } from '../main/db'
 import { getWebLicenseStatus, setLicenseFromOwner, webLicenseBlockReason } from '../main/services/licenseWeb'
 import { editionBlockReason, getEdition } from '../main/services/edition'
 import { convertToBaseChart, planBaseChart } from '../main/services/accountsChart'
-import { runLocalBackup } from '../main/services/backup'
+import { createDownloadSnapshot, runLocalBackup } from '../main/services/backup'
 import { branchScope } from '../main/services/branchScope'
 import { resolveBranchScope } from '../main/services/branches'
 import { timingSafeEqual } from 'crypto'
@@ -237,6 +237,31 @@ export function createApp(): express.Express {
       res.json({ ok: true, signature: signQzMessage(message) })
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message ?? 'تعذر التوقيع' })
+    }
+  })
+
+  /** تحميل نسخة كاملة من بيانات العميل على جهازه (ملف SQLite) — للأدمن بس، والصلاحية بتتراجع من القاعدة مش من التوكن */
+  app.get('/api/backup/download', async (req: AuthedRequest, res) => {
+    let filePath: string | null = null
+    try {
+      const rs = await getDb().execute({ sql: 'SELECT role FROM users WHERE id = ?', args: [req.auth!.userId] })
+      if ((rs.rows[0] as any)?.role !== 'admin') {
+        res.status(403).json({ ok: false, error: 'تحميل النسخة الاحتياطية للمدير فقط' })
+        return
+      }
+      if (rateLimited(`backup-dl:${req.auth!.userId}`, 6, 60 * 60 * 1000)) {
+        res.status(429).json({ ok: false, error: 'حمّلت نسخ كتير في وقت قصير — جرّب بعد شوية' })
+        return
+      }
+      const snap = await createDownloadSnapshot()
+      filePath = snap.filePath
+      await logUserActivity(req.auth!.userId, req.auth!.username, 'backup:download').catch(() => {})
+      res.download(snap.filePath, snap.fileName, () => {
+        unlink(snap.filePath, () => {})
+      })
+    } catch (err: any) {
+      if (filePath) unlink(filePath, () => {})
+      if (!res.headersSent) res.status(500).json({ ok: false, error: err?.message ?? 'تعذر تجهيز النسخة الاحتياطية' })
     }
   })
 

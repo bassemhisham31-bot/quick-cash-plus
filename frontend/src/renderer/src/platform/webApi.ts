@@ -232,6 +232,29 @@ export function hasStoredToken(): boolean {
   return !!authToken
 }
 
+/** (ويب) تحميل نسخة كاملة من البيانات على الجهاز — للأدمن بس. بيرجّع اسم الملف اللي نزل. */
+export async function downloadBackupToDevice(): Promise<string> {
+  const headers: Record<string, string> = {}
+  if (authToken) headers.Authorization = `Bearer ${authToken}`
+  const res = await fetch('/api/backup/download', { headers })
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null)
+    throw new Error(payload?.error ?? 'تعذر تحميل النسخة الاحتياطية')
+  }
+  const blob = await res.blob()
+  const match = /filename="?([^";]+)"?/.exec(res.headers.get('Content-Disposition') ?? '')
+  const fileName = match?.[1] ?? `quick-cash-plus-backup-${new Date().toISOString().slice(0, 10)}.sqlite`
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  return fileName
+}
+
 /* ------------------------------ الطباعة: السيرفر يبني المستند، والمتصفح يطبعه على طابعات الجهاز ------------------------------ */
 
 /**
