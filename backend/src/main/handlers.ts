@@ -113,6 +113,7 @@ import {
 import {
   getWhatsAppStatus,
   logoutWhatsApp,
+  notifyCustomerPaymentByWhatsApp,
   notifyDirectReturnByWhatsApp,
   notifySalesReturnByWhatsApp,
   sendCustomerStatementByWhatsApp,
@@ -428,8 +429,11 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'customers:getStatement': (customerId: number) => getCustomerStatement(customerId),
     'customers:getLedger': (customerId: number, filter?: StatementFilter) => getCustomerLedger(customerId, filter ?? {}),
     'customers:statementHtml': (customerId: number, filter?: StatementFilter) => buildCustomerStatementHtml(customerId, filter ?? {}),
-    'customers:recordPayment': (customerId: number, amount: number, method: PaymentMethod, note: string, userId: number) =>
-      recordCustomerPayment(customerId, amount, method, note, userId),
+    'customers:recordPayment': async (customerId: number, amount: number, method: PaymentMethod, note: string, userId: number) => {
+      const result = await recordCustomerPayment(customerId, amount, method, note, userId)
+      notifyCustomerPaymentByWhatsApp(customerId, amount, method, note).catch(() => {})
+      return result
+    },
     'customers:updateLoyaltyEnabled': (customerId: number, enabled: boolean) =>
       updateCustomerLoyaltyEnabled(customerId, enabled),
     'customers:linkVendor': (customerId: number, vendorId: number) => linkCustomerVendor(customerId, vendorId),
@@ -635,7 +639,14 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'treasury:setDefault': (id: number) => setDefaultTreasury(id),
     'treasury:delete': (id: number) => deleteTreasury(id),
     'treasury:listVouchers': (filter?: { type?: 'receipt' | 'payment'; from?: string; to?: string }) => listVouchers(filter ?? {}),
-    'treasury:createVoucher': (input: VoucherInput, userId: number) => createVoucher(input, userId),
+    'treasury:createVoucher': async (input: VoucherInput, userId: number) => {
+      const result = await createVoucher(input, userId)
+      // سند قبض من عميل = سداد → نفس رسالة السداد
+      if (input.type === 'receipt' && input.partyType === 'customer' && input.partyId) {
+        notifyCustomerPaymentByWhatsApp(Number(input.partyId), Number(input.amount), null, input.note).catch(() => {})
+      }
+      return result
+    },
     'treasury:deleteVoucher': (id: number) => deleteVoucher(id),
     'treasury:listTransfers': () => listTransfers(),
     'treasury:createTransfer': (input: TreasuryTransferInput, userId: number) => createTransfer(input, userId),

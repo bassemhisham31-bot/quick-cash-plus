@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { getDb, initDatabaseAtPath } from '../src/main/db'
 import { createProduct } from '../src/main/services/catalog'
-import { createCustomer, updateCustomer, listCustomers } from '../src/main/services/customers'
+import { createCustomer, updateCustomer, listCustomers, recordCustomerPayment } from '../src/main/services/customers'
 import { openDay } from '../src/main/services/cashSession'
 import { checkout } from '../src/main/services/pos'
 import { returnInvoiceLines, getInvoiceView } from '../src/main/services/invoices'
@@ -15,6 +15,7 @@ import { createDirectReturn } from '../src/main/services/directReturns'
 import { getWhatsAppSettings, updateWhatsAppSettings } from '../src/main/services/settings'
 import {
   __setFakeSocketForTests,
+  notifyCustomerPaymentByWhatsApp,
   notifyDirectReturnByWhatsApp,
   notifySalesReturnByWhatsApp,
   sendCustomerStatementByWhatsApp,
@@ -157,10 +158,25 @@ async function main(): Promise<void> {
   const st2 = await sendCustomerStatementByWhatsApp(noPhone.id, {})
   assert(!st2.ok && !!st2.error && sent.length === 5, 'عميل من غير رقم → رسالة خطأ واضحة')
 
+  console.log('5b) سداد من العميل')
+  const beforePay = sent.length
+  const paidCustomer = await recordCustomerPayment(customer.id, 150, 'cash', 'دفعة تحت الحساب', 1)
+  await notifyCustomerPaymentByWhatsApp(customer.id, 150, 'cash', 'دفعة تحت الحساب')
+  const m5b = sent[sent.length - 1]?.text ?? ''
+  console.log(m5b.split('\n').map((l) => '     ' + l).join('\n'))
+  assert(sent.length === beforePay + 1 && m5b.includes('150.00') && m5b.includes('وسيلة الدفع: نقدًا'), 'رسالة السداد اتبعتت بالمبلغ ووسيلة الدفع')
+  assert(
+    m5b.includes(`الرصيد السابق: ${(paidCustomer.balance + 150).toFixed(2)}`) && m5b.includes(`الرصيد الحالي: ${paidCustomer.balance.toFixed(2)}`),
+    'فيها الرصيد السابق والحالي الصحيحين'
+  )
+  await recordCustomerPayment(noPhone.id, 10, 'cash', '', 1)
+  await notifyCustomerPaymentByWhatsApp(noPhone.id, 10, 'cash', '')
+  assert(sent.length === beforePay + 1, 'عميل من غير رقم → السداد بيتسجل من غير رسالة')
+
   console.log('6) تعديل بيانات العميل')
   const edited = await updateCustomer(customer.id, { name: 'محمد بعد التعديل', phone: '01198765432', address: 'القاهرة', notes: '' })
   assert(edited.name === 'محمد بعد التعديل' && edited.phone === '01198765432' && edited.address === 'القاهرة', 'الاسم والموبايل والعنوان اتعدّلوا')
-  assert(edited.balance === balance, 'الرصيد ما اتغيرش بالتعديل')
+  assert(edited.balance === paidCustomer.balance, 'الرصيد ما اتغيرش بالتعديل')
   let threw = false
   await updateCustomer(customer.id, { name: '  ', phone: '' }).catch(() => (threw = true))
   assert(threw, 'اسم فاضي مرفوض')

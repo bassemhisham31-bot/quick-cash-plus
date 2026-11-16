@@ -259,6 +259,37 @@ export async function notifyDirectReturnByWhatsApp(returnId: number): Promise<vo
   }
 }
 
+/** بعد تسجيل سداد من العميل — رسالة بالمبلغ ووسيلة الدفع والرصيد قبل وبعد. نفس شروط رسالة البيع، واختياري بالكامل. */
+export async function notifyCustomerPaymentByWhatsApp(customerId: number, amount: number, method?: string | null, note?: string | null): Promise<void> {
+  try {
+    const target = await autoNotifyTarget(customerId)
+    if (!target) return
+    // سند القبض بيحدد الوسيلة من الخزينة — بنقراها من آخر سداد اتسجل للعميل
+    if (!method) {
+      const last = await getDb().execute({
+        sql: `SELECT method FROM payments WHERE party_type = 'customer' AND party_id = ? ORDER BY id DESC LIMIT 1`,
+        args: [customerId]
+      })
+      method = (last.rows[0] as any)?.method ?? 'cash'
+    }
+    const after = await customerBalance(customerId)
+    const message = [
+      `أهلاً ${target.name} 👋`,
+      `تم استلام سداد بمبلغ ${money(amount)}`,
+      `وسيلة الدفع: ${PAYMENT_LABELS[method as string] ?? method}`,
+      note?.trim() ? `ملاحظات: ${note.trim()}` : '',
+      after != null ? `الرصيد السابق: ${money(after + amount)}` : '',
+      after != null ? `الرصيد الحالي: ${money(after)}` : '',
+      `شكرًا لك — ${target.storeName}`
+    ]
+      .filter(Boolean)
+      .join('\n')
+    await sendWhatsAppMessage(target.phone, message)
+  } catch {
+    // إشعار واتساب اختياري بالكامل
+  }
+}
+
 async function customerBalance(customerId: number): Promise<number | null> {
   const rs = await getDb().execute({ sql: 'SELECT balance FROM customers WHERE id = ?', args: [customerId] })
   const row = rs.rows[0] as any
