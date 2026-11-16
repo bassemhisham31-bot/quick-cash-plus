@@ -7,10 +7,12 @@
 import { join } from 'path'
 import { existsSync, rmSync } from 'fs'
 import QRCode from 'qrcode'
-import { getCustomerPhoneAndName } from './customers'
+import { getDb } from '../db'
+import { getCustomerLedger, getCustomerPhoneAndName } from './customers'
 import { getStoreSettings, getWhatsAppSettings } from './settings'
 import { getInvoiceView } from './invoices'
-import type { WhatsAppSendResult, WhatsAppStatus } from '../../shared/types'
+import { getHeldInvoice } from './heldInvoices'
+import type { StatementFilter, WhatsAppSendResult, WhatsAppStatus } from '../../shared/types'
 
 let sock: any = null
 let currentQr: string | null = null
@@ -161,6 +163,198 @@ function renderTemplate(template: string, vars: Record<string, string>): string 
   return template.replace(/\{(\w+)\}/g, (match, key) => vars[key] ?? match)
 }
 
+/** للاختبارات فقط (scripts/whatsapp-messages-test.ts): جلسة وهمية بتلقط الرسائل بدل الإرسال الفعلي. */
+export function __setFakeSocketForTests(fake: { sendMessage: (jid: string, content: { text: string }) => Promise<void> } | null): void {
+  if (process.env.QCP_WA_TEST !== '1') throw new Error('test hook only')
+  sock = fake
+  connected = !!fake
+}
+
+const qtyText = (n: number): string => String(Math.round(n * 1000) / 1000)
+const money = (n: number): string => (Math.round(n * 100) / 100).toFixed(2)
+
+/** نفس شرط رسالة البيع: واتساب متصل + مفعّل + «إرسال بعد البيع» + العميل له رقم. */
+async function autoNotifyTarget(customerId: number | null): Promise<{ name: string; phone: string; storeName: string } | null> {
+  if (customerId == null || !connected) return null
+  const settings = await getWhatsAppSettings()
+  if (!settings.enabled || !settings.sendOnSale) return null
+  const party = await getCustomerPhoneAndName(customerId)
+  if (!party?.phone) return null
+  const store = await getStoreSettings()
+  return { name: party.name, phone: party.phone, storeName: store.name }
+}
+
+/** بعد مرتجع على فاتورة — رسالة للعميل بالأصناف المرتجعة والقيمة. اختياري بالكامل زي رسالة البيع. */
+export async function notifySalesReturnByWhatsApp(
+  invoiceId: number,
+  lines: { salesItemId: number; qty: number }[],
+  refundAmount: number
+): Promise<void> {
+  try {
+    if (!connected) return
+    const db = getDb()
+    const inv = (await db.execute({
+      sql: `SELECT i.number, i.customer_id AS customerId, c.is_walk_in AS isWalkIn
+            FROM sales_invoices i JOIN customers c ON c.id = i.customer_id WHERE i.id = ?`,
+      args: [invoiceId]
+    })).rows[0] as any
+    if (!inv || inv.isWalkIn) return
+    const target = await autoNotifyTarget(Number(inv.customerId))
+    if (!target) return
+    const itemsRs = await db.execute({ sql: 'SELECT id, product_name AS name FROM sales_items WHERE invoice_id = ?', args: [invoiceId] })
+    const names = new Map((itemsRs.rows as any[]).map((r) => [Number(r.id), String(r.name)]))
+    const items = lines
+      .filter((l) => Number(l.qty) > 0)
+      .map((l) => `• ${names.get(Number(l.salesItemId)) ?? 'صنف'} × ${qtyText(Number(l.qty))}`)
+      .join('\n')
+    const balance = await customerBalance(Number(inv.customerId))
+    const message = [
+      `أهلاً ${target.name} 👋`,
+      `تم تسجيل مرتجع على فاتورة رقم ${inv.number}`,
+      items,
+      `قيمة المرتجع: ${money(refundAmount)}`,
+      balance != null ? `رصيد حسابك الحالي: ${money(balance)}` : '',
+      target.storeName
+    ]
+      .filter(Boolean)
+      .join('\n')
+    await sendWhatsAppMessage(target.phone, message)
+  } catch {
+    // إشعار واتساب اختياري بالكامل
+  }
+}
+
+/** بعد مرتجع بدون فاتورة — نفس رسالة المرتجع (لو المرتجع على عميل مسجّل). */
+export async function notifyDirectReturnByWhatsApp(returnId: number): Promise<void> {
+  try {
+    if (!connected) return
+    const db = getDb()
+    const r = (await db.execute({
+      sql: `SELECT r.number, r.amount, r.refund_method AS refundMethod, r.customer_id AS customerId, c.is_walk_in AS isWalkIn
+            FROM direct_sales_returns r JOIN customers c ON c.id = r.customer_id WHERE r.id = ?`,
+      args: [returnId]
+    })).rows[0] as any
+    if (!r || r.isWalkIn) return
+    const target = await autoNotifyTarget(Number(r.customerId))
+    if (!target) return
+    const itemsRs = await db.execute({
+      sql: 'SELECT product_name AS name, qty, amount FROM direct_sales_return_items WHERE return_id = ? ORDER BY id',
+      args: [returnId]
+    })
+    const items = (itemsRs.rows as any[]).map((i) => `• ${i.name} × ${qtyText(Number(i.qty))} — ${money(Number(i.amount))}`).join('\n')
+    const balance = await customerBalance(Number(r.customerId))
+    const message = [
+      `أهلاً ${target.name} 👋`,
+      `تم تسجيل مرتجع رقم ${r.number}`,
+      items,
+      `قيمة المرتجع: ${money(Number(r.amount))} (${r.refundMethod === 'credit' ? 'خصم من رصيد الحساب' : 'رد نقدي'})`,
+      balance != null ? `رصيد حسابك الحالي: ${money(balance)}` : '',
+      target.storeName
+    ]
+      .filter(Boolean)
+      .join('\n')
+    await sendWhatsAppMessage(target.phone, message)
+  } catch {
+    // إشعار واتساب اختياري بالكامل
+  }
+}
+
+async function customerBalance(customerId: number): Promise<number | null> {
+  const rs = await getDb().execute({ sql: 'SELECT balance FROM customers WHERE id = ?', args: [customerId] })
+  const row = rs.rows[0] as any
+  return row ? Number(row.balance) : null
+}
+
+/**
+ * فاتورة «حفظ بدون ترحيل» — نفس رسالة البيع (نفس القالب والشروط) برقم الفاتورة غير المرحّلة.
+ * بنعلّم في الـpayload إن الرسالة اتبعتت عشان «الحفظ النهائي» مايبعتش نفس الرسالة تاني.
+ */
+export async function sendHeldInvoiceByWhatsApp(heldId: number): Promise<WhatsAppSendResult> {
+  try {
+    const held = await getHeldInvoice(heldId)
+    if (!held) return { ok: false, error: 'الفاتورة غير موجودة' }
+    const target = await autoNotifyTarget(held.payload.customerId)
+    if (!target) return { ok: false }
+    const settings = await getWhatsAppSettings()
+    const items = held.payload.lines
+      .map((l) => `• ${l.name} × ${qtyText(l.qty)} — ${money(l.qty * l.unitPrice - (l.discount || 0))}`)
+      .join('\n')
+    const message = renderTemplate(withItemsPlaceholder(settings.messageTemplate, items), {
+      items,
+      customerName: target.name,
+      invoiceNumber: String(held.id),
+      total: money(held.total),
+      storeName: target.storeName
+    })
+    const result = await sendWhatsAppMessage(target.phone, message)
+    if (result.ok) {
+      await getDb().execute({
+        sql: 'UPDATE held_invoices SET payload = ? WHERE id = ?',
+        args: [JSON.stringify({ ...held.payload, whatsappSent: true }), heldId]
+      })
+    }
+    return result
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر إرسال رسالة واتساب' }
+  }
+}
+
+/** أقصى عدد حركات في رسالة كشف الحساب — الرسالة نص، والكشف الطويل بيتبعت آخره مع رصيد ما قبله. */
+const STATEMENT_MAX_ENTRIES = 40
+
+/** إرسال كشف حساب العميل (نص) على واتساب — بضغطة من شاشة كشف الحساب، بنفس فلتر التاريخ المعروض. */
+export async function sendCustomerStatementByWhatsApp(customerId: number, filter: StatementFilter = {}): Promise<WhatsAppSendResult> {
+  try {
+    if (!connected || !sock) return { ok: false, error: 'واتساب غير متصل — اربط الجلسة من الإعدادات أولًا' }
+    const ledger = await getCustomerLedger(customerId, filter)
+    if (!ledger.customerPhone?.trim()) return { ok: false, error: 'العميل مالوش رقم موبايل — ضيف الرقم من «تعديل» الأول' }
+    const store = await getStoreSettings()
+    const shown = ledger.entries.slice(-STATEMENT_MAX_ENTRIES)
+    const skipped = ledger.entries.length - shown.length
+    // رصيد ما قبل أول حركة معروضة في الرسالة
+    const opening = skipped > 0 ? (ledger.entries[skipped - 1].balance ?? 0) : (ledger.openingBalance ?? 0)
+    const closing = ledger.entries.length ? (ledger.entries[ledger.entries.length - 1].balance ?? 0) : (ledger.openingBalance ?? 0)
+    const period =
+      filter.from || filter.to ? `الفترة: ${filter.from ? 'من ' + filter.from : ''} ${filter.to ? 'إلى ' + filter.to : ''}`.trim() : ''
+    const rows = shown.map((e) => {
+      const parts = [`${e.date.slice(0, 10)} — ${e.description}`]
+      const amounts: string[] = []
+      if (e.debit) amounts.push(`عليك ${money(e.debit)}`)
+      if (e.credit) amounts.push(`لك ${money(e.credit)}`)
+      amounts.push(`الرصيد ${money(e.balance ?? 0)}`)
+      parts.push('   ' + amounts.join(' | '))
+      return parts.join('\n')
+    })
+    const message = [
+      `📄 كشف حساب — ${store.name}`,
+      `العميل: ${ledger.customerName}`,
+      period,
+      skipped > 0 ? `(آخر ${shown.length} حركة من ${ledger.entries.length})` : '',
+      `رصيد سابق: ${money(opening)}`,
+      '——————————',
+      rows.length ? rows.join('\n') : 'لا توجد حركات في الفترة',
+      '——————————',
+      filter.to ? `رصيد نهاية الفترة: ${money(closing)}` : '',
+      `الرصيد الحالي المستحق: ${money(ledger.balance)}`
+    ]
+      .filter(Boolean)
+      .join('\n')
+    return await sendWhatsAppMessage(ledger.customerPhone, message)
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر إرسال كشف الحساب' }
+  }
+}
+
+/** لو القالب المحفوظ مفيهوش {items} بنضيف الأصناف قبل سطر الإجمالي (أو في الآخر) عشان تظهر من غير ما العميل يعدّل القالب */
+function withItemsPlaceholder(template: string, items: string): string {
+  if (!items || template.includes('{items}')) return template
+  const rows = template.split('\n')
+  const at = rows.findIndex((r) => r.includes('{total}'))
+  if (at >= 0) rows.splice(at, 0, '{items}')
+  else rows.push('{items}')
+  return rows.join('\n')
+}
+
 /** بعد كل عملية بيع ناجحة — رسالة نصية للعميل (لو مفعّل وله رقم). أي فشل هنا مابيأثرش على البيع. */
 export async function notifySaleByWhatsApp(
   customerId: number | null,
@@ -176,18 +370,8 @@ export async function notifySaleByWhatsApp(
     if (!party?.phone) return
     const store = await getStoreSettings()
     const view = await getInvoiceView(invoiceId).catch(() => null)
-    const qtyFmt = (n: number): string => String(Math.round(n * 1000) / 1000)
-    const items = (view?.lines ?? []).map((l) => `• ${l.productName} × ${qtyFmt(l.qty)} — ${l.total.toFixed(2)}`).join('\n')
-    // لو القالب المحفوظ مفيهوش {items} بنضيف الأصناف قبل سطر الإجمالي (أو في الآخر) عشان تظهر من غير ما العميل يعدّل القالب
-    let template = settings.messageTemplate
-    if (items && !template.includes('{items}')) {
-      const rows = template.split('\n')
-      const at = rows.findIndex((r) => r.includes('{total}'))
-      if (at >= 0) rows.splice(at, 0, '{items}')
-      else rows.push('{items}')
-      template = rows.join('\n')
-    }
-    const message = renderTemplate(template, {
+    const items = (view?.lines ?? []).map((l) => `• ${l.productName} × ${qtyText(l.qty)} — ${l.total.toFixed(2)}`).join('\n')
+    const message = renderTemplate(withItemsPlaceholder(settings.messageTemplate, items), {
       items,
       customerName: party.name,
       invoiceNumber,

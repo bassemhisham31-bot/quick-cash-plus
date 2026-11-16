@@ -13,6 +13,8 @@ interface Props {
   filter?: { from: string; to: string }
   onFilterChange?: (filter: { from: string; to: string }) => void
   onPrint?: () => void
+  /** إرسال الكشف (بنفس الفلتر) للعميل على واتساب */
+  onSendWhatsApp?: () => Promise<void>
 }
 
 export function StatementModal({
@@ -23,7 +25,8 @@ export function StatementModal({
   unpaidInvoices,
   filter,
   onFilterChange,
-  onPrint
+  onPrint,
+  onSendWhatsApp
 }: Props): JSX.Element {
   const withBalance = statement.openingBalance !== undefined
   const { t } = useTranslation()
@@ -32,6 +35,7 @@ export function StatementModal({
   const [note, setNote] = useState('')
   const [invoiceId, setInvoiceId] = useState<number | ''>('')
   const [saving, setSaving] = useState(false)
+  const [sendingWa, setSendingWa] = useState(false)
 
   async function handleSubmit(): Promise<void> {
     const value = Number(amount)
@@ -69,7 +73,7 @@ export function StatementModal({
           {t('parties.balance')}: {currency(statement.balance)}
         </div>
 
-        {(filter && onFilterChange) || onPrint ? (
+        {(filter && onFilterChange) || onPrint || onSendWhatsApp ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
             {filter && onFilterChange && (
               <>
@@ -88,11 +92,30 @@ export function StatementModal({
                 )}
               </>
             )}
-            {onPrint && (
-              <button type="button" className="qcp-btn qcp-btn-primary" style={{ marginInlineStart: 'auto' }} onClick={onPrint}>
-                🖨 طباعة كشف الحساب
-              </button>
-            )}
+            <div style={{ display: 'flex', gap: 8, marginInlineStart: 'auto' }}>
+              {onSendWhatsApp && (
+                <button
+                  type="button"
+                  className="qcp-btn qcp-btn-secondary"
+                  disabled={sendingWa}
+                  onClick={async () => {
+                    setSendingWa(true)
+                    try {
+                      await onSendWhatsApp()
+                    } finally {
+                      setSendingWa(false)
+                    }
+                  }}
+                >
+                  {sendingWa ? '...جاري الإرسال' : '🟢 إرسال واتساب'}
+                </button>
+              )}
+              {onPrint && (
+                <button type="button" className="qcp-btn qcp-btn-primary" onClick={onPrint}>
+                  🖨 طباعة كشف الحساب
+                </button>
+              )}
+            </div>
           </div>
         ) : null}
 

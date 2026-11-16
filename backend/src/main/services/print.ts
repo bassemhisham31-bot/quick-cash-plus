@@ -32,6 +32,7 @@ import type {
   ShiftSummaryReport,
   StockPermitView,
   StoreSettings,
+  HeldPaymentInfo,
   TaxSettings
 } from '../../shared/types'
 
@@ -1862,12 +1863,45 @@ async function printUnpostedDocument(
       net,
       netLabel: 'صافي الفاتورة',
       balanceBefore,
-      balanceAfter: balanceBefore != null ? balanceBefore + net : null
+      balanceAfter: balanceBefore != null ? balanceBefore + net : null,
+      extraHtml: unpostedPaymentHtml(held.payload.payment, net)
     },
     'orderCheck',
     'معاينة فاتورة غير مرحّلة',
     preview
   )
+}
+
+/** اختيارات شاشة الدفع المحفوظة مع الفاتورة غير المرحّلة (طريقة الدفع/المدفوع/الباقي) */
+function unpostedPaymentHtml(payment: HeldPaymentInfo | undefined, net: number): string {
+  if (!payment) return ''
+  const labels: Record<string, string> = {
+    cash: 'نقدًا',
+    credit: 'آجل',
+    card: 'بنكي',
+    wallet: 'محفظة',
+    mixed: 'تقسيم الدفع',
+    vodafone_cash: 'فودافون كاش',
+    instapay: 'InstaPay'
+  }
+  const line = (label: string, value: string): string =>
+    `<div class="info-line"><span>${escapeHtml(label)}</span><span>${escapeHtml(value)}</span></div>`
+  let html = line('طريقة الدفع', labels[payment.method] ?? payment.method)
+  if (payment.method === 'cash') {
+    const received = Number(payment.received) || 0
+    if (received > net + 0.001) html += line('المستلم', docNum.format(received)) + line('الباقي للعميل', docNum.format(received - net))
+  } else if (payment.method === 'mixed') {
+    let paidSum = 0
+    for (const r of payment.splitRows ?? []) {
+      const amount = Number(r.amount) || 0
+      if (amount <= 0) continue
+      paidSum += amount
+      html += line(labels[r.method] ?? r.method, docNum.format(amount))
+    }
+    if (net - paidSum > 0.01) html += line('الباقي آجل', docNum.format(net - paidSum))
+  }
+  if ((payment.method === 'credit' || payment.method === 'mixed') && payment.dueDate) html += line('تاريخ الاستحقاق', payment.dueDate)
+  return html
 }
 
 /** طباعة/معاينة مرتجع مبيعات بدون فاتورة */

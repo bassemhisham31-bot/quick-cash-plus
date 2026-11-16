@@ -70,6 +70,25 @@ export async function createCustomer(input: CustomerInput): Promise<CustomerView
   return fetchCustomerView(Number(rs.lastInsertRowid))
 }
 
+/** تعديل بيانات العميل الأساسية (الاسم/الموبايل/العنوان/الملاحظات) — الرصيد والحركات مابتتأثرش. */
+export async function updateCustomer(
+  customerId: number,
+  input: { name: string; phone: string; address?: string; notes?: string }
+): Promise<CustomerView> {
+  const db = getDb()
+  const name = (input?.name ?? '').trim()
+  if (!name) throw new Error('اسم العميل مطلوب')
+  const rs = await db.execute({ sql: 'SELECT is_walk_in FROM customers WHERE id = ? AND deleted_at IS NULL', args: [customerId] })
+  const row = rs.rows[0] as any
+  if (!row) throw new Error('العميل غير موجود')
+  if (row.is_walk_in) throw new Error('العميل النقدي الافتراضي لا يمكن تعديله')
+  await db.execute({
+    sql: 'UPDATE customers SET name = ?, phone = ?, address = ?, notes = ? WHERE id = ?',
+    args: [name, (input.phone ?? '').trim() || null, (input.address ?? '').trim() || null, (input.notes ?? '').trim() || null, customerId]
+  })
+  return fetchCustomerView(customerId)
+}
+
 export async function updateCustomerLoyaltyEnabled(customerId: number, enabled: boolean): Promise<CustomerView> {
   const db = getDb()
   await db.execute({

@@ -695,6 +695,8 @@ export interface SplitPaymentInput {
 }
 
 export interface CheckoutInput {
+  /** (ويب) الفاتورة دي كانت محفوظة بدون ترحيل واتبعتت رسالتها على واتساب بالفعل — ماتتبعتش تاني */
+  skipWhatsApp?: boolean
   customerId: number | null
   /** اسم مكتوب يدويًا عند الدفع — بيتسجل على الفاتورة لو العميل عابر (من غير ملف عميل) */
   customerLabel?: string
@@ -1445,6 +1447,18 @@ export interface HeldInvoicePayload {
   customerId: number | null
   customerLabel: string
   warehouseId: number | null
+  /** (حفظ بدون ترحيل) اختيارات شاشة الدفع وقت الحفظ — بترجع زي ما هي في «الحفظ النهائي» وبتظهر في الطباعة */
+  payment?: HeldPaymentInfo
+  /** رسالة واتساب اتبعتت للعميل وقت الحفظ بدون ترحيل — الحفظ النهائي مايكررهاش */
+  whatsappSent?: boolean
+}
+
+export interface HeldPaymentInfo {
+  method: PaymentMethod
+  /** المبلغ المستلم من العميل (نقدي) — فاضي = الإجمالي بالظبط */
+  received: string
+  splitRows: { method: SplitPaymentInput['method']; amount: string }[]
+  dueDate: string
 }
 
 export interface HeldInvoiceInput {

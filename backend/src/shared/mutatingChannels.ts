@@ -58,6 +58,8 @@ export const MUTATING_CHANNELS = new Set<string>([
   'cash:openDay',
   'cash:closeDay',
   'customers:create',
+  'customers:update',
+  'customers:importExcel',
   'customers:recordPayment',
   'customers:updateLoyaltyEnabled',
   'customers:linkVendor',

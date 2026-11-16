@@ -19,6 +19,7 @@ import type {
   CartLine,
   HeldInvoice,
   HeldInvoiceInput,
+  HeldPaymentInfo,
   Category,
   CustomerView,
   DeliveryDriver,
@@ -336,6 +337,11 @@ export function PosPage(): JSX.Element {
   const [pendingFinalize, setPendingFinalize] = useState(false)
   const cartRef = useRef({ cart, discountType, discountValue, customerId, customerLabel, warehouseId, total: 0 })
   cartRef.current = { cart, discountType, discountValue, customerId, customerLabel, warehouseId, total }
+  // شاشة الدفع مفتوحة لـ«حفظ بدون ترحيل» (نفس الشاشة بالظبط، بس التأكيد بيحفظ من غير ترحيل)
+  const [unpostedPay, setUnpostedPay] = useState(false)
+  // اختيارات الدفع المحفوظة مع الفاتورة غير المرحّلة — بترجع في شاشة الدفع وقت الحفظ النهائي
+  const pendingPaymentRef = useRef<HeldPaymentInfo | null>(null)
+  const finalizingWhatsAppSentRef = useRef(false)
   const autoHoldRef = useRef(false)
   autoHoldRef.current = !!posUiSettings && posUiSettings.holdInvoicesEnabled && posUiSettings.autoHoldOnLeave
 
@@ -356,7 +362,7 @@ export function PosPage(): JSX.Element {
     window.api.held.list().then(setHeldList).catch(() => {})
   }
 
-  function buildHeldInput(): HeldInvoiceInput {
+  function buildHeldInput(payment?: HeldPaymentInfo): HeldInvoiceInput {
     const c = cartRef.current
     return {
       payload: {
@@ -365,7 +371,8 @@ export function PosPage(): JSX.Element {
         discountValue: Number(c.discountValue) || 0,
         customerId: c.customerId,
         customerLabel: c.customerLabel,
-        warehouseId: c.warehouseId
+        warehouseId: c.warehouseId,
+        ...(payment ? { payment } : {})
       },
       total: c.total
     }
@@ -373,6 +380,7 @@ export function PosPage(): JSX.Element {
 
   function resetCart(): void {
     setFinalizingHeldId(null)
+    finalizingWhatsAppSentRef.current = false
     setCart([])
     setDiscountValue('')
     setCustomerLabel('')
@@ -380,20 +388,57 @@ export function PosPage(): JSX.Element {
     setCustomerId(null)
   }
 
-  async function holdCurrent(): Promise<void> {
+  /** «حفظ بدون ترحيل»: بتفتح شاشة الدفع زي الترحيل بالظبط، والحفظ الفعلي في saveUnposted بعد التأكيد */
+  function startUnpostedSave(): void {
     if (!user || !cart.length) return
-    const newId = await window.api.held.hold(buildHeldInput(), user.id)
-    if (unpostedMode) {
+    setUnpostedPay(true)
+    openPayment()
+  }
+
+  async function saveUnposted(): Promise<void> {
+    if (!user || !cart.length || checkingOut) return
+    setError(null)
+    if (!validatePayment()) return
+    setCheckingOut(true)
+    try {
+      const payment: HeldPaymentInfo = {
+        method: paymentMethod,
+        received: paid,
+        splitRows: paymentMethod === 'mixed' ? splitRows : [],
+        dueDate: needsDueDate ? dueDate : ''
+      }
+      const newId = await window.api.held.hold(buildHeldInput(payment), user.id)
       // لو دي فاتورة غير مرحّلة اتفتحت واتعدّلت: النسخة الجديدة بتحل محل القديمة
       const oldId = finalizingHeldRef.current
       if (oldId != null) await window.api.held.delete(oldId).catch(() => {})
+      playSound('save')
+      setShowPayment(false)
+      setUnpostedPay(false)
       resetCart()
+      setPaid('')
+      setSplitRows([])
+      setDueDate('')
+      setPaymentMethod('cash')
       setHeldMessage(`💾 الفاتورة اتحفظت بدون ترحيل (رقم ${newId}) — بعد التحصيل افتح «غير مرحّلة» واعمل حفظ نهائي`)
       refreshHeld()
+      // رسالة واتساب للعميل زي البيع بالظبط (لو واتساب مفعّل والعميل له رقم) — فشلها مابيأثرش على الحفظ
+      void window.api.held.sendWhatsApp(newId).catch(() => {})
       const pr = await window.api.held.print(newId, false)
       if (pr && !pr.ok && pr.error) setHeldMessage(`💾 اتحفظت بدون ترحيل (رقم ${newId}) — الطباعة فشلت: ${pr.error}`)
+    } catch (err: any) {
+      setError(err?.message ?? 'تعذر حفظ الفاتورة')
+    } finally {
+      setCheckingOut(false)
+    }
+  }
+
+  async function holdCurrent(): Promise<void> {
+    if (!user || !cart.length) return
+    if (unpostedMode) {
+      startUnpostedSave()
       return
     }
+    await window.api.held.hold(buildHeldInput(), user.id)
     resetCart()
     setHeldMessage('⏸ الفاتورة اتعلّقت — ترجعلها من زرار "معلّقة"')
     refreshHeld()
@@ -412,6 +457,8 @@ export function PosPage(): JSX.Element {
       setCustomerLabel(p.customerLabel ?? '')
       if (p.warehouseId) setWarehouseId(p.warehouseId)
       setFinalizingHeldId(held.id)
+      pendingPaymentRef.current = p.payment ?? null
+      finalizingWhatsAppSentRef.current = !!p.whatsappSent
       setShowHeld(false)
       setPendingFinalize(true)
       refreshHeld()
@@ -442,7 +489,17 @@ export function PosPage(): JSX.Element {
   useEffect(() => {
     if (pendingFinalize && cart.length) {
       setPendingFinalize(false)
+      setUnpostedPay(false)
       openPayment()
+      // نفس اختيارات الدفع اللي اتحفظت مع الفاتورة (تتعدّل عادي قبل الحفظ النهائي)
+      const saved = pendingPaymentRef.current
+      pendingPaymentRef.current = null
+      if (saved) {
+        setPaymentMethod(saved.method)
+        setPaid(saved.received ?? '')
+        setSplitRows(saved.splitRows ?? [])
+        if (saved.dueDate) setDueDate(saved.dueDate)
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingFinalize, cart])
@@ -671,7 +728,10 @@ export function PosPage(): JSX.Element {
     const term = search.trim()
     if (!term) {
       // Enter في خانة بحث فاضية = افتح الدفع على طول (أسرع للكاشير اللي شغال بالباركود)
-      if (cart.length) openPayment()
+      if (cart.length) {
+        setUnpostedPay(false)
+        openPayment()
+      }
       return
     }
 
@@ -734,41 +794,54 @@ export function PosPage(): JSX.Element {
     setShowPayment(true)
   }
 
-  async function handleCheckout(): Promise<void> {
-    if (!user || !warehouseId || checkingOut) return
-    setError(null)
-
+  /** نفس شروط شاشة الدفع للترحيل والحفظ بدون ترحيل — بترجّع false وتعرض الخطأ لو فيه حاجة ناقصة */
+  function validatePayment(): boolean {
     if (paymentMethod === 'credit' && customerId === null) {
       setError('لازم تختار عميل حقيقي عشان تسجل بيع آجل')
-      return
+      return false
     }
     if (paymentMethod === 'cash' && paidNum < total - 0.001) {
       setError('المبلغ المستلم أقل من الصافي — لو العميل هيدفع الباقي بعدين اختار "آجل"')
-      return
+      return false
     }
     if (paymentMethod === 'mixed') {
       if (splitPaid <= 0) {
         setError('اكتب المبالغ المدفوعة لكل وسيلة')
-        return
+        return false
       }
       if (splitRemaining < -0.01) {
         setError('مجموع المبالغ أكبر من المطلوب دفعه')
-        return
+        return false
       }
       if (splitRemaining > 0.01 && customerId === null) {
         setError('لسه فيه باقي ' + currency(splitRemaining) + ' — كمّل الدفع أو اختار عميل عشان يتسجل عليه آجل')
-        return
+        return false
       }
     }
     if (needsDueDate && !dueDate) {
       setError('اختار تاريخ الاستحقاق للجزء الآجل')
-      return
+      return false
     }
+    return true
+  }
+
+  /** زرار التأكيد في شاشة الدفع (و Enter): ترحيل عادي أو حفظ بدون ترحيل حسب اللي فتح الشاشة */
+  function confirmPayment(): void {
+    if (unpostedPay) void saveUnposted()
+    else void handleCheckout()
+  }
+
+  async function handleCheckout(): Promise<void> {
+    if (!user || !warehouseId || checkingOut) return
+    setError(null)
+    if (!validatePayment()) return
 
     setCheckingOut(true)
     try {
       const result = await window.api.pos.checkout(
         {
+          // الفاتورة كانت محفوظة بدون ترحيل ورسالتها اتبعتت وقت الحفظ → ماتتبعتش تاني
+          skipWhatsApp: finalizingHeldRef.current != null && finalizingWhatsAppSentRef.current,
           customerId,
           customerLabel,
           warehouseId,
@@ -823,6 +896,7 @@ export function PosPage(): JSX.Element {
       if (finalizingHeldRef.current != null) {
         await window.api.held.delete(finalizingHeldRef.current).catch(() => {})
         setFinalizingHeldId(null)
+        finalizingWhatsAppSentRef.current = false
         refreshHeld()
       }
       setCart([])
@@ -1336,7 +1410,12 @@ export function PosPage(): JSX.Element {
 
         <div className="rst-actions" style={{ gridTemplateColumns: '1fr' }}>
           {error && !showPayment && <div className="rst-error" style={{ margin: 0 }}>⚠️ {error}</div>}
-          <button type="button" className="rst-big-btn pay pos-pay-btn" disabled={cart.length === 0 || checkingOut} onClick={openPayment}>
+          <button type="button" className="rst-big-btn pay pos-pay-btn" disabled={cart.length === 0 || checkingOut}
+            onClick={() => {
+              setUnpostedPay(false)
+              openPayment()
+            }}
+          >
             <span>💳 دفع</span>
             <span>{currency(total)}</span>
             <kbd>Enter</kbd>
@@ -1543,7 +1622,12 @@ export function PosPage(): JSX.Element {
               if (e.key === 'Escape') setShowPayment(false)
             }}
           >
-            <h3 style={{ marginTop: 0 }}>💳 الدفع</h3>
+            <h3 style={{ marginTop: 0 }}>{unpostedPay ? '💾 الدفع — حفظ بدون ترحيل' : '💳 الدفع'}</h3>
+            {unpostedPay && (
+              <div style={{ fontSize: 12.5, color: 'var(--qcp-warning, #a8701e)', fontWeight: 700, marginBottom: 8 }}>
+                الفاتورة هتتحفظ وتتطبع من غير ترحيل (المخزون والرصيد مش هيتأثروا) — الترحيل من «غير مرحّلة» ← حفظ نهائي
+              </div>
+            )}
 
             <div className="rst-pay-total">
               <div className="label">المطلوب</div>
@@ -1653,7 +1737,7 @@ export function PosPage(): JSX.Element {
                   placeholder={String(Math.round(total * 100) / 100)}
                   onChange={(e) => setPaid(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') void handleCheckout()
+                    if (e.key === 'Enter') confirmPayment()
                   }}
                   style={{ fontSize: 20, fontWeight: 800 }}
                 />
@@ -1782,9 +1866,9 @@ export function PosPage(): JSX.Element {
                 style={{ flex: 2 }}
                 autoFocus={paymentMethod !== 'cash'}
                 disabled={checkingOut}
-                onClick={() => void handleCheckout()}
+                onClick={confirmPayment}
               >
-                {checkingOut ? '...جاري التسجيل' : `✓ ${t('pos.checkout')} ${currency(total)}`}
+                {checkingOut ? '...جاري التسجيل' : unpostedPay ? `💾 حفظ بدون ترحيل وطباعة ${currency(total)}` : `✓ ${t('pos.checkout')} ${currency(total)}`}
               </button>
               <button type="button" className="qcp-btn qcp-btn-secondary" style={{ flex: 1 }} disabled={checkingOut} onClick={() => setShowPayment(false)}>
                 رجوع

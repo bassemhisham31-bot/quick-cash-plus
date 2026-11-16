@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
 import { StatementModal } from '../../components/StatementModal'
@@ -8,12 +8,21 @@ import { playSound } from '../../lib/sounds'
 import type { CustomerView, PaymentMethod, StatementView, VendorView } from '../../../../shared/types'
 
 const emptyForm = { name: '', phone: '', address: '', notes: '', openingBalance: '0', loyaltyEnabled: true }
+/** عدد الكروت اللي بتترسم في المرة — آلاف العملاء مرة واحدة بيتقّلوا فتح الشاشة */
+const PAGE_SIZE = 60
 
 export function CustomersPage(): JSX.Element {
   const { t } = useTranslation()
   const user = useAppStore((s) => s.user)
-  const [customers, setCustomers] = useState<CustomerView[]>([])
   const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+  const [editing, setEditing] = useState<CustomerView | null>(null)
+  const [editForm, setEditForm] = useState({ name: '', phone: '', address: '', notes: '' })
+  const [editError, setEditError] = useState<string | null>(null)
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [linkOpenFor, setLinkOpenFor] = useState<number | null>(null)
+  const [importing, setImporting] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [statementFor, setStatementFor] = useState<CustomerView | null>(null)
@@ -23,9 +32,13 @@ export function CustomersPage(): JSX.Element {
   const [linkChoice, setLinkChoice] = useState<Record<number, string>>({})
   const [allCustomers, setAllCustomers] = useState<CustomerView[]>([])
 
+  // تحميلة واحدة لكل العملاء، والبحث بيتفلتر محليًا (من غير نداء سيرفر مع كل حرف)
   async function refresh(): Promise<void> {
-    setCustomers(await window.api.customers.list(search))
-    setAllCustomers(await window.api.customers.list(''))
+    try {
+      setAllCustomers(await window.api.customers.list(''))
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -38,10 +51,82 @@ export function CustomersPage(): JSX.Element {
   const debtors = allCustomers.filter((c) => c.balance > 0)
   const totalDebt = debtors.reduce((sum, c) => sum + c.balance, 0)
 
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return allCustomers
+    const digits = q.replace(/\s/g, '')
+    return allCustomers.filter((c) => c.name.toLowerCase().includes(q) || (c.phone ?? '').replace(/\s/g, '').includes(digits))
+  }, [allCustomers, search])
+  const customers = filtered.slice(0, visibleCount)
+
   useEffect(() => {
-    const id = setTimeout(() => window.api.customers.list(search).then(setCustomers), 250)
-    return () => clearTimeout(id)
+    setVisibleCount(PAGE_SIZE)
   }, [search])
+
+  function openEdit(customer: CustomerView): void {
+    setEditError(null)
+    setEditForm({ name: customer.name, phone: customer.phone ?? '', address: customer.address ?? '', notes: customer.notes ?? '' })
+    setEditing(customer)
+  }
+
+  async function handleEditSubmit(e: FormEvent): Promise<void> {
+    e.preventDefault()
+    if (!editing || savingEdit) return
+    setSavingEdit(true)
+    setEditError(null)
+    try {
+      await window.api.customers.update(editing.id, {
+        name: editForm.name.trim(),
+        phone: editForm.phone.trim(),
+        address: editForm.address.trim(),
+        notes: editForm.notes.trim()
+      })
+      playSound('save')
+      setEditing(null)
+      refresh()
+    } catch (err: any) {
+      setEditError(err?.message ?? 'تعذر حفظ التعديل')
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
+  async function handleExport(): Promise<void> {
+    const r = await window.api.customers.exportExcel()
+    if (!r.ok && r.error) await alertDialog(r.error)
+  }
+
+  async function handleImport(): Promise<void> {
+    if (importing) return
+    setImporting(true)
+    try {
+      const r = await window.api.customers.importExcel()
+      if (r.canceled) return
+      if (!r.ok) {
+        await alertDialog(r.error ?? 'تعذر الاستيراد')
+        return
+      }
+      const errors = r.rowErrors.slice(0, 12).map((e) => `• صف ${e.row}: ${e.message}`)
+      const more = r.rowErrors.length > 12 ? [`... و ${r.rowErrors.length - 12} صف تاني`] : []
+      await alertDialog(
+        [
+          `✅ الاستيراد خلص`,
+          `عملاء اتحدّثت بياناتهم: ${r.updated}`,
+          `عملاء جداد اتضافوا: ${r.created}`,
+          ...(r.rowErrors.length ? ['', `⚠️ صفوف ما اتنفذتش (${r.rowErrors.length}):`, ...errors, ...more] : [])
+        ].join('\n')
+      )
+      refresh()
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  async function sendStatementWhatsApp(): Promise<void> {
+    if (!statementFor) return
+    const r = await window.api.customers.sendStatementWhatsApp(statementFor.id, ledgerFilter(statementFilter))
+    await alertDialog(r.ok ? `✅ كشف الحساب اتبعت على واتساب (${statementFor.phone ?? ''})` : (r.error ?? 'تعذر إرسال كشف الحساب'))
+  }
 
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault()
@@ -111,9 +196,22 @@ export function CustomersPage(): JSX.Element {
         style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
       >
         <h1>{t('parties.customersTitle')}</h1>
-        <button className="qcp-btn qcp-btn-primary" onClick={() => setShowForm(true)}>
-          + {t('parties.addCustomer')}
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="qcp-btn qcp-btn-secondary" title="تنزيل كل العملاء في ملف إكسيل" onClick={handleExport}>
+            ⬇️ تصدير إكسيل
+          </button>
+          <button
+            className="qcp-btn qcp-btn-secondary"
+            title="ارفع نفس ملف التصدير بعد تعديل الأرقام — العميل بيتحدّث بالكود"
+            disabled={importing}
+            onClick={handleImport}
+          >
+            {importing ? '...جاري الاستيراد' : '⬆️ استيراد إكسيل'}
+          </button>
+          <button className="qcp-btn qcp-btn-primary" onClick={() => setShowForm(true)}>
+            + {t('parties.addCustomer')}
+          </button>
+        </div>
       </div>
 
       <div className="qcp-grid qcp-grid-4" style={{ marginBottom: 18 }}>
@@ -147,9 +245,23 @@ export function CustomersPage(): JSX.Element {
           <div key={c.id} className="qcp-card" style={{ cursor: 'pointer' }} onClick={() => openStatement(c)}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div className="qcp-icon-badge purple">👤</div>
-              <span className={`qcp-pill ${c.balance > 0 ? 'critical' : 'success'}`}>
-                {c.balance > 0 ? t('parties.debtor') : t('parties.settled')}
-              </span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="qcp-btn qcp-btn-secondary"
+                  style={{ padding: '2px 10px', fontSize: 12 }}
+                  title="تعديل بيانات العميل"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    openEdit(c)
+                  }}
+                >
+                  ✏️ تعديل
+                </button>
+                <span className={`qcp-pill ${c.balance > 0 ? 'critical' : 'success'}`}>
+                  {c.balance > 0 ? t('parties.debtor') : t('parties.settled')}
+                </span>
+              </div>
             </div>
             <div style={{ fontWeight: 700, marginBottom: 2 }}>{c.name}</div>
             <div style={{ color: 'var(--qcp-ink-faint)', fontSize: 12 }}>{c.phone || '—'}</div>
@@ -184,6 +296,14 @@ export function CustomersPage(): JSX.Element {
                     {t('parties.unlink')}
                   </button>
                 </div>
+              ) : linkOpenFor !== c.id ? (
+                <button
+                  className="qcp-btn qcp-btn-secondary"
+                  style={{ padding: '2px 8px', fontSize: 11 }}
+                  onClick={() => setLinkOpenFor(c.id)}
+                >
+                  🔗 {t('parties.linkVendorPlaceholder')}
+                </button>
               ) : (
                 <div style={{ display: 'flex', gap: 4 }}>
                   <select
@@ -212,8 +332,55 @@ export function CustomersPage(): JSX.Element {
             </div>
           </div>
         ))}
-        {customers.length === 0 && <p style={{ color: 'var(--qcp-ink-faint)' }}>—</p>}
+        {customers.length === 0 && <p style={{ color: 'var(--qcp-ink-faint)' }}>{loading ? 'جاري التحميل...' : '—'}</p>}
       </div>
+      {filtered.length > customers.length && (
+        <div style={{ textAlign: 'center', margin: '16px 0' }}>
+          <button className="qcp-btn qcp-btn-secondary" onClick={() => setVisibleCount((n) => n + PAGE_SIZE * 2)}>
+            عرض المزيد ({customers.length} من {filtered.length})
+          </button>
+        </div>
+      )}
+
+      {editing && (
+        <div className="qcp-modal-backdrop">
+          <form
+            className="qcp-modal"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={handleEditSubmit}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setEditing(null)
+            }}
+          >
+            <h2 style={{ marginTop: 0 }}>✏️ تعديل بيانات العميل</h2>
+            <div className="qcp-field">
+              <label>{t('parties.name')}</label>
+              <input className="qcp-input" required autoFocus value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
+              <label>{t('parties.phone')}</label>
+              <input className="qcp-input" value={editForm.phone} onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
+              <label>{t('parties.address')}</label>
+              <input className="qcp-input" value={editForm.address} onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
+              <label>{t('parties.notes')}</label>
+              <input className="qcp-input" value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} />
+            </div>
+            {editError && <div style={{ color: 'var(--qcp-critical)', fontSize: 13, marginBottom: 10 }}>⚠️ {editError}</div>}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="qcp-btn qcp-btn-primary" type="submit" disabled={savingEdit}>
+                {t('parties.save')}
+              </button>
+              <button className="qcp-btn qcp-btn-secondary" type="button" onClick={() => setEditing(null)}>
+                {t('parties.cancel')}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {showForm && (
         <div className="qcp-modal-backdrop">
@@ -300,6 +467,7 @@ export function CustomersPage(): JSX.Element {
           filter={statementFilter}
           onFilterChange={changeStatementFilter}
           onPrint={printStatement}
+          onSendWhatsApp={sendStatementWhatsApp}
         />
       )}
     </div>

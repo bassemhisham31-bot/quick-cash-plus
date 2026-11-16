@@ -548,6 +548,16 @@ async function openAttachment(path: string): Promise<{ ok: boolean; error?: stri
   }
 }
 
+async function importCustomersFile(): Promise<ProductImportResult> {
+  const data = await pickFileAsBase64('.xlsx')
+  if (!data) return { ok: false, canceled: true, created: 0, updated: 0, rowErrors: [] }
+  try {
+    return await invoke('customers:importExcel', data)
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر الاستيراد', created: 0, updated: 0, rowErrors: [] }
+  }
+}
+
 async function importProductsFile(): Promise<ProductImportResult> {
   const data = await pickFileAsBase64('.xlsx')
   if (!data) return { ok: false, canceled: true, created: 0, updated: 0, rowErrors: [] }
@@ -639,6 +649,7 @@ const api = {
     list: (): Promise<HeldInvoice[]> => invoke('held:list'),
     get: (id: number): Promise<HeldInvoice | null> => invoke('held:get', id),
     delete: (id: number): Promise<void> => invoke('held:delete', id),
+    sendWhatsApp: (id: number): Promise<WhatsAppSendResult> => invoke('held:sendWhatsApp', id),
     print: (id: number, preview = false): Promise<{ ok: boolean; error?: string }> => invoke('print:heldInvoice', id, preview)
   },
   session: {
@@ -798,6 +809,12 @@ const api = {
   customers: {
     list: (search = ''): Promise<CustomerView[]> => invoke('customers:list', search),
     create: (input: CustomerInput): Promise<CustomerView> => invoke('customers:create', input),
+    update: (customerId: number, input: { name: string; phone: string; address?: string; notes?: string }): Promise<CustomerView> =>
+      invoke('customers:update', customerId, input),
+    exportExcel: (): Promise<ExportResult> => exportFile('customers:exportExcel'),
+    importExcel: (): Promise<ProductImportResult> => importCustomersFile(),
+    sendStatementWhatsApp: (customerId: number, filter?: StatementFilter): Promise<WhatsAppSendResult> =>
+      invoke('customers:sendStatementWhatsApp', customerId, filter),
     getStatement: (customerId: number): Promise<StatementView> =>
       invoke('customers:getStatement', customerId),
     getLedger: (customerId: number, filter?: StatementFilter): Promise<StatementView> =>

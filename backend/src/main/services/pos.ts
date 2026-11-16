@@ -380,7 +380,7 @@ export async function checkout(
 
     await tx.commit()
 
-    if (!isWalkInSelection) {
+    if (!isWalkInSelection && !input.skipWhatsApp) {
       notifySaleByWhatsApp(customerId, invoiceId, number, total).catch(() => {})
     }
 

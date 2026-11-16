@@ -75,6 +75,7 @@ import {
 import { getOverviewSummary, runReport } from './services/reports'
 import { exportReportToExcel, exportReportToPdf } from './services/exportReport'
 import { exportProductsTemplate, exportProductsToExcel, importProductsFromExcel } from './services/catalogImportExport'
+import { exportCustomersToExcel, importCustomersFromExcel } from './services/customersImportExport'
 import {
   deleteCaptain,
   deleteDeliveryDriver,
@@ -109,7 +110,16 @@ import {
   getWhatsAppSettings,
   updateWhatsAppSettings
 } from './services/settings'
-import { getWhatsAppStatus, logoutWhatsApp, sendWhatsAppMessage, startWhatsAppPairing } from './services/whatsapp'
+import {
+  getWhatsAppStatus,
+  logoutWhatsApp,
+  notifyDirectReturnByWhatsApp,
+  notifySalesReturnByWhatsApp,
+  sendCustomerStatementByWhatsApp,
+  sendHeldInvoiceByWhatsApp,
+  sendWhatsAppMessage,
+  startWhatsAppPairing
+} from './services/whatsapp'
 import { generateBarcodeDataUrl, decodeWeightBarcode } from './services/barcode'
 import {
   openCashDrawer,
@@ -153,6 +163,7 @@ import {
 import { getNotifications } from './services/notifications'
 import {
   createCustomer,
+  updateCustomer,
   getCustomerStatement,
   linkCustomerVendor,
   listCustomers,
@@ -378,11 +389,18 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'invoices:restore': (invoiceId: number, userId: number) => restoreInvoice(invoiceId, userId),
     'invoices:update': (invoiceId: number, input: UpdateInvoiceInput, userId: number) =>
       updateInvoice(invoiceId, input, userId),
-    'invoices:returnLines': (invoiceId: number, lines: ReturnLineInput[], userId: number) =>
-      returnInvoiceLines(invoiceId, lines, userId),
+    'invoices:returnLines': async (invoiceId: number, lines: ReturnLineInput[], userId: number) => {
+      const result = await returnInvoiceLines(invoiceId, lines, userId)
+      if (result.ok) notifySalesReturnByWhatsApp(invoiceId, lines, result.refundAmount ?? 0).catch(() => {})
+      return result
+    },
     'invoices:getReceiptQr': (invoiceId: number) => getReceiptQr(invoiceId),
     'invoices:listReturns': (filter?: { from?: string; to?: string }) => listSalesReturns(filter ?? {}),
-    'returns:createDirect': (input: DirectReturnInput, userId: number) => createDirectReturn(input, userId),
+    'returns:createDirect': async (input: DirectReturnInput, userId: number) => {
+      const result = await createDirectReturn(input, userId)
+      if (result.ok && result.returnId) notifyDirectReturnByWhatsApp(result.returnId).catch(() => {})
+      return result
+    },
     'print:directReturn': (id: number, preview?: boolean) => printDirectReturn(id, preview === true),
 
     'cash:getOpenSession': () => getOpenSession(),
@@ -401,6 +419,12 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
 
     'customers:list': (search: string) => listCustomers(search),
     'customers:create': (input: CustomerInput) => createCustomer(input),
+    'customers:update': (customerId: number, input: { name: string; phone: string; address?: string; notes?: string }) =>
+      updateCustomer(customerId, input),
+    'customers:exportExcel': () => exportCustomersToExcel(),
+    'customers:importExcel': (dataBase64: string) => importCustomersFromExcel(dataBase64),
+    'customers:sendStatementWhatsApp': (customerId: number, filter?: StatementFilter) =>
+      sendCustomerStatementByWhatsApp(customerId, filter ?? {}),
     'customers:getStatement': (customerId: number) => getCustomerStatement(customerId),
     'customers:getLedger': (customerId: number, filter?: StatementFilter) => getCustomerLedger(customerId, filter ?? {}),
     'customers:statementHtml': (customerId: number, filter?: StatementFilter) => buildCustomerStatementHtml(customerId, filter ?? {}),
@@ -647,6 +671,7 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'held:list': () => listHeldInvoices(),
     'held:get': (id: number) => getHeldInvoice(id),
     'held:delete': (id: number) => deleteHeldInvoice(id),
+    'held:sendWhatsApp': (id: number) => sendHeldInvoiceByWhatsApp(id),
     'print:voucher': (id: number, preview?: boolean) => printVoucher(id, preview === true),
     'print:heldInvoice': (id: number, preview?: boolean) => printHeldInvoice(id, preview === true),
     'print:receipt': (invoiceId: number) => printReceipt(invoiceId),
