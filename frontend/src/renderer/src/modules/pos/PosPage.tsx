@@ -117,9 +117,14 @@ export function PosPage(): JSX.Element {
     : heldList
   const [showHeld, setShowHeld] = useState(false)
   useEffect(() => {
-    if (!showHeld) setHeldSearch('')
+    if (!showHeld) {
+      setHeldSearch('')
+      setHeldSelected(new Set())
+    }
   }, [showHeld])
   const [heldMessage, setHeldMessage] = useState<string | null>(null)
+  const [heldSelected, setHeldSelected] = useState<Set<number>>(new Set())
+  const [bulkPosting, setBulkPosting] = useState(false)
   const posOpenHeld = useAppStore((s) => s.posOpenHeld)
   const setPosOpenHeld = useAppStore((s) => s.setPosOpenHeld)
   /** السطور اللي خانة الخصم بتاعتها مفتوحة (productId) */
@@ -493,6 +498,69 @@ export function PosPage(): JSX.Element {
     await window.api.held.delete(held.id)
     setShowHeld(false)
     refreshHeld()
+  }
+
+  /** ترحيل جماعي: بيرحّل كل الفواتير غير المرحّلة المحددة بنفس اختيارات الدفع المحفوظة معاها (من غير ما يفتح شاشة الدفع لكل واحدة) */
+  async function postSelectedHeld(): Promise<void> {
+    if (!user || bulkPosting) return
+    const targets = heldList.filter((h) => heldSelected.has(h.id)).sort((a, b) => a.id - b.id)
+    if (!targets.length) return
+    const totalSum = targets.reduce((s, h) => s + h.total, 0)
+    if (!(await confirmDialog(`ترحيل ${targets.length} فاتورة بإجمالي ${currency(totalSum)}؟ هتترحّل بنفس طريقة الدفع المحفوظة مع كل فاتورة.`, { confirmLabel: 'ترحيل' }))) return
+    setBulkPosting(true)
+    const failed: string[] = []
+    let ok = 0
+    try {
+      for (const h of targets) {
+        try {
+          const p = h.payload
+          const pay = p.payment
+          const method: PaymentMethod = pay?.method ?? 'cash'
+          const wh = p.warehouseId ?? warehouseId
+          if (!wh || !p.lines.length) throw new Error('بيانات الفاتورة ناقصة')
+          const rows = (pay?.splitRows ?? []).map((r) => ({ method: r.method, amount: Number(r.amount) || 0 })).filter((r) => r.amount > 0)
+          const splitPaidSum = rows.reduce((s, r) => s + r.amount, 0)
+          const result = await window.api.pos.checkout(
+            {
+              skipWhatsApp: !!p.whatsappSent,
+              customerId: p.customerId,
+              customerLabel: p.customerLabel ?? '',
+              warehouseId: wh,
+              lines: p.lines,
+              discountType: p.discountType,
+              discountValue: Number(p.discountValue) || 0,
+              paymentMethod: method,
+              paid: method === 'credit' ? 0 : method === 'mixed' ? splitPaidSum : h.total,
+              ...(method === 'mixed' ? { payments: rows } : {}),
+              dueDate: pay?.dueDate || null,
+              tipAmount: 0,
+              redeemPoints: 0,
+              salesRepId: null,
+              vendorSettlementAmount: 0,
+              orderType: 'retail',
+              tableId: null
+            },
+            user.id
+          )
+          if (!result.ok || !result.invoiceId) throw new Error(result.error ?? 'حدث خطأ')
+          await window.api.held.delete(h.id).catch(() => {})
+          if (finalizingHeldRef.current === h.id) setFinalizingHeldId(null)
+          ok++
+        } catch (err: any) {
+          failed.push(`#${h.id}: ${err?.message ?? 'تعذر الترحيل'}`)
+        }
+      }
+    } finally {
+      setBulkPosting(false)
+      setHeldSelected(new Set())
+      refreshHeld()
+      window.api.catalog.listProducts(search, warehouseId).then(setProducts)
+      window.api.customers.list('').then(setCustomers)
+      playSound('sell')
+      setHeldMessage(
+        `✓ اترحّل ${ok} فاتورة${failed.length ? ` — فشل ${failed.length}: ${failed.join(' | ')}` : ''}`
+      )
+    }
   }
 
   async function deleteHeld(held: HeldInvoice): Promise<void> {
@@ -1485,12 +1553,46 @@ export function PosPage(): JSX.Element {
                 />
               </div>
             )}
+            {unpostedMode && filteredHeld.length > 0 && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: 13 }}>
+                  <input
+                    type="checkbox"
+                    checked={filteredHeld.length > 0 && filteredHeld.every((h) => heldSelected.has(h.id))}
+                    onChange={(e) => setHeldSelected(e.target.checked ? new Set(filteredHeld.map((h) => h.id)) : new Set())}
+                  />
+                  تحديد الكل
+                </label>
+                <button
+                  type="button"
+                  className="qcp-btn qcp-btn-primary"
+                  disabled={!heldSelected.size || bulkPosting}
+                  onClick={() => void postSelectedHeld()}
+                >
+                  {bulkPosting ? '...جاري الترحيل' : `✓ ترحيل المحدد (${heldSelected.size})`}
+                </button>
+              </div>
+            )}
             {heldList.length === 0 && <div className="rst-empty">{unpostedMode ? 'مفيش فواتير غير مرحّلة' : 'مفيش فواتير معلّقة'}</div>}
             {heldList.length > 0 && filteredHeld.length === 0 && <div className="rst-empty">مفيش نتائج للبحث</div>}
             <div style={{ display: 'grid', gap: 8, maxHeight: '60vh', overflow: 'auto' }}>
               {filteredHeld.map((h) => (
                 <div key={h.id} className="qcp-card" style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-                  <div>
+                  {unpostedMode && (
+                    <input
+                      type="checkbox"
+                      checked={heldSelected.has(h.id)}
+                      onChange={(e) =>
+                        setHeldSelected((prev) => {
+                          const n = new Set(prev)
+                          if (e.target.checked) n.add(h.id)
+                          else n.delete(h.id)
+                          return n
+                        })
+                      }
+                    />
+                  )}
+                  <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700 }}>
                       #{h.id} · {formatQty(h.itemsCount)} صنف · {currency(h.total)}
                     </div>

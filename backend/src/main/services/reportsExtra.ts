@@ -268,3 +268,54 @@ export async function serviceSalesReport(filter: ReportFilter): Promise<ReportRe
     totals: { principal: r2(rows.reduce((s, r) => s + r.principal, 0)), revenue: r2(rows.reduce((s, r) => s + r.revenue, 0)) }
   }
 }
+
+/**
+ * مديونيات العملاء خلال اليوم: لكل عميل اشترى في الفترة — إجمالي فواتيره، المدفوع وقت البيع، والباقي عليه،
+ * مع رصيده الإجمالي الحالي. من غير تواريخ = النهارده. بيظهر بس العملاء اللي عليهم باقي من فواتير الفترة.
+ */
+export async function customerDailyDebtsReport(filter: ReportFilter): Promise<ReportResult> {
+  const db = getDb()
+  const today = todayStr()
+  const f: ReportFilter = { ...filter, dateFrom: filter.dateFrom || (filter.dateTo ? '' : today), dateTo: filter.dateTo || (filter.dateFrom ? '' : today) }
+  const { sql: dateSql, args } = dateAndBranch(f, 'i.created_at', 'i.branch_id')
+  const warehouseSql = filter.warehouseId ? 'AND i.warehouse_id = ?' : ''
+  const rs = await db.execute({
+    sql: `SELECT c.id AS customerId, c.name AS customerName, c.phone, c.balance AS balance,
+                 COUNT(i.id) AS invoices, SUM(i.total) AS total, SUM(i.paid) AS paid, SUM(i.total - i.paid) AS remaining
+          FROM sales_invoices i
+          JOIN customers c ON c.id = i.customer_id
+          WHERE i.deleted_at IS NULL AND c.is_walk_in = 0 ${dateSql} ${warehouseSql}
+          GROUP BY c.id
+          HAVING SUM(i.total - i.paid) > 0.005
+          ORDER BY remaining DESC, c.name`,
+    args: [...args, ...(filter.warehouseId ? [filter.warehouseId] : [])] as any
+  })
+  const rows = (rs.rows as any[]).map((r) => ({
+    customer: r.customerName,
+    phone: r.phone ?? '',
+    invoices: Number(r.invoices),
+    total: r2(r.total),
+    paid: r2(r.paid),
+    remaining: r2(r.remaining),
+    balance: r2(r.balance)
+  }))
+  const label = f.dateFrom && f.dateTo && f.dateFrom !== f.dateTo ? `${f.dateFrom} → ${f.dateTo}` : f.dateFrom || f.dateTo
+  return {
+    title: `مديونيات العملاء خلال اليوم (${label})`,
+    columns: [
+      { key: 'customer', label: 'العميل' },
+      { key: 'phone', label: 'التليفون' },
+      { key: 'invoices', label: 'عدد الفواتير', align: 'end', format: 'number' },
+      { key: 'total', label: 'إجمالي الفواتير', align: 'end', format: 'currency' },
+      { key: 'paid', label: 'المدفوع', align: 'end', format: 'currency' },
+      { key: 'remaining', label: 'الباقي (المديونية)', align: 'end', format: 'currency' },
+      { key: 'balance', label: 'إجمالي رصيد العميل الحالي', align: 'end', format: 'currency' }
+    ],
+    rows,
+    totals: {
+      total: r2(rows.reduce((s, r) => s + r.total, 0)),
+      paid: r2(rows.reduce((s, r) => s + r.paid, 0)),
+      remaining: r2(rows.reduce((s, r) => s + r.remaining, 0))
+    }
+  }
+}

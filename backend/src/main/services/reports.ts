@@ -7,7 +7,7 @@ import { getVendorStatement } from './vendors'
 import { assertReportInEdition } from './edition'
 import { SALE_PAY_LINES_SQL } from './salePayments'
 import { notFixedAssetSql } from './accountsChart'
-import { customerDueDatesReport, salesRepCommissionDetailReport, serviceSalesReport, vendorDueDatesReport } from './reportsExtra'
+import { customerDailyDebtsReport, customerDueDatesReport, salesRepCommissionDetailReport, serviceSalesReport, vendorDueDatesReport } from './reportsExtra'
 import type { OverviewMetric, OverviewSummary, ReportFilter, ReportResult, ReportType } from '../../shared/types'
 
 /**
@@ -103,6 +103,8 @@ export async function runReport(type: ReportType, filter: ReportFilter): Promise
       return salesRepCommission(filter)
     case 'sales_rep_commission_detail':
       return salesRepCommissionDetailReport(filter)
+    case 'customer_daily_debts':
+      return customerDailyDebtsReport(filter)
     case 'customer_due_dates':
       return customerDueDatesReport(filter)
     case 'vendor_due_dates':

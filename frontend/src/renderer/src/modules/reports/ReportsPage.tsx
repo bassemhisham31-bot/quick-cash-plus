@@ -26,6 +26,7 @@ const REPORT_OPTIONS: { type: ReportType; icon: string; label: string }[] = [
   { type: 'sales_by_employee', icon: '🧑‍💼', label: 'المبيعات حسب الكاشير' },
   { type: 'sales_rep_commission', icon: '🧾', label: 'عمولات المحلات المسوّقة / المناديب' },
   { type: 'sales_rep_commission_detail', icon: '🏪', label: 'تفصيل عمولات المحلات (فاتورة بفاتورة)' },
+  { type: 'customer_daily_debts', icon: '💸', label: 'مديونيات العملاء خلال اليوم (إجمالي/مدفوع/باقي)' },
   { type: 'customer_due_dates', icon: '📅', label: 'مواعيد استحقاق العملاء (الآجل بالشهر)' },
   { type: 'vendor_due_dates', icon: '🗓️', label: 'مواعيد سداد الموردين (بالشهر)' },
   { type: 'service_sales', icon: '🛠', label: 'مبيعات الخدمات والعمولات' },
@@ -208,6 +209,9 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
         <input className="qcp-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
         {(selectedType === 'customer_due_dates' || selectedType === 'vendor_due_dates') && (
           <span style={{ fontSize: 12, color: 'var(--qcp-ink-faint)' }}>الفترة هنا = تاريخ الاستحقاق (سيبها فاضية لعرض الكل)</span>
+        )}
+        {selectedType === 'customer_daily_debts' && (
+          <span style={{ fontSize: 12, color: 'var(--qcp-ink-faint)' }}>سيب التاريخين فاضيين = النهارده بس</span>
         )}
         {selectedType === 'account_statement' && (
           <>

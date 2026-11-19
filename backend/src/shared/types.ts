@@ -1198,6 +1198,7 @@ export const REPORT_TYPES = [
   'sales_rep_commission',
   'sales_rep_commission_detail',
   'customer_due_dates',
+  'customer_daily_debts',
   'vendor_due_dates',
   'service_sales',
   'purchases_last_price',
