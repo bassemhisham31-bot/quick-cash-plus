@@ -66,6 +66,7 @@ async function main(): Promise<void> {
   console.log('1) الإعدادات الافتراضية ما اتغيرتش')
   const ui0 = await getPosUiSettings()
   assert(ui0.unpostedMode === true && ui0.salesRepPosEnabled === true && ui0.receiptStyle === 'classic', 'الافتراضي: حفظ بدون ترحيل مفعّل + المحل المسوّق ظاهر + إيصال كلاسيك')
+  assert(ui0.bulkPostEnabled === true, 'الافتراضي: الترحيل الجماعي مفعّل (نفس السلوك القديم)')
   await updateStoreSettings({ ...(await getStoreSettings()), name: 'شركة النصر', phone: '0227209168 / 01284664270 / 01286494202' })
   await updatePrintSettings({ ...(await getPrintSettings()), paperSize: '80mm' })
 
@@ -91,6 +92,10 @@ async function main(): Promise<void> {
   await updatePosUiSettings({ ...uiOff, unpostedMode: true })
   const ui1 = await getPosUiSettings()
   assert(ui1.unpostedMode === true && ui1.receiptStyle === 'document' && ui1.salesRepPosEnabled === false, 'الإعدادات اتحفظت')
+  await updatePosUiSettings({ ...ui1, bulkPostEnabled: false })
+  assert((await getPosUiSettings()).bulkPostEnabled === false, 'الترحيل الجماعي بيتقفل من الإعدادات')
+  await updatePosUiSettings({ ...ui1, bulkPostEnabled: true })
+  assert((await getPosUiSettings()).bulkPostEnabled === true && (await getPosUiSettings()).unpostedMode === true, 'والترحيل الجماعي بيرجع يتفتح من غير ما يأثر على باقي الإعدادات')
   const stockBefore = Number(await scalar('SELECT quantity AS v FROM stock WHERE product_id = ?', [oil.id]))
   const heldId = await holdInvoice(
     { payload: { lines: cart as any, discountType: 'value', discountValue: 2.5, customerId: cust.id, customerLabel: '', warehouseId }, total: 800 },

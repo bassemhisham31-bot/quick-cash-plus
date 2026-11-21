@@ -77,6 +77,7 @@ import { migration073PurchaseMode } from './migrations/073_purchase_mode'
 import { migration074FixedAssets } from './migrations/074_fixed_assets'
 import { migration075UnpostedDirectReturns } from './migrations/075_unposted_direct_returns'
 import { migration076ProductSubUnits } from './migrations/076_product_sub_units'
+import { migration077BulkPostOption } from './migrations/077_bulk_post_option'
 import { seedDatabase } from './seed'
 
 let db: Client | null = null
@@ -211,7 +212,8 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
   { name: '073_purchase_mode', sql: migration073PurchaseMode },
   { name: '074_fixed_assets', sql: migration074FixedAssets },
   { name: '075_unposted_direct_returns', sql: migration075UnpostedDirectReturns },
-  { name: '076_product_sub_units', sql: migration076ProductSubUnits }
+  { name: '076_product_sub_units', sql: migration076ProductSubUnits },
+  { name: '077_bulk_post_option', sql: migration077BulkPostOption }
 ]
 
 async function runMigrations(client: Client): Promise<void> {

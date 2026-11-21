@@ -339,6 +339,8 @@ export function PosPage(): JSX.Element {
   const holdEnabled = posUiSettings?.holdInvoicesEnabled !== false
   // (ويب) وضع «حفظ بدون ترحيل»: الفاتورة بتتحفظ وتتطبع من غير ما تأثر على المخزون/الرصيد، وبعدين «حفظ نهائي» من قايمة غير المرحّلة
   const unpostedMode = posUiSettings?.unpostedMode !== false && !!posUiSettings
+  // «الترحيل الجماعي» (تحديد + ترحيل المحدد) اختياري من الإعدادات — بيظهر بس في وضع «حفظ بدون ترحيل»
+  const bulkPostEnabled = unpostedMode && posUiSettings?.bulkPostEnabled !== false
   // اختيار «المحل المسوّق» في شاشة البيع (بيتقفل من الإعدادات)
   const salesRepPosEnabled = posUiSettings?.salesRepPosEnabled !== false
   // الفاتورة غير المرحّلة اللي اتفتحت للحفظ النهائي — بتفضل محفوظة لحد ما الدفع ينجح (عشان ما تضيعش لو اتقفلت الشاشة)
@@ -1555,7 +1557,7 @@ export function PosPage(): JSX.Element {
                 />
               </div>
             )}
-            {unpostedMode && filteredHeld.length > 0 && (
+            {bulkPostEnabled && filteredHeld.length > 0 && (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: 13 }}>
                   <input
@@ -1580,7 +1582,7 @@ export function PosPage(): JSX.Element {
             <div style={{ display: 'grid', gap: 8, maxHeight: '60vh', overflow: 'auto' }}>
               {filteredHeld.map((h) => (
                 <div key={h.id} className="qcp-card" style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
-                  {unpostedMode && (
+                  {bulkPostEnabled && (
                     <input
                       type="checkbox"
                       checked={heldSelected.has(h.id)}

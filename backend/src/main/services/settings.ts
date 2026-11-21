@@ -430,6 +430,7 @@ function mapPosUiRow(r: any): PosUiSettings {
     currencySymbol: r.currency_symbol,
     purchaseListEnabled: r.purchase_list_enabled == null ? true : !!r.purchase_list_enabled,
     unpostedMode: r.unposted_mode == null ? true : !!r.unposted_mode,
+    bulkPostEnabled: r.bulk_post_enabled == null ? true : !!r.bulk_post_enabled,
     salesRepPosEnabled: r.sales_rep_pos_enabled == null ? true : !!r.sales_rep_pos_enabled,
     receiptStyle: r.receipt_style === 'document' ? 'document' : 'classic'
   }
@@ -446,7 +447,7 @@ export async function updatePosUiSettings(input: PosUiSettings): Promise<PosUiSe
   await db.execute({
     sql: `UPDATE pos_ui_settings
           SET sound_enabled = ?, sound_volume = ?, allow_temp_item = ?, price_edit_enabled = ?, max_discount_percent = ?,
-              hold_invoices_enabled = ?, auto_hold_on_leave = ?, allow_negative_stock = ?, multi_warehouse_enabled = ?, category_sidebar_enabled = ?, currency_code = ?, currency_symbol = ?, purchase_list_enabled = ?, unposted_mode = ?, receipt_style = ?, sales_rep_pos_enabled = ?
+              hold_invoices_enabled = ?, auto_hold_on_leave = ?, allow_negative_stock = ?, multi_warehouse_enabled = ?, category_sidebar_enabled = ?, currency_code = ?, currency_symbol = ?, purchase_list_enabled = ?, unposted_mode = ?, receipt_style = ?, sales_rep_pos_enabled = ?, bulk_post_enabled = ?
           WHERE id = 1`,
     args: [
       input.soundEnabled ? 1 : 0,
@@ -464,7 +465,8 @@ export async function updatePosUiSettings(input: PosUiSettings): Promise<PosUiSe
       input.purchaseListEnabled === false ? 0 : 1,
       input.unpostedMode === false ? 0 : 1,
       input.receiptStyle === 'document' ? 'document' : 'classic',
-      input.salesRepPosEnabled === false ? 0 : 1
+      input.salesRepPosEnabled === false ? 0 : 1,
+      input.bulkPostEnabled === false ? 0 : 1
     ]
   })
   return getPosUiSettings()

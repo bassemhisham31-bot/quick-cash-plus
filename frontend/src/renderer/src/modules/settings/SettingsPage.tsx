@@ -3021,6 +3021,13 @@ function PosUiSection(): JSX.Element {
         locked={!settings.holdInvoicesEnabled}
       />
       <ToggleRow
+        title="الترحيل الجماعي للفواتير غير المرحّلة"
+        hint="في قايمة «غير مرحّلة»: مربعات اختيار + «تحديد الكل» + زرار «ترحيل المحدد» عشان ترحّل أكتر من فاتورة مرة واحدة. لو مقفول بتفضل «حفظ نهائي» لكل فاتورة لوحدها. بيشتغل مع «حفظ بدون ترحيل» بس."
+        checked={settings.bulkPostEnabled !== false}
+        onChange={(v) => handleSave({ ...settings, bulkPostEnabled: v })}
+        locked={!settings.holdInvoicesEnabled || settings.unpostedMode === false}
+      />
+      <ToggleRow
         title="اختيار «المحل المسوّق» في شاشة البيع"
         hint="قايمة المحل/المندوب المسوّق وزرار «✚ محل» في شاشة البيع (لحساب العمولة). لو مقفول بيختفوا من شاشة البيع والفاتورة بتتسجل من غير محل."
         checked={settings.salesRepPosEnabled !== false}
