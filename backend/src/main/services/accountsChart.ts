@@ -1,5 +1,6 @@
 import { getDb } from '../db'
 import { getEdition } from './edition'
+import { lineAllowed, lineLabel } from './statementLines'
 
 /* ------------------------------ شجرة الحسابات ------------------------------
  * وضعين:
@@ -21,6 +22,8 @@ export interface AccountRow {
   active: boolean
   /** الأدوار (account_roles) المربوطة بالحساب ده — فاضية في الشجرة القديمة */
   roles: string[]
+  /** بند الحساب في الميزانية/قائمة الدخل (null = تلقائي من دور الحساب ونوعه) — services/statementLines.ts */
+  statementLine: string | null
 }
 
 export const AR = '1200'
@@ -225,7 +228,7 @@ export async function ensureAccounts(): Promise<void> {
 export async function listAccounts(): Promise<AccountRow[]> {
   await ensureAccounts()
   const db = getDb()
-  const rs = await db.execute('SELECT code, name, type, is_system, active FROM accounts ORDER BY code')
+  const rs = await db.execute('SELECT code, name, type, is_system, active, statement_line FROM accounts ORDER BY code')
   const rolesByCode = new Map<string, string[]>()
   for (const r of (await db.execute('SELECT role, account_code FROM account_roles')).rows as any[]) {
     const list = rolesByCode.get(String(r.account_code)) ?? []
@@ -238,7 +241,8 @@ export async function listAccounts(): Promise<AccountRow[]> {
     type: r.type,
     isSystem: !!r.is_system,
     active: !!r.active,
-    roles: rolesByCode.get(String(r.code)) ?? []
+    roles: rolesByCode.get(String(r.code)) ?? [],
+    statementLine: r.statement_line ? String(r.statement_line) : null
   }))
 }
 
@@ -248,26 +252,38 @@ function validateAccountInput(code: string, name: string, type: string): void {
   if (!(ACCOUNT_TYPES as readonly string[]).includes(type)) throw new Error('نوع الحساب غير صحيح')
 }
 
-export async function createAccount(input: { code: string; name: string; type: AccountType }): Promise<void> {
+/** بند القوائم المالية: فاضي/null = تلقائي، وإلا لازم يكون بند معروف ومناسب لنوع الحساب */
+function normalizeStatementLine(line: string | null | undefined, type: AccountType): string | null {
+  const v = typeof line === 'string' ? line.trim() : ''
+  if (!v) return null
+  if (!lineAllowed(v, type)) throw new Error(`البند "${lineLabel(v)}" مش مناسب لنوع الحساب ده`)
+  return v
+}
+
+export async function createAccount(input: { code: string; name: string; type: AccountType; statementLine?: string | null }): Promise<void> {
   const code = input.code.trim()
   const name = input.name.trim()
   validateAccountInput(code, name, input.type)
+  const line = normalizeStatementLine(input.statementLine, input.type)
   const exists = await getDb().execute({ sql: 'SELECT 1 FROM accounts WHERE code = ?', args: [code] })
   if (exists.rows.length) throw new Error('الكود ده مستخدم قبل كده')
-  await getDb().execute({ sql: 'INSERT INTO accounts (code, name, type, is_system) VALUES (?, ?, ?, 0)', args: [code, name, input.type] })
+  await getDb().execute({ sql: 'INSERT INTO accounts (code, name, type, is_system, statement_line) VALUES (?, ?, ?, 0, ?)', args: [code, name, input.type, line] })
 }
 
 export async function setAccountActive(code: string, active: boolean): Promise<void> {
   await getDb().execute({ sql: 'UPDATE accounts SET active = ? WHERE code = ? AND is_system = 0', args: [active ? 1 : 0, code] })
 }
 
-const roleLabels = (roles: string[]): string => roles.map((r) => DEF_BY_ROLE.get(r)?.label ?? r).join('، ')
+/** ربط تصنيف مصروف بحساب بعينه: expense:<id> — بيتقرا في loadResolver().expense */
+const EXPENSE_CATEGORY_ROLE = /^expense:(\d+)$/
 
-async function loadEditableAccount(code: string): Promise<{ code: string; type: AccountType }> {
-  const row = (await getDb().execute({ sql: 'SELECT code, type, is_system FROM accounts WHERE code = ?', args: [code] })).rows[0] as any
+const roleLabels = (roles: string[]): string => roles.map((r) => DEF_BY_ROLE.get(r)?.label ?? (EXPENSE_CATEGORY_ROLE.test(r) ? 'مصروفات (تصنيف محدد)' : r)).join('، ')
+
+async function loadEditableAccount(code: string): Promise<{ code: string; type: AccountType; statementLine: string | null }> {
+  const row = (await getDb().execute({ sql: 'SELECT code, type, is_system, statement_line FROM accounts WHERE code = ?', args: [code] })).rows[0] as any
   if (!row) throw new Error('الحساب مش موجود')
   if (row.is_system) throw new Error('ده حساب نظام ومينفعش يتعدل ولا يتحذف')
-  return { code: row.code, type: row.type }
+  return { code: row.code, type: row.type, statementLine: row.statement_line ? String(row.statement_line) : null }
 }
 
 async function rolesOf(code: string): Promise<string[]> {
@@ -276,11 +292,18 @@ async function rolesOf(code: string): Promise<string[]> {
 }
 
 /** تعديل حساب: الاسم والنوع والكود (لو الكود اتغيّر بيتنقل معاه القيود اليدوية وربط الأدوار) */
-export async function updateAccount(code: string, input: { code?: string; name: string; type: AccountType }): Promise<void> {
-  await loadEditableAccount(code)
+export async function updateAccount(code: string, input: { code?: string; name: string; type: AccountType; statementLine?: string | null }): Promise<void> {
+  const existing = await loadEditableAccount(code)
   const newCode = (input.code ?? code).trim()
   const name = input.name.trim()
   validateAccountInput(newCode, name, input.type)
+  // مبعوت = بنغيّره (فاضي = تلقائي)، مش مبعوت = بنسيب القديم (ويتشال لو النوع اتغيّر وبقى مش مناسب)
+  const statementLine =
+    input.statementLine !== undefined
+      ? normalizeStatementLine(input.statementLine, input.type)
+      : lineAllowed(existing.statementLine, input.type)
+        ? existing.statementLine
+        : null
   const db = getDb()
   if (newCode !== code) {
     const used = await db.execute({ sql: 'SELECT 1 FROM accounts WHERE code = ?', args: [newCode] })
@@ -295,7 +318,7 @@ export async function updateAccount(code: string, input: { code?: string; name: 
   }
   const tx = await db.transaction('write')
   try {
-    await tx.execute({ sql: 'UPDATE accounts SET code = ?, name = ?, type = ? WHERE code = ?', args: [newCode, name, input.type, code] })
+    await tx.execute({ sql: 'UPDATE accounts SET code = ?, name = ?, type = ?, statement_line = ? WHERE code = ?', args: [newCode, name, input.type, statementLine, code] })
     if (newCode !== code) {
       await tx.execute({ sql: 'UPDATE journal_lines SET account_code = ? WHERE account_code = ?', args: [newCode, code] })
       await tx.execute({ sql: 'UPDATE account_roles SET account_code = ? WHERE account_code = ?', args: [newCode, code] })
@@ -333,10 +356,17 @@ export interface AccountRoleRow {
   defaultCode: string
 }
 
+export interface ExpenseCategoryMapRow {
+  id: number
+  name: string
+  /** الحساب المربوط بالتصنيف ده بالذات ('' = بيمشي على الحساب العام للمصروفات) */
+  accountCode: string
+}
+
 /** ربط حسابات النظام الحالي (الشجرة المبسّطة بس — في القديمة custom=false والقايمة فاضية) */
-export async function listAccountRoles(): Promise<{ custom: boolean; roles: AccountRoleRow[] }> {
+export async function listAccountRoles(): Promise<{ custom: boolean; roles: AccountRoleRow[]; expenseCategories: ExpenseCategoryMapRow[] }> {
   const R = await loadResolver()
-  if (!R.custom) return { custom: false, roles: [] }
+  if (!R.custom) return { custom: false, roles: [], expenseCategories: [] }
   const hideRestaurant = getEdition() === 'retail'
   const roles = ROLE_DEFS.filter((d) => !(hideRestaurant && d.restaurantOnly)).map((d) => ({
     role: d.role,
@@ -345,15 +375,37 @@ export async function listAccountRoles(): Promise<{ custom: boolean; roles: Acco
     accountCode: d.role === 'treasury' ? R.treasury(0) : d.role === 'expense' ? R.expense(0) : R.code(d.role),
     defaultCode: d.base
   }))
-  return { custom: true, roles }
+  // تصنيفات المصروف (من غير "شراء أصل" لأنها بتتسجّل على الأصول الثابتة) ومعاها حسابها المحدد لو فيه
+  const db = getDb()
+  const mapped = new Map<string, string>(
+    ((await db.execute("SELECT role, account_code FROM account_roles WHERE role LIKE 'expense:%'")).rows as any[]).map((r) => [String(r.role), String(r.account_code)])
+  )
+  const cats = (await db.execute('SELECT id, name FROM expense_categories WHERE is_fixed_asset = 0 ORDER BY name')).rows as any[]
+  const expenseCategories = cats.map((c) => ({ id: Number(c.id), name: String(c.name), accountCode: mapped.get(`expense:${c.id}`) ?? '' }))
+  return { custom: true, roles, expenseCategories }
 }
 
-/** تغيير ربط دور أو أكتر: { sales: '1100', ar: '5200' } — الحساب لازم يكون موجود ونشط ونوعه مناسب للدور */
+/**
+ * تغيير ربط دور أو أكتر: { sales: '1100', ar: '5200' } — الحساب لازم يكون موجود ونشط ونوعه مناسب للدور.
+ * وتصنيف مصروف بعينه: { 'expense:7': '3100' } (حساب مصروفات)، وكود فاضي بيشيل الربط الخاص بيه ويرجّعه للحساب العام للمصروفات.
+ */
 export async function setAccountRoles(input: Record<string, string>): Promise<void> {
   if (!(await isCustomChart())) throw new Error('ربط الحسابات متاح بعد تحويل الشجرة للنظام المبسّط')
   const db = getDb()
   const entries = Object.entries(input)
   for (const [role, codeRaw] of entries) {
+    const catMatch = EXPENSE_CATEGORY_ROLE.exec(role)
+    if (catMatch) {
+      const cat = (await db.execute({ sql: 'SELECT name, is_fixed_asset FROM expense_categories WHERE id = ?', args: [Number(catMatch[1])] })).rows[0] as any
+      if (!cat) throw new Error(`تصنيف المصروف مش موجود (${role})`)
+      if (cat.is_fixed_asset) throw new Error(`التصنيف "${cat.name}" شراء أصل — بيتسجّل على الأصول الثابتة مش على حساب مصروفات`)
+      if (!String(codeRaw ?? '').trim()) continue // فك الربط
+      const acc = (await db.execute({ sql: 'SELECT type, active FROM accounts WHERE code = ?', args: [String(codeRaw)] })).rows[0] as any
+      if (!acc) throw new Error(`الحساب ${codeRaw} مش موجود (مصروف: ${cat.name})`)
+      if (!acc.active) throw new Error(`الحساب ${codeRaw} موقوف (مصروف: ${cat.name})`)
+      if (acc.type !== 'expense') throw new Error(`مصروف "${cat.name}" لازم يتربط بحساب من نوع "expense" — الحساب ${codeRaw} نوعه "${acc.type}"`)
+      continue
+    }
     const def = DEF_BY_ROLE.get(role)
     if (!def) throw new Error(`دور غير معروف: ${role}`)
     const acc = (await db.execute({ sql: 'SELECT type, active FROM accounts WHERE code = ?', args: [String(codeRaw)] })).rows[0] as any
@@ -364,6 +416,10 @@ export async function setAccountRoles(input: Record<string, string>): Promise<vo
   const tx = await db.transaction('write')
   try {
     for (const [role, code] of entries) {
+      if (EXPENSE_CATEGORY_ROLE.test(role) && !String(code ?? '').trim()) {
+        await tx.execute({ sql: 'DELETE FROM account_roles WHERE role = ?', args: [role] })
+        continue
+      }
       await tx.execute({
         sql: 'INSERT INTO account_roles (role, account_code) VALUES (?, ?) ON CONFLICT(role) DO UPDATE SET account_code = excluded.account_code',
         args: [role, String(code)]

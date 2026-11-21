@@ -17,7 +17,12 @@ export async function exportReportToExcel(report: ReportResult): Promise<WebExpo
     const sheet = workbook.addWorksheet(report.title.slice(0, 31))
     sheet.views = [{ rightToLeft: true }]
     sheet.columns = report.columns.map((c) => ({ header: c.label, key: c.key, width: 20 }))
-    sheet.addRows(report.rows)
+    // الصفوف المعلّمة (_heading / _subtotal) بتتعرض بخط عريض، والتفصيل (_detail) بمسافة بادئة — زي الشاشة
+    for (const row of report.rows) {
+      const added = sheet.addRow(row)
+      if (row._heading || row._subtotal) added.font = { bold: true }
+      if (row._detail) added.getCell(1).alignment = { indent: 2 }
+    }
     sheet.getRow(1).font = { bold: true }
     sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E7FF' } }
 
@@ -47,7 +52,10 @@ export function buildReportHtml(report: ReportResult): string {
 
   const headHtml = report.columns.map((c) => `<th>${escape(c.label)}</th>`).join('')
   const rowsHtml = report.rows
-    .map((row) => `<tr>${report.columns.map((c) => `<td>${escape(row[c.key])}</td>`).join('')}</tr>`)
+    .map((row) => {
+      const cls = row._heading ? ' class="heading"' : row._subtotal ? ' class="totals"' : row._detail ? ' class="detail"' : ''
+      return `<tr${cls}>${report.columns.map((c) => `<td>${escape(row._detail && c === report.columns[0] ? String(row[c.key] ?? '').trim() : row[c.key])}</td>`).join('')}</tr>`
+    })
     .join('')
 
   const totalsHtml = report.totals
@@ -70,6 +78,9 @@ export function buildReportHtml(report: ReportResult): string {
   th, td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: start; }
   th { background: #eef0f6; }
   tr.totals td { font-weight: bold; background: #f3f4f8; }
+  tr.heading td { font-weight: bold; background: #e4e8f7; }
+  tr.detail td { color: #6b7280; }
+  tr.detail td:first-child { padding-inline-start: 28px; }
 </style>
 </head>
 <body>

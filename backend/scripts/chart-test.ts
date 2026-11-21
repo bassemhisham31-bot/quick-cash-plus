@@ -49,7 +49,7 @@ const internal = async (action: string): Promise<any> =>
   fetch(`${BASE}/internal/chart`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-qcp-internal': 'test-internal-secret' }, body: JSON.stringify({ action }) }).then((r) => r.json())
 
 const report = (type: string, filter: Record<string, unknown> = {}): Promise<any> => result('accounting:run', [type, filter])
-const rowOf = (rep: any, item: string): number => Number(rep.rows.find((r: any) => String(r.item).trim() === item)?.amount ?? NaN)
+const rowOf = (rep: any, item: string): number => Number(rep.rows.find((r: any) => String(r.item).trim() === item && r.amount !== '')?.amount ?? NaN)
 
 async function figures(): Promise<{ profit: number; assets: number; liabilities: number; equity: number; trialD: number; trialC: number; journalD: number; journalC: number }> {
   const inc = await report('income_statement')
@@ -57,10 +57,10 @@ async function figures(): Promise<{ profit: number; assets: number; liabilities:
   const tb = await report('trial_balance')
   const jr = await report('journal')
   return {
-    profit: rowOf(inc, 'صافي الربح / (الخسارة)'),
+    profit: rowOf(inc, 'صافي الربح'),
     assets: rowOf(bs, 'إجمالي الأصول'),
-    liabilities: rowOf(bs, 'إجمالي الخصوم'),
-    equity: rowOf(bs, 'إجمالي حقوق الملكية'),
+    liabilities: rowOf(bs, 'الخصوم المتداولة'),
+    equity: rowOf(bs, 'حقوق الملكية'),
     trialD: tb.totals.cd,
     trialC: tb.totals.cc,
     journalD: jr.totals.debit,
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
     const legacyTb = await report('trial_balance')
     assert(near(Number(legacyTb.rows.find((r: any) => String(r.code) === '1500')?.cd ?? NaN), 30), 'الشجرة القديمة: شراء الأصل (30) اتسجل مدين على 1500')
     const legacyInc = await report('income_statement')
-    assert(near(rowOf(legacyInc, 'إجمالي المصروفات'), 90), `الشجرة القديمة: شراء الأصل مش داخل في المصروفات (${rowOf(legacyInc, 'إجمالي المصروفات')} = 70 + 20)`)
+    assert(near(rowOf(legacyInc, 'المصروفات'), 90), `الشجرة القديمة: شراء الأصل مش داخل في المصروفات (${rowOf(legacyInc, 'المصروفات')} = 70 + 20)`)
     const treasuries = await result('treasury:list')
     const cashTreasury = treasuries.find((t: any) => t.methods?.includes?.('cash')) ?? treasuries[0]
     const tCode = String(1100 + cashTreasury.id)
@@ -221,7 +221,7 @@ async function main(): Promise<void> {
     const row = (code: string): any => tb2.rows.find((r: any) => String(r.code) === code)
     assert(!!row('5120') && !!row('5200') && Number(row('5120').cd) > 0, `ميزان المراجعة بقى فيه الخزائن على 5120 (${row('5120')?.cd}) والعملاء على 5200 (${row('5200')?.cd})`)
     const bs2 = await report('balance_sheet')
-    assert(near(rowOf(bs2, 'الخزينة والبنوك'), Number(row('5120').cd)), 'الميزانية بتظهر الحساب المربوط باسمه')
+    assert(near(rowOf(bs2, 'النقدية والبنوك'), Number(row('5120').cd)), 'الميزانية: النقدية والبنوك = رصيد الحساب المربوط بالخزائن (5120)')
     // حركة جديدة بعد الربط تتسجل على الحساب الجديد
     const sale3 = (await call('pos:checkout', [{ customerId: null, warehouseId: wh, lines: [line(1)], discountType: 'value', discountValue: 0, paymentMethod: 'cash', paid: 100, redeemPoints: 0 }, adminId])).body.result
     assert(sale3?.ok, 'بيع جديد بعد الربط')
@@ -237,10 +237,10 @@ async function main(): Promise<void> {
     assert(await fails('ledger:setAccountRoles', [{ fixed_assets: '1000' }], 'نوع'), 'ربط الأصول الثابتة بحساب إيرادات اتمنع (نوع غلط)')
     assert(near(cdOf(await report('trial_balance'), '4000'), 30), 'شراء الأصل القديم (30) انتقل مدين على 4000 بعد التحويل')
     const bsA = await report('balance_sheet')
-    assert(bsA.rows.some((r: any) => String(r.item).trim() === '▸ الأصول الثابتة') && bsA.rows.some((r: any) => String(r.item).trim() === '▸ الأصول المتداولة'), 'الميزانية: قسمين "الأصول الثابتة" و"الأصول المتداولة"')
+    assert(['الأصول الثابتة', 'مجمع الإهلاك', 'صافي الأصول الثابتة', 'النقدية والبنوك', 'العملاء (المدينون)', 'ضريبة القيمة المضافة', 'المخزون', 'الأصول المتداولة'].every((t) => bsA.rows.some((r: any) => String(r.item).trim() === t)), 'الميزانية: كل بنود الأصول بترتيب العميل (الأصول الثابتة، مجمع الإهلاك، صافي الثابتة، النقدية والبنوك، العملاء، الضريبة، المخزون، المتداولة)')
     assert(
-      near(rowOf(bsA, 'إجمالي الأصول الثابتة'), 30) && near(rowOf(bsA, 'إجمالي الأصول الثابتة') + rowOf(bsA, 'إجمالي الأصول المتداولة'), rowOf(bsA, 'إجمالي الأصول')),
-      `الميزانية: الأصول الثابتة 30 + المتداولة ${rowOf(bsA, 'إجمالي الأصول المتداولة')} = إجمالي الأصول ${rowOf(bsA, 'إجمالي الأصول')}`
+      near(rowOf(bsA, 'صافي الأصول الثابتة'), 30) && near(rowOf(bsA, 'صافي الأصول الثابتة') + rowOf(bsA, 'الأصول المتداولة'), rowOf(bsA, 'إجمالي الأصول')),
+      `الميزانية: الأصول الثابتة 30 + المتداولة ${rowOf(bsA, 'الأصول المتداولة')} = إجمالي الأصول ${rowOf(bsA, 'إجمالي الأصول')}`
     )
     const car = (await call('expenses:createCategory', ['سيارة توصيل', true])).body.result
     assert(car?.isFixedAsset === true, 'إنشاء تصنيف جديد متعلّم "أصل ثابت" من الشاشة')
@@ -264,9 +264,9 @@ async function main(): Promise<void> {
     assert((await call('ledger:createAccount', [{ code: '4100', name: 'سيارات', type: 'asset' }])).body.ok, 'إضافة حساب فرعي 4100 للأصول الثابتة')
     assert((await call('ledger:createEntry', [{ date: '2026-10-30', description: 'سيارة بالأجل', lines: [{ code: '4100', debit: 50, credit: 0 }, { code: '7000', debit: 0, credit: 50 }] }, adminId])).body.ok, 'قيد يدوي 50 على 4100')
     const bsB = await report('balance_sheet')
-    assert(near(rowOf(bsB, 'إجمالي الأصول الثابتة'), 30 + 20 + 4 + 50), `الميزانية: الأصول الثابتة (4000 + 4100) = ${rowOf(bsB, 'إجمالي الأصول الثابتة')}`)
+    assert(near(rowOf(bsB, 'صافي الأصول الثابتة'), 30 + 20 + 4 + 50), `الميزانية: الأصول الثابتة (4000 + 4100) = ${rowOf(bsB, 'صافي الأصول الثابتة')}`)
     assert(near(rowOf(bsB, 'سيارات'), 50), 'الحساب الفرعي 4100 ظاهر في الميزانية')
-    assert(near(rowOf(bsB, 'إجمالي الأصول المتداولة'), rowOf(bsB, 'إجمالي الأصول') - rowOf(bsB, 'إجمالي الأصول الثابتة')) && rowOf(bsB, 'الخزينة والبنوك') > 0, 'الخزينة (5120) فضلت في الأصول المتداولة')
+    assert(near(rowOf(bsB, 'الأصول المتداولة'), rowOf(bsB, 'إجمالي الأصول') - rowOf(bsB, 'صافي الأصول الثابتة')) && rowOf(bsB, 'النقدية والبنوك') > 0, 'الخزينة (5120) فضلت في الأصول المتداولة')
     // إعادة ربط الدور بحساب فرعي: الشراء الجديد يروح عليه
     assert((await call('ledger:setAccountRoles', [{ fixed_assets: '4100' }])).body.ok, 'ربط الأصول الثابتة بـ4100')
     const tbMap = await report('trial_balance')
@@ -278,6 +278,95 @@ async function main(): Promise<void> {
     await getDb().execute(FIXED_ASSET_ROLE_BACKFILL_SQL)
     assert((await result('ledger:listAccountRoles')).roles.find((r: any) => r.role === 'fixed_assets')?.accountCode === '4000', 'ترحيل 074: ربط fixed_assets → 4000 اتضاف لقاعدة محوّلة قبل كده')
     assert(Number((await getDb().execute("SELECT COUNT(*) AS c FROM account_roles WHERE role = 'fixed_assets'")).rows[0].c) === 1, 'والترحيل مبيكررش الربط')
+
+    console.log('\n5ج) بنود الميزانية وقائمة الدخل (رقم الحساب + البند لكل حساب)...')
+    const codeOf = (rep: any, item: string): string => String(rep.rows.find((r: any) => String(r.item).trim() === item && r.amount !== '')?.code ?? 'N/A')
+    const stLines = await result('ledger:listStatementLines')
+    assert(['fixed_assets', 'accumulated_depreciation', 'cash_bank', 'suppliers', 'accrued_expenses', 'advances', 'capital', 'partners_current', 'retained_earnings', 'selling_expenses', 'admin_expenses', 'income_tax'].every((k) => stLines.some((l: any) => l.key === k)), 'قايمة بنود القوائم فيها كل بنود العميل')
+    assert(await fails('ledger:createAccount', [{ code: '4901', name: 'نوع غلط', type: 'asset', statementLine: 'selling_expenses' }], 'مش مناسب'), 'بند مصروفات على حساب أصول اتمنع')
+    assert(await fails('ledger:createAccount', [{ code: '4901', name: 'بند مجهول', type: 'asset', statementLine: 'zzz' }], 'مش مناسب'), 'بند مجهول اتمنع')
+    const mk = async (code: string, name: string, type: string, statementLine: string): Promise<boolean> => (await call('ledger:createAccount', [{ code, name, type, statementLine }])).body.ok === true
+    assert(
+      (await mk('4900', 'مجمع إهلاك السيارات', 'asset', 'accumulated_depreciation')) &&
+        (await mk('6100', 'مصروفات مستحقة', 'liability', 'accrued_expenses')) &&
+        (await mk('6200', 'مقدمات عملاء', 'liability', 'advances')) &&
+        (await mk('7100', 'جاري الشركاء', 'equity', 'partners_current')) &&
+        (await mk('7200', 'أرباح محتجزة', 'equity', 'retained_earnings')) &&
+        (await mk('3100', 'مصروفات بيع وتسويق', 'expense', 'selling_expenses')) &&
+        (await mk('3200', 'ضرائب الدخل', 'expense', 'income_tax')) &&
+        (await mk('1100', 'إيرادات خدمات', 'revenue', 'service_revenue')),
+      'إضافة 8 حسابات كل واحد ببنده (مجمع إهلاك، مستحقة، مقدمات، جاري شركاء، محتجزة، بيع وتسويق، ضرائب، خدمات)'
+    )
+    assert((await result('ledger:listAccounts')).find((a: any) => a.code === '4900')?.statementLine === 'accumulated_depreciation', 'البند ظاهر في قايمة الحسابات')
+    assert((await result('ledger:listAccounts')).find((a: any) => a.code === '5000')?.statementLine === null, 'الحسابات الأساسية بنودها تلقائية (null)')
+    const stBefore = await figures()
+    const jv = async (desc: string, a: [string, number, number], b: [string, number, number]): Promise<boolean> =>
+      (await call('ledger:createEntry', [{ date: '2026-10-30', description: desc, lines: [{ code: a[0], debit: a[1], credit: a[2] }, { code: b[0], debit: b[1], credit: b[2] }] }, adminId])).body.ok === true
+    assert(
+      (await jv('إهلاك', ['3000', 40, 0], ['4900', 0, 40])) &&
+        (await jv('مستحق', ['3000', 25, 0], ['6100', 0, 25])) &&
+        (await jv('مقدم من عميل', ['5120', 15, 0], ['6200', 0, 15])) &&
+        (await jv('جاري شريك', ['5120', 60, 0], ['7100', 0, 60])) &&
+        (await jv('أرباح مرحّلة', ['5120', 10, 0], ['7200', 0, 10])) &&
+        (await jv('دعاية', ['3100', 12, 0], ['5120', 0, 12])) &&
+        (await jv('ضريبة دخل', ['3200', 8, 0], ['5120', 0, 8])) &&
+        (await jv('إيراد خدمة', ['5120', 33, 0], ['1100', 0, 33])),
+      '8 قيود يدوية على الحسابات الجديدة'
+    )
+    const bsC = await report('balance_sheet')
+    const incC = await report('income_statement')
+    assert(near(rowOf(bsC, 'مجمع الإهلاك'), -40) && codeOf(bsC, 'مجمع الإهلاك') === '4900', `الميزانية: مجمع الإهلاك -40 ورقمه 4900 (${rowOf(bsC, 'مجمع الإهلاك')} / ${codeOf(bsC, 'مجمع الإهلاك')})`)
+    assert(near(rowOf(bsC, 'صافي الأصول الثابتة'), rowOf(bsC, 'الأصول الثابتة') + rowOf(bsC, 'مجمع الإهلاك')), 'الميزانية: صافي الأصول الثابتة = الأصول الثابتة + (مجمع الإهلاك بالسالب)')
+    assert(near(rowOf(bsC, 'مصروفات مستحقة'), 25) && codeOf(bsC, 'مصروفات مستحقة') === '6100', 'الميزانية: مصروفات مستحقة 25 (6100)')
+    assert(near(rowOf(bsC, 'مقدمات'), 15) && codeOf(bsC, 'مقدمات') === '6200', 'الميزانية: مقدمات 15 (6200)')
+    assert(near(rowOf(bsC, 'جاري الشركاء'), 60) && codeOf(bsC, 'جاري الشركاء') === '7100', 'الميزانية: جاري الشركاء 60 (7100)')
+    assert(near(rowOf(bsC, 'أرباح محتجزة'), 10) && codeOf(bsC, 'أرباح محتجزة') === '7200', 'الميزانية: أرباح محتجزة 10 (7200)')
+    assert(codeOf(bsC, 'النقدية والبنوك') === '5120' && codeOf(bsC, 'الأصول الثابتة') !== 'N/A', `الميزانية: رقم الحساب جنب البند (النقدية والبنوك = ${codeOf(bsC, 'النقدية والبنوك')})`)
+    assert(near(rowOf(bsC, 'إجمالي الأصول'), rowOf(bsC, 'إجمالي الخصوم وحقوق الملكية')), `الميزانية متوازنة: الأصول ${rowOf(bsC, 'إجمالي الأصول')} = الخصوم + حقوق الملكية ${rowOf(bsC, 'إجمالي الخصوم وحقوق الملكية')}`)
+    assert(near(rowOf(bsC, 'حقوق الملكية'), rowOf(bsC, 'رأس المال') + rowOf(bsC, 'جاري الشركاء') + rowOf(bsC, 'أرباح وخسائر الفترة') + rowOf(bsC, 'أرباح محتجزة')), 'حقوق الملكية = رأس المال + جاري الشركاء + أرباح الفترة + المحتجزة')
+    assert(near(rowOf(bsC, 'أرباح وخسائر الفترة'), rowOf(incC, 'صافي الربح')), 'أرباح الفترة في الميزانية = صافي الربح في قائمة الدخل')
+    const stAfter = await figures()
+    assert(near(stAfter.profit, stBefore.profit - 40 - 25 - 12 - 8 + 33), `صافي الربح اتغيّر بالظبط بقيود المصروفات والإيراد (${stBefore.profit} → ${stAfter.profit})`)
+    assert(near(rowOf(incC, 'مصروفات بيع وتسويق'), 12) && codeOf(incC, 'مصروفات بيع وتسويق') === '3100', 'قائمة الدخل: مصروفات بيع وتسويق 12 (3100)')
+    assert(near(rowOf(incC, 'ضرائب الدخل'), 8) && codeOf(incC, 'ضرائب الدخل') === '3200', 'قائمة الدخل: ضرائب الدخل 8 (3200)')
+    assert(near(rowOf(incC, 'إيرادات الخدمات'), 33) && codeOf(incC, 'إيرادات الخدمات') === '1100', 'قائمة الدخل: إيرادات الخدمات 33 (1100)')
+    const optRow = (rep: any, item: string): number => (Number.isFinite(rowOf(rep, item)) ? rowOf(rep, item) : 0)
+    assert(near(rowOf(incC, 'المبيعات') + rowOf(incC, 'مردودات المبيعات') + optRow(incC, 'خصومات المبيعات'), rowOf(incC, 'صافي المبيعات')) && rowOf(incC, 'المبيعات') > 0 && codeOf(incC, 'المبيعات') === '1000', `قائمة الدخل: المبيعات + المردودات والخصومات (بالسالب) = صافي المبيعات (${rowOf(incC, 'المبيعات')} / ${rowOf(incC, 'مردودات المبيعات')} / ${optRow(incC, 'خصومات المبيعات')} / ${rowOf(incC, 'صافي المبيعات')})`)
+    assert(near(rowOf(incC, 'الإيرادات'), rowOf(incC, 'صافي المبيعات') + rowOf(incC, 'إيرادات الخدمات') + rowOf(incC, 'إيرادات الذمم') + rowOf(incC, 'إيرادات أخرى')), 'قائمة الدخل: الإيرادات = صافي المبيعات + الخدمات + الذمم + أخرى')
+    assert(near(rowOf(incC, 'مجمل الربح'), rowOf(incC, 'الإيرادات') - rowOf(incC, 'تكلفة المبيعات')), 'قائمة الدخل: مجمل الربح = الإيرادات − تكلفة المبيعات')
+    assert(near(rowOf(incC, 'المصروفات'), rowOf(incC, 'مصروفات بيع وتسويق') + rowOf(incC, 'مصروفات إدارية وعمومية')), 'قائمة الدخل: المصروفات = بيع وتسويق + إدارية وعمومية')
+    assert(near(rowOf(incC, 'صافي الربح (الخسارة) قبل الضرائب'), rowOf(incC, 'مجمل الربح') - rowOf(incC, 'المصروفات')) && near(rowOf(incC, 'صافي الربح'), rowOf(incC, 'صافي الربح (الخسارة) قبل الضرائب') - 8), 'قائمة الدخل: صافي الربح قبل الضرائب ثم بعد ضرائب الدخل')
+    assert(incC.rows.every((r: any) => ['item', 'code', 'amount'].every((k) => k in r)), 'كل صفوف القائمة فيها البند والرقم والمبلغ')
+    // بداية الفترة: الأرباح اللي قبلها بتروح للأرباح المحتجزة والإجمالي ما يتغيّرش
+    const bsFrom = await report('balance_sheet', { from: '2100-01-01' })
+    assert(near(rowOf(bsFrom, 'أرباح وخسائر الفترة'), 0) && near(rowOf(bsFrom, 'أرباح محتجزة'), 10 + stAfter.profit), `ميزانية ببداية فترة: أرباح الفترة صفر والمحتجزة = 10 + الأرباح السابقة (${rowOf(bsFrom, 'أرباح محتجزة')})`)
+    assert(near(rowOf(bsFrom, 'حقوق الملكية'), rowOf(bsC, 'حقوق الملكية')) && near(rowOf(bsFrom, 'إجمالي الأصول'), rowOf(bsFrom, 'إجمالي الخصوم وحقوق الملكية')), 'بداية الفترة مبتغيّرش إجمالي حقوق الملكية والميزانية فاضلة متوازنة')
+    // تعديل بند الحساب: من غير بند مبعوت بيفضل، وفاضي = تلقائي
+    assert((await call('ledger:updateAccount', ['3100', { name: 'مصروفات بيع وتسويق', type: 'expense' }])).body.ok && (await result('ledger:listAccounts')).find((a: any) => a.code === '3100')?.statementLine === 'selling_expenses', 'تعديل الاسم من غير بند بيسيب البند زي ما هو')
+    assert((await call('ledger:updateAccount', ['3200', { name: 'ضرائب الدخل', type: 'expense', statementLine: '' }])).body.ok && (await result('ledger:listAccounts')).find((a: any) => a.code === '3200')?.statementLine === null, 'بند فاضي = تلقائي')
+    const incNoTax = await report('income_statement')
+    const taxLine = incNoTax.rows.find((r: any) => String(r.item) === 'ضرائب الدخل' && !r._detail)
+    const adminLine = incNoTax.rows.find((r: any) => String(r.item) === 'مصروفات إدارية وعمومية')
+    assert(near(Number(taxLine?.amount), 0) && incNoTax.rows.some((r: any) => r._detail && r.code === '3200' && near(Number(r.amount), 8)) && Number(adminLine?.amount) >= 8, 'من غير بند ضرائب الدخل: بند الضرائب صفر والحساب 3200 (8) راح تحت "مصروفات إدارية وعمومية" تلقائيًا')
+    assert((await call('ledger:updateAccount', ['3200', { name: 'ضرائب الدخل', type: 'expense', statementLine: 'income_tax' }])).body.ok, 'رجّعت بند ضرائب الدخل')
+    assert(await fails('ledger:updateAccount', ['3200', { name: 'ضرائب الدخل', type: 'asset', statementLine: 'income_tax' }], 'مش مناسب'), 'تغيير النوع مع بند مش مناسب اتمنع')
+
+    console.log('\n5د) ربط تصنيف مصروف بحساب بعينه (بيع وتسويق)...')
+    const mkt = (await call('expenses:createCategory', ['دعاية وإعلان'])).body.result
+    const rolesNow = await result('ledger:listAccountRoles')
+    assert(rolesNow.expenseCategories.some((c: any) => c.id === mkt.id && c.accountCode === '') && !rolesNow.expenseCategories.some((c: any) => c.name === 'شراء أصول ثابتة'), 'تصنيفات المصروفات في شاشة الربط (من غير "شراء أصول") وكلها على الحساب العام')
+    assert(await fails('ledger:setAccountRoles', [{ [`expense:${mkt.id}`]: '5120' }], 'expense'), 'ربط تصنيف مصروف بحساب أصول اتمنع')
+    assert(await fails('ledger:setAccountRoles', [{ [`expense:${assetCat.id}`]: '3100' }], 'أصل'), 'ربط تصنيف "شراء أصل" بحساب مصروفات اتمنع')
+    assert(await fails('ledger:setAccountRoles', [{ 'expense:99999': '3100' }], 'مش موجود'), 'تصنيف مش موجود اتمنع')
+    assert((await call('ledger:setAccountRoles', [{ [`expense:${mkt.id}`]: '3100' }])).body.ok, 'ربط تصنيف دعاية وإعلان بحساب 3100')
+    assert((await result('ledger:listAccountRoles')).expenseCategories.find((c: any) => c.id === mkt.id)?.accountCode === '3100', 'الربط ظاهر في قايمة التصنيفات')
+    assert(await fails('ledger:deleteAccount', ['3100'], 'مربوط'), '3100 مربوط بتصنيف فمينفعش يتحذف')
+    const sellBefore = rowOf(await report('income_statement'), 'مصروفات بيع وتسويق')
+    assert((await call('expenses:create', [{ categoryId: mkt.id, amount: 7, method: 'cash', note: 'إعلان' }, adminId])).body.result?.ok, 'مصروف بتصنيف دعاية وإعلان (7)')
+    const incD = await report('income_statement')
+    assert(near(rowOf(incD, 'مصروفات بيع وتسويق'), sellBefore + 7) && incD.rows.some((r: any) => String(r.item).trim() === 'مصروفات بيع وتسويق' && r.code === '3100'), 'المصروف الجديد دخل على "مصروفات بيع وتسويق" (3100)')
+    assert(near((await figures()).profit, stAfter.profit - 7), 'صافي الربح نقص 7')
+    assert((await call('ledger:setAccountRoles', [{ [`expense:${mkt.id}`]: '' }])).body.ok && (await result('ledger:listAccountRoles')).expenseCategories.find((c: any) => c.id === mkt.id)?.accountCode === '', 'فك ربط التصنيف بيرجّعه للحساب العام')
 
     console.log('\n6) استيراد الأصناف من الإكسل من غير باركود...')
     const header = ['الاسم', 'الباركود', 'التصنيف', 'الوحدة', 'سعر الشراء', 'سعر البيع (قطاعي)', 'سعر الجملة', 'سعر جملة الجملة', 'سعر العبوة', 'حد التنبيه', 'الكمية الحالية', 'تاريخ الصلاحية', 'الرقم التسلسلي']

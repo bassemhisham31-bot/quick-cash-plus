@@ -2,7 +2,7 @@ import { getDb } from '../db'
 import { currentBranchId } from './branchScope'
 import { creditShare } from './salePayments'
 import { loadTreasuryRows, resolveTreasury } from './treasuries'
-import { ensureAccounts, listAccounts, loadResolver, makeFixedAssetMatcher, type AccountResolver, type AccountRole, type AccountRow, type AccountType } from './accountsChart'
+import { ensureAccounts, listAccounts, loadResolver, type AccountResolver, type AccountRole, type AccountRow, type AccountType } from './accountsChart'
 import type { ReportResult } from '../../shared/types'
 
 export type { AccountRow, AccountType }
@@ -581,104 +581,6 @@ export async function trialBalanceReport(from?: string, to?: string): Promise<Re
     ],
     rows,
     totals: { od: total('od'), oc: total('oc'), pd: total('pd'), pc: total('pc'), cd: total('cd'), cc: total('cc') }
-  }
-}
-
-async function periodNet(from?: string, to?: string): Promise<Map<string, number>> {
-  const out = new Map<string, number>()
-  for (const e of await buildLedger()) {
-    if (!inRange(e.date, from, to)) continue
-    for (const l of e.lines) out.set(l.code, (out.get(l.code) ?? 0) + l.debit - l.credit)
-  }
-  return out
-}
-
-export async function incomeStatementReport(from?: string, to?: string): Promise<ReportResult> {
-  const accounts = await accountMap()
-  const net = await periodNet(from, to)
-  const rows: Record<string, string | number>[] = []
-  const section = (title: string): void => void rows.push({ item: title, amount: '' as any, bold: 1 })
-  const sumType = (types: AccountType[], sign: 1 | -1): number => {
-    let t = 0
-    for (const [code, v] of net) if (types.includes(accounts.get(code)?.type as AccountType)) t += sign * v
-    return r2(t)
-  }
-  const list = (types: AccountType[], sign: 1 | -1, only?: (code: string) => boolean): void => {
-    for (const [code, v] of [...net.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
-      const acc = accounts.get(code)
-      if (!acc || !types.includes(acc.type) || (only && !only(code)) || r2(v) === 0) continue
-      rows.push({ item: `   ${acc.name}`, amount: r2(sign * v) })
-    }
-  }
-  section('الإيرادات')
-  list(['revenue'], -1)
-  const revenue = sumType(['revenue'], -1)
-  rows.push({ item: 'صافي الإيرادات (بعد الخصومات والمرتجعات)', amount: revenue })
-  section('تكلفة البضاعة المباعة')
-  list(['cogs'], 1)
-  const cogs = sumType(['cogs'], 1)
-  rows.push({ item: 'مجمل الربح', amount: r2(revenue - cogs) })
-  section('المصروفات')
-  list(['expense'], 1)
-  const expenses = sumType(['expense'], 1)
-  rows.push({ item: 'إجمالي المصروفات', amount: expenses })
-  rows.push({ item: 'صافي الربح / (الخسارة)', amount: r2(revenue - cogs - expenses) })
-  return {
-    title: `قائمة الدخل ${from ?? ''} → ${to ?? ''}`,
-    columns: [{ key: 'item', label: 'البند' }, cur('amount', 'المبلغ')],
-    rows: rows.map(({ item, amount }) => ({ item, amount }))
-  }
-}
-
-export async function balanceSheetReport(to?: string): Promise<ReportResult> {
-  const accounts = await accountMap()
-  const net = await periodNet(undefined, to)
-  const rows: Record<string, string | number>[] = []
-  const block = (title: string, types: AccountType[], sign: 1 | -1): number => {
-    rows.push({ item: title, amount: '' })
-    let total = 0
-    for (const [code, v] of [...net.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
-      const acc = accounts.get(code)
-      if (!acc || !types.includes(acc.type) || r2(v) === 0) continue
-      rows.push({ item: `   ${acc.name}`, amount: r2(sign * v) })
-      total += sign * v
-    }
-    return r2(total)
-  }
-  // الأصول: ثابتة (الحساب المربوط بدور fixed_assets وفروعه) ومتداولة (الباقي)
-  const isFixed = makeFixedAssetMatcher((await loadResolver()).code('fixed_assets'))
-  rows.push({ item: 'الأصول', amount: '' })
-  const assetPart = (title: string, pick: (code: string) => boolean): number => {
-    rows.push({ item: `   ▸ ${title}`, amount: '' })
-    let total = 0
-    for (const [code, v] of [...net.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
-      const acc = accounts.get(code)
-      if (!acc || acc.type !== 'asset' || !pick(code) || r2(v) === 0) continue
-      rows.push({ item: `      ${acc.name}`, amount: r2(v) })
-      total += v
-    }
-    rows.push({ item: `   إجمالي ${title}`, amount: r2(total) })
-    return total
-  }
-  const fixedAssets = assetPart('الأصول الثابتة', isFixed)
-  const currentAssets = assetPart('الأصول المتداولة', (code) => !isFixed(code))
-  const assets = r2(fixedAssets + currentAssets)
-  rows.push({ item: 'إجمالي الأصول', amount: assets })
-  const liabilities = block('الخصوم', ['liability'], -1)
-  rows.push({ item: 'إجمالي الخصوم', amount: liabilities })
-  const equityBase = block('حقوق الملكية', ['equity'], -1)
-  let profit = 0
-  for (const [code, v] of net) if (['revenue', 'cogs', 'expense'].includes(accounts.get(code)?.type ?? '')) profit -= v
-  profit = r2(profit)
-  rows.push({ item: '   أرباح/خسائر الفترة (مرحّلة)', amount: profit })
-  const equity = r2(equityBase + profit)
-  rows.push({ item: 'إجمالي حقوق الملكية', amount: equity })
-  rows.push({ item: 'إجمالي الخصوم وحقوق الملكية', amount: r2(liabilities + equity) })
-  return {
-    title: `الميزانية العمومية حتى ${to ?? 'اليوم'}`,
-    columns: [{ key: 'item', label: 'البند' }, cur('amount', 'المبلغ')],
-    rows,
-    totals: undefined
   }
 }
 

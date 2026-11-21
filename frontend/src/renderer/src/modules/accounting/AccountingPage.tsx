@@ -24,6 +24,14 @@ interface AccountDef {
   active: boolean
   /** الحركات المربوطة بالحساب ده (الشجرة المبسّطة) */
   roles?: string[]
+  /** بند الحساب في الميزانية/قائمة الدخل (فاضي/null = تلقائي) */
+  statementLine?: string | null
+}
+
+interface StatementLineDef {
+  key: string
+  label: string
+  types: string[]
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -83,6 +91,8 @@ function ReportsTab(): JSX.Element {
   const [type, setType] = useState('trial_balance')
   const [from, setFrom] = useState(monthStartIso())
   const [to, setTo] = useState(todayIso())
+  /** بداية الفترة في الميزانية (اختياري): أرباحها "أرباح وخسائر الفترة" وأرباح اللي قبلها بتروح "أرباح محتجزة" */
+  const [bsFrom, setBsFrom] = useState('')
   const [warehouseId, setWarehouseId] = useState<number | ''>('')
   const [accountCode, setAccountCode] = useState('1200')
   const [accounts, setAccounts] = useState<AccountDef[]>([])
@@ -101,21 +111,24 @@ function ReportsTab(): JSX.Element {
   }, [])
 
   const def = defs.find((d) => d.type === type)
-  // الميزانية بتاخد تاريخ النهاية بس
-  const showFrom = !def?.noDates && type !== 'balance_sheet'
+  // الميزانية: تاريخ النهاية + بداية فترة اختيارية (فاضية = من أول حركة)
+  const isBalanceSheet = type === 'balance_sheet'
+  const showFrom = !def?.noDates
+  const fromValue = isBalanceSheet ? bsFrom : from
+  const effectiveFrom = def?.noDates ? undefined : isBalanceSheet ? bsFrom || undefined : from
 
   useEffect(() => {
     setLoading(true)
     window.api.accounting
       .run(type, {
-        from: def?.noDates || type === 'balance_sheet' ? undefined : from,
+        from: effectiveFrom,
         to: def?.noDates ? undefined : to,
         warehouseId: warehouseId === '' ? null : warehouseId,
         accountCode
       })
       .then(setReport)
       .finally(() => setLoading(false))
-  }, [type, from, to, warehouseId, accountCode, dataVersion, def?.noDates])
+  }, [type, effectiveFrom, to, warehouseId, accountCode, dataVersion, def?.noDates])
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '290px 1fr', gap: 16, alignItems: 'start' }}>
@@ -138,7 +151,13 @@ function ReportsTab(): JSX.Element {
         <div className="qcp-card" style={{ display: 'flex', gap: 10, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
           {showFrom && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-              من <input className="qcp-input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+              {isBalanceSheet ? 'بداية الفترة (اختياري)' : 'من'}{' '}
+              <input className="qcp-input" type="date" value={fromValue} onChange={(e) => (isBalanceSheet ? setBsFrom(e.target.value) : setFrom(e.target.value))} />
+              {isBalanceSheet && bsFrom && (
+                <button className="qcp-btn qcp-btn-secondary" style={{ padding: '4px 8px' }} title="من أول حركة" onClick={() => setBsFrom('')}>
+                  ✕
+                </button>
+              )}
             </label>
           )}
           {!def?.noDates && (
@@ -346,23 +365,33 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
   const [type, setType] = useState('expense')
+  /** بند الحساب في القوائم المالية ('' = تلقائي) */
+  const [statementLine, setStatementLine] = useState('')
+  const [lineDefs, setLineDefs] = useState<StatementLineDef[]>([])
+  const [expenseCats, setExpenseCats] = useState<{ id: number; name: string; accountCode: string }[]>([])
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const lineLabelOf = (key?: string | null): string => (key ? (lineDefs.find((l) => l.key === key)?.label ?? key) : '')
 
   function refresh(): void {
     window.api.ledger.listAccounts().then(setAccounts)
     window.api.ledger.listAccountRoles().then((r) => {
       setCustom(r.custom)
       setRoles(r.roles)
+      setExpenseCats(r.expenseCategories ?? [])
     })
   }
   useEffect(refresh, [dataVersion])
+  useEffect(() => {
+    window.api.ledger.listStatementLines().then(setLineDefs)
+  }, [])
 
   function resetForm(): void {
     setEditing(null)
     setCode('')
     setName('')
     setType('expense')
+    setStatementLine('')
   }
 
   async function save(): Promise<void> {
@@ -370,10 +399,10 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
     setMessage(null)
     try {
       if (editing === null) {
-        await window.api.ledger.createAccount({ code, name, type })
+        await window.api.ledger.createAccount({ code, name, type, statementLine })
         setMessage('تم إضافة الحساب')
       } else {
-        await window.api.ledger.updateAccount(editing, { code, name, type })
+        await window.api.ledger.updateAccount(editing, { code, name, type, statementLine })
         setMessage('تم حفظ التعديل')
       }
       resetForm()
@@ -409,10 +438,22 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
     }
   }
 
+  async function mapExpenseCategory(id: number, accountCode: string): Promise<void> {
+    setError(null)
+    setMessage(null)
+    try {
+      await window.api.ledger.setAccountRoles({ [`expense:${id}`]: accountCode })
+      setMessage(accountCode ? 'تم ربط التصنيف بالحساب — المصروفات الجديدة والقديمة بتتحسب عليه' : 'التصنيف رجع للحساب العام للمصروفات')
+      refresh()
+    } catch (e: any) {
+      setError(e?.message ?? 'تعذر ربط التصنيف')
+    }
+  }
+
   return (
     <div>
       {canManage && (
-        <div className="qcp-card" style={{ display: 'grid', gridTemplateColumns: '140px 1fr 180px auto', gap: 10, marginBottom: 14, alignItems: 'end' }}>
+        <div className="qcp-card" style={{ display: 'grid', gridTemplateColumns: '130px 1fr 150px 230px auto', gap: 10, marginBottom: 14, alignItems: 'end' }}>
           <div className="qcp-field" style={{ margin: 0 }}>
             <label>كود الحساب</label>
             <input className="qcp-input" value={code} onChange={(e) => setCode(e.target.value)} placeholder="مثال: 1100" />
@@ -423,12 +464,32 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
           </div>
           <div className="qcp-field" style={{ margin: 0 }}>
             <label>النوع</label>
-            <select className="qcp-select" value={type} onChange={(e) => setType(e.target.value)}>
+            <select
+              className="qcp-select"
+              value={type}
+              onChange={(e) => {
+                setType(e.target.value)
+                setStatementLine('')
+              }}
+            >
               {Object.entries(TYPE_LABELS).map(([k, v]) => (
                 <option key={k} value={k}>
                   {v}
                 </option>
               ))}
+            </select>
+          </div>
+          <div className="qcp-field" style={{ margin: 0 }}>
+            <label>البند في الميزانية / قائمة الدخل</label>
+            <select className="qcp-select" value={statementLine} onChange={(e) => setStatementLine(e.target.value)}>
+              <option value="">تلقائي</option>
+              {lineDefs
+                .filter((l) => l.types.includes(type))
+                .map((l) => (
+                  <option key={l.key} value={l.key}>
+                    {l.label}
+                  </option>
+                ))}
             </select>
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
@@ -452,6 +513,7 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
               <th>الكود</th>
               <th>الحساب</th>
               <th>النوع</th>
+              <th>البند في القوائم</th>
               <th>الحالة</th>
               <th></th>
             </tr>
@@ -462,6 +524,7 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
                 <td>{a.code}</td>
                 <td>{a.name}</td>
                 <td>{TYPE_LABELS[a.type] ?? a.type}</td>
+                <td>{a.statementLine ? <strong>{lineLabelOf(a.statementLine)}</strong> : <span style={{ color: 'var(--qcp-ink-faint)' }}>تلقائي</span>}</td>
                 <td>
                   {a.isSystem ? 'حساب نظام' : a.active ? 'نشط' : 'موقوف'}
                   {!!a.roles?.length && <span title="مربوط بحركات النظام (من ربط حسابات النظام)"> 🔗</span>}
@@ -478,6 +541,7 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
                           setCode(a.code)
                           setName(a.name)
                           setType(a.type)
+                          setStatementLine(a.statementLine ?? '')
                           setError(null)
                           setMessage(null)
                         }}
@@ -504,7 +568,7 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
             ))}
             {!accounts.length && (
               <tr>
-                <td colSpan={5} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                <td colSpan={6} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                   مفيش حسابات
                 </td>
               </tr>
@@ -519,7 +583,7 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
             🔗 ربط حسابات النظام {showRoles ? '▲' : '▼'}
           </button>
           <p style={{ fontSize: 12, color: 'var(--qcp-ink-faint)', margin: '8px 0 0' }}>
-            بيحدد كل نوع حركة في النظام (مبيعات، عملاء، مخزون، خزائن...) بيتسجّل على أنهي حساب في الشجرة. الافتراضي هو الحسابات الأساسية السبعة؛ لو أضفت حسابات فرعية (مثلًا 5100 خزينة) اربط الحركة بيها من هنا. شراء الأصول (معدات، أجهزة، سيارات) بيتسجّل على "الأصول الثابتة" من تصنيف المصروف "شراء أصول ثابتة" في المصروفات أو سند الصرف، وأي حساب أصل كوده يبدأ زيها (4100، 4200...) بيظهر تحت "الأصول الثابتة" في الميزانية. الحساب المربوط مينفعش يتمسح.
+            بيحدد كل نوع حركة في النظام (مبيعات، عملاء، مخزون، خزائن...) بيتسجّل على أنهي حساب في الشجرة. الافتراضي هو الحسابات الأساسية السبعة؛ لو أضفت حسابات فرعية (مثلًا 5100 خزينة) اربط الحركة بيها من هنا. شراء الأصول (معدات، أجهزة، سيارات) بيتسجّل على "الأصول الثابتة" من تصنيف المصروف "شراء أصول ثابتة" في المصروفات أو سند الصرف، وأي حساب أصل كوده يبدأ زيها (4100، 4200...) بيظهر تحت "الأصول الثابتة" في الميزانية. الحساب المربوط مينفعش يتمسح. ولكل حساب تقدر تحدد "البند في الميزانية / قائمة الدخل" (أصول ثابتة، مجمع إهلاك، مصروفات مستحقة، جاري الشركاء، مصروفات بيع وتسويق...) من نموذج الحساب فوق.
           </p>
           {showRoles && (
             <div className="qcp-table-wrap" style={{ marginTop: 10 }}>
@@ -551,6 +615,42 @@ function AccountsTab({ canManage }: { canManage: boolean }): JSX.Element {
                 </tbody>
               </table>
             </div>
+          )}
+          {showRoles && expenseCats.length > 0 && (
+            <>
+              <p style={{ fontSize: 12, color: 'var(--qcp-ink-faint)', margin: '14px 0 0' }}>
+                تصنيفات المصروفات: اربط كل تصنيف بحساب مصروفات مختلف (مثلًا حساب "مصروفات بيع وتسويق" وحساب "مصروفات إدارية وعمومية" وحساب "ضرائب الدخل" بعد ما تحدد بند كل حساب فوق) عشان قائمة الدخل تفصلهم. التصنيف من غير ربط بيمشي على الحساب العام للمصروفات.
+              </p>
+              <div className="qcp-table-wrap" style={{ marginTop: 10 }}>
+                <table className="qcp-table">
+                  <thead>
+                    <tr>
+                      <th>تصنيف المصروف</th>
+                      <th>الحساب</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {expenseCats.map((c) => (
+                      <tr key={c.id}>
+                        <td>{c.name}</td>
+                        <td>
+                          <select className="qcp-select" style={{ width: 300 }} value={c.accountCode} onChange={(e) => mapExpenseCategory(c.id, e.target.value)}>
+                            <option value="">الحساب العام للمصروفات</option>
+                            {accounts
+                              .filter((a) => a.type === 'expense' && (a.active || a.code === c.accountCode))
+                              .map((a) => (
+                                <option key={a.code} value={a.code}>
+                                  {a.code} — {a.name}
+                                </option>
+                              ))}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       )}
