@@ -1027,7 +1027,9 @@ export function PosPage(): JSX.Element {
     <div
       className="rst-root rst-order"
       style={{
-        gridTemplateColumns: sidebarEnabled ? '170px minmax(0, 1fr) 400px' : 'minmax(0, 1fr) 400px',
+        gridTemplateColumns: sidebarEnabled
+          ? '170px minmax(0, 1fr) clamp(460px, 34vw, 560px)'
+          : 'minmax(0, 1fr) clamp(460px, 34vw, 560px)',
         overflow: 'hidden'
       }}
     >
