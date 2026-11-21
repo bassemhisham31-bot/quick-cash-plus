@@ -130,6 +130,26 @@ export async function deleteProduct(id: number): Promise<void> {
   await db.execute({ sql: "UPDATE products SET deleted_at = datetime('now') WHERE id = ?", args: [id] })
 }
 
+export async function deleteProducts(ids: number[]): Promise<number> {
+  const list = [...new Set((ids ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0))]
+  if (list.length === 0) return 0
+  const db = getDb()
+  const ph = list.map(() => '?').join(',')
+  const rs = await db.execute({ sql: `UPDATE products SET deleted_at = datetime('now') WHERE deleted_at IS NULL AND id IN (${ph})`, args: list })
+  return rs.rowsAffected
+}
+
+export async function deleteCategories(ids: number[]): Promise<number> {
+  const list = [...new Set((ids ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0))]
+  if (list.length === 0) return 0
+  const db = getDb()
+  const ph = list.map(() => '?').join(',')
+  await db.execute({ sql: `UPDATE products SET category_id = NULL WHERE category_id IN (${ph})`, args: list })
+  await db.execute({ sql: `UPDATE categories SET parent_id = NULL WHERE parent_id IN (${ph})`, args: list })
+  const rs = await db.execute({ sql: `UPDATE categories SET deleted_at = datetime('now') WHERE deleted_at IS NULL AND id IN (${ph})`, args: list })
+  return rs.rowsAffected
+}
+
 export async function listProducts(search = '', warehouseId?: number): Promise<Product[]> {
   const db = getDb()
   await assertWarehouseInScope(warehouseId)

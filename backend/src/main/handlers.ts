@@ -23,6 +23,8 @@ import {
   createUnit,
   createWarehouse,
   deleteProduct,
+  deleteProducts,
+  deleteCategories,
   adjustProductStock,
   listCategories,
   listProducts,
@@ -354,6 +356,8 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'catalog:createProduct': (input: ProductInput) => createProduct(input),
     'catalog:updateProduct': (id: number, input: ProductUpdateInput) => updateProduct(id, input),
     'catalog:deleteProduct': (id: number) => deleteProduct(id),
+    'catalog:deleteProducts': (ids: number[]) => deleteProducts(ids),
+    'catalog:deleteCategories': (ids: number[]) => deleteCategories(ids),
     'catalog:adjustStock': (productId: number, warehouseId: number, mode: 'add' | 'set', qty: number, userId: number) =>
       adjustProductStock(productId, warehouseId, mode, qty, userId),
     'catalog:listWarehouses': () => listWarehouses(),

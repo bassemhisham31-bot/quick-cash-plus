@@ -83,6 +83,8 @@ export function InventoryPage(): JSX.Element {
   const [purchaseInit, setPurchaseInit] = useState<{ vendorId: number | null; lines: PurchaseLineInput[]; requestIds: number[] } | null>(null)
   const [showTransfer, setShowTransfer] = useState(false)
   const [showWarehouses, setShowWarehouses] = useState(false)
+  const [showCategories, setShowCategories] = useState(false)
+  const [catSelected, setCatSelected] = useState<number[]>([])
   const [importResult, setImportResult] = useState<ProductImportResult | null>(null)
   const [importing, setImporting] = useState(false)
   const [posUiSettings, setPosUiSettings] = useState<PosUiSettings | null>(null)
@@ -240,6 +242,24 @@ export function InventoryPage(): JSX.Element {
     setSelectedIds(allSelected ? [] : products.map((p) => p.id))
   }
 
+  async function deleteSelectedProducts(): Promise<void> {
+    if (!warehouseId || selectedIds.length === 0) return
+    if (!await confirmDialog(`هل أنت متأكد من حذف ${selectedIds.length} صنف؟`)) return
+    await window.api.catalog.deleteProducts(selectedIds)
+    playSound('delete')
+    setSelectedIds([])
+    await refreshProducts(warehouseId)
+  }
+
+  async function deleteSelectedCategories(): Promise<void> {
+    if (catSelected.length === 0) return
+    if (!await confirmDialog(`هل أنت متأكد من حذف ${catSelected.length} تصنيف؟ (الأصناف المرتبطة بيهم هتفضل من غير تصنيف)`)) return
+    await window.api.catalog.deleteCategories(catSelected)
+    playSound('delete')
+    setCatSelected([])
+    await refreshAll()
+  }
+
   async function printSelectedLabels(): Promise<void> {
     const items = products
       .filter((p) => selectedIds.includes(p.id))
@@ -339,6 +359,9 @@ export function InventoryPage(): JSX.Element {
       <div className="qcp-page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <h1>{t('inventory.title')}</h1>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="qcp-btn qcp-btn-secondary" onClick={() => { setCatSelected([]); setShowCategories(true) }}>
+            🏷️ التصنيفات
+          </button>
           <button className="qcp-btn qcp-btn-secondary" onClick={() => setShowWarehouses(true)}>
             🏬 {t('inventory.warehouse')}
           </button>
@@ -377,6 +400,13 @@ export function InventoryPage(): JSX.Element {
             onClick={printSelectedLabels}
           >
             🏷️ {t('inventory.printSelectedBarcodes')} {selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
+          </button>
+          <button
+            className="qcp-btn qcp-btn-danger"
+            disabled={selectedIds.length === 0}
+            onClick={deleteSelectedProducts}
+          >
+            🗑️ حذف المحدد {selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
           </button>
           <button
             className="qcp-btn qcp-btn-primary"
@@ -941,6 +971,53 @@ export function InventoryPage(): JSX.Element {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {showCategories && (
+        <div className="qcp-modal-backdrop" onClick={() => setShowCategories(false)}>
+          <div className="qcp-modal" onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ marginTop: 0 }}>التصنيفات</h2>
+            <div className="qcp-table-wrap" style={{ marginBottom: 14, maxHeight: '50vh', overflow: 'auto' }}>
+              <table className="qcp-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 36 }}>
+                      <input
+                        type="checkbox"
+                        checked={categories.length > 0 && catSelected.length === categories.length}
+                        onChange={() => setCatSelected(catSelected.length === categories.length ? [] : categories.map((c) => c.id))}
+                        title="تحديد الكل"
+                      />
+                    </th>
+                    <th>التصنيف</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {categories.map((c) => (
+                    <tr key={c.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={catSelected.includes(c.id)}
+                          onChange={() => setCatSelected((prev) => (prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id]))}
+                        />
+                      </td>
+                      <td>{c.name}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="qcp-btn qcp-btn-danger" disabled={catSelected.length === 0} onClick={deleteSelectedCategories}>
+                🗑️ حذف المحدد {catSelected.length > 0 ? `(${catSelected.length})` : ''}
+              </button>
+              <button className="qcp-btn qcp-btn-secondary" onClick={() => setShowCategories(false)}>
+                إغلاق
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

@@ -742,6 +742,8 @@ const api = {
     updateProduct: (id: number, input: ProductUpdateInput): Promise<Product> =>
       invoke('catalog:updateProduct', id, input),
     deleteProduct: (id: number): Promise<void> => invoke('catalog:deleteProduct', id),
+    deleteProducts: (ids: number[]): Promise<number> => invoke('catalog:deleteProducts', ids),
+    deleteCategories: (ids: number[]): Promise<number> => invoke('catalog:deleteCategories', ids),
     adjustStock: (productId: number, warehouseId: number, mode: 'add' | 'set', qty: number, userId: number): Promise<number> =>
       invoke('catalog:adjustStock', productId, warehouseId, mode, qty, userId),
     listWarehouses: (): Promise<Warehouse[]> => invoke('catalog:listWarehouses'),

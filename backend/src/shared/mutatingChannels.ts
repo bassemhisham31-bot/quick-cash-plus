@@ -9,6 +9,8 @@ export const MUTATING_CHANNELS = new Set<string>([
   'catalog:createProduct',
   'catalog:updateProduct',
   'catalog:deleteProduct',
+  'catalog:deleteProducts',
+  'catalog:deleteCategories',
   'catalog:createWarehouse',
   'catalog:importProducts',
   'catalog:adjustStock',
@@ -153,6 +155,8 @@ export const CATALOG_SYNC_CHANNELS = new Set<string>([
   'catalog:createProduct',
   'catalog:updateProduct',
   'catalog:deleteProduct',
+  'catalog:deleteProducts',
+  'catalog:deleteCategories',
   'catalog:createUnit',
   'catalog:importProducts',
   'catalog:adjustStock'
