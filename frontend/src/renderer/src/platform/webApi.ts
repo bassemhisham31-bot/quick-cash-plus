@@ -593,12 +593,17 @@ async function importProductsFile(): Promise<ProductImportResult> {
 
 const api = {
   ledger: {
-    listAccounts: (): Promise<{ code: string; name: string; type: string; isSystem: boolean; active: boolean; roles?: string[] }[]> => invoke('ledger:listAccounts'),
-    createAccount: (input: { code: string; name: string; type: string }): Promise<void> => invoke('ledger:createAccount', input),
+    listAccounts: (): Promise<{ code: string; name: string; type: string; isSystem: boolean; active: boolean; roles?: string[]; statementLine?: string | null }[]> => invoke('ledger:listAccounts'),
+    listStatementLines: (): Promise<{ key: string; label: string; types: string[] }[]> => invoke('ledger:listStatementLines'),
+    createAccount: (input: { code: string; name: string; type: string; statementLine?: string | null }): Promise<void> => invoke('ledger:createAccount', input),
     setAccountActive: (code: string, active: boolean): Promise<void> => invoke('ledger:setAccountActive', code, active),
-    updateAccount: (code: string, input: { code?: string; name: string; type: string }): Promise<void> => invoke('ledger:updateAccount', code, input),
+    updateAccount: (code: string, input: { code?: string; name: string; type: string; statementLine?: string | null }): Promise<void> => invoke('ledger:updateAccount', code, input),
     deleteAccount: (code: string): Promise<void> => invoke('ledger:deleteAccount', code),
-    listAccountRoles: (): Promise<{ custom: boolean; roles: { role: string; label: string; type: string; accountCode: string; defaultCode: string }[] }> => invoke('ledger:listAccountRoles'),
+    listAccountRoles: (): Promise<{
+      custom: boolean
+      roles: { role: string; label: string; type: string; accountCode: string; defaultCode: string }[]
+      expenseCategories: { id: number; name: string; accountCode: string }[]
+    }> => invoke('ledger:listAccountRoles'),
     setAccountRoles: (input: Record<string, string>): Promise<void> => invoke('ledger:setAccountRoles', input),
     listEntries: (): Promise<{ id: number; date: string; description: string; debit: number }[]> => invoke('ledger:listEntries'),
     createEntry: (

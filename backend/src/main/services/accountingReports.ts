@@ -3,7 +3,8 @@ import { branchesEnabled, branchFilter, currentBranchId } from './branchScope'
 import { listTreasuries, getTreasuryStatement } from './treasuries'
 import { defaultLedgerAccountCode, notFixedAssetSql } from './accountsChart'
 import { salePayShareSql } from './salePayments'
-import { accountLedgerReport, balanceSheetReport, incomeStatementReport, journalReport, trialBalanceReport } from './ledger'
+import { accountLedgerReport, journalReport, trialBalanceReport } from './ledger'
+import { balanceSheetReport, incomeStatementReport } from './financialStatements'
 import type { ReportResult } from '../../shared/types'
 
 export type AccountingReportType =
@@ -101,7 +102,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
     case 'income_statement':
       return incomeStatementReport(f.from, f.to)
     case 'balance_sheet':
-      return balanceSheetReport(f.to)
+      return balanceSheetReport(f.to, f.from)
     case 'journal':
       return journalReport(f.from, f.to)
     case 'account_ledger':

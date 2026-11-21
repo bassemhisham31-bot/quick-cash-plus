@@ -59,10 +59,21 @@ export function ReportView({ report, searchable = true }: { report: ReportResult
           </thead>
           <tbody>
             {rows.map((row, idx) => (
-              <tr key={idx} style={row._subtotal ? { fontWeight: 800, background: 'var(--qcp-bg-sunken)' } : undefined}>
-                {report.columns.map((c) => (
-                  <td key={c.key} style={{ textAlign: c.align === 'end' ? 'end' : 'start' }}>
-                    {formatCell(row[c.key], c)}
+              <tr
+                key={idx}
+                style={
+                  row._heading
+                    ? { fontWeight: 800, background: 'var(--qcp-accent-soft)' }
+                    : row._subtotal
+                      ? { fontWeight: 800, background: 'var(--qcp-bg-sunken)' }
+                      : row._detail
+                        ? { color: 'var(--qcp-ink-faint)', fontSize: 12.5 }
+                        : undefined
+                }
+              >
+                {report.columns.map((c, ci) => (
+                  <td key={c.key} style={{ textAlign: c.align === 'end' ? 'end' : 'start', ...(row._detail && ci === 0 ? { paddingInlineStart: 32 } : {}) }}>
+                    {row._detail && ci === 0 ? String(row[c.key] ?? '').trim() : formatCell(row[c.key], c)}
                   </td>
                 ))}
               </tr>
