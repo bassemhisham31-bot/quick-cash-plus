@@ -6,6 +6,22 @@ import { useState } from 'react'
  */
 export function QzCertificateCard(): JSX.Element {
   const [message, setMessage] = useState<string | null>(null)
+  const [testing, setTesting] = useState(false)
+  const [diagnosis, setDiagnosis] = useState<{ ok: boolean; text: string } | null>(null)
+
+  /** اختبار اتصال الموقع بـQZ Tray على الجهاز ده (من غير طباعة) — بيقول لو شغال أو متحظر أو الموقع مش واصله. */
+  async function testConnection(): Promise<void> {
+    setTesting(true)
+    setDiagnosis(null)
+    try {
+      const { diagnoseQz } = await import('../platform/qzPrint')
+      const d = await diagnoseQz()
+      const extra = d.ok ? `\nنسخة QZ Tray: ${d.version ?? '—'} · عدد الطابعات: ${d.printers ?? 0}${d.defaultPrinter ? ` · الافتراضية: ${d.defaultPrinter}` : ''}` : ''
+      setDiagnosis({ ok: d.ok, text: d.message + extra })
+    } finally {
+      setTesting(false)
+    }
+  }
 
   async function download(): Promise<void> {
     setMessage(null)
@@ -35,6 +51,18 @@ export function QzCertificateCard(): JSX.Element {
 
   return (
     <div className="qcp-card" style={{ marginBottom: 18, padding: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+        <strong>🖨️ اختبار الاتصال بـQZ Tray</strong>
+        <button type="button" className="qcp-btn qcp-btn-secondary" disabled={testing} onClick={() => void testConnection()}>
+          {testing ? 'جاري الاختبار… (لو ظهرت رسالة QZ اضغط Allow)' : 'اختبار الاتصال'}
+        </button>
+      </div>
+      {diagnosis && (
+        <div className={`qcp-pill ${diagnosis.ok ? 'success' : 'critical'}`} style={{ display: 'block', whiteSpace: 'pre-line', lineHeight: 1.8, marginBottom: 12 }}>
+          {diagnosis.ok ? '✅ ' : '❌ '}
+          {diagnosis.text}
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <strong>🔐 إيقاف رسالة QZ Tray المتكررة</strong>
         <button type="button" className="qcp-btn qcp-btn-secondary" style={{ marginInlineStart: 'auto' }} onClick={() => void download()}>

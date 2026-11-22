@@ -50,10 +50,86 @@ async function ensureConnected(): Promise<void> {
   }
   try {
     await connecting
-  } catch {
-    throw new Error(
-      'QZ Tray مش شغال على الجهاز ده. افتحه من قايمة ابدأ (ابحث عن QZ Tray) واستنى لما أيقونته تظهر جنب الساعة، وبعدين جرّب الطباعة تاني.'
+  } catch (err) {
+    // لو QZ Tray رفض الاتصال (Block) الـsocket ممكن يفضل مفتوح — نقفله عشان المحاولة الجاية تبدأ من الأول
+    try {
+      if (qz.websocket.isActive()) await qz.websocket.disconnect()
+    } catch {
+      // مش مهم
+    }
+    throw new Error(describeQzError(err))
+  }
+}
+
+/**
+ * QZ Tray بيفشل الاتصال لأسباب مختلفة وكلها كانت بتظهر "QZ Tray مش شغال" — ده كان بيضلل
+ * (مثلًا QZ شغال بس الموقع متحظر عنده). هنا بنفرّق بين الأسباب من نص الخطأ الحقيقي.
+ */
+export function describeQzError(err: unknown): string {
+  const raw = (err instanceof Error ? err.message : String(err ?? '')).trim()
+  if (/blocked/i.test(raw)) {
+    return (
+      'QZ Tray شغال لكنه رفض الاتصال بالموقع ده (Blocked) — يعني اتضغط «Block» قبل كده أو الرسالة اتقفلت من غير موافقة.\n' +
+      'الحل: كليك يمين على أيقونة QZ Tray جنب الساعة ← Advanced ← Site Manager، وامسح الموقع من قايمة Blocked. ' +
+      'وبعدين جرّب الطباعة تاني وعند ظهور رسالة QZ اضغط Allow.'
     )
+  }
+  if (/failed to sign/i.test(raw)) {
+    return 'تعذر توقيع طلب الطباعة — سجّل الخروج وادخل تاني وجرّب مرة تانية.'
+  }
+  if (!raw || /unable to establish connection|unable to create a websocket|cancelled by user/i.test(raw)) {
+    return (
+      'الموقع مش قادر يوصل لـQZ Tray على الجهاز ده.\n' +
+      '١) تأكد إن أيقونة QZ Tray ظاهرة جنب الساعة؛ لو مش موجودة افتحه من قايمة ابدأ (QZ Tray) واستنى لحد ما تظهر.\n' +
+      '٢) لو الأيقونة ظاهرة وتم فتحه فعلًا: المتصفح هو اللي بيمنع — لو ظهرت رسالة بتطلب إذن الوصول لتطبيقات/أجهزة على جهازك اضغط «سماح»، ' +
+      'أو من أيقونة القفل جنب عنوان الموقع ← إعدادات الموقع، واسمح بالوصول للشبكة المحلية. وجرّب Chrome أو Edge.\n' +
+      '٣) بعد كده جرّب الطباعة تاني.'
+    )
+  }
+  return `تعذر الاتصال بـQZ Tray (${raw})`
+}
+
+/** بيحوّل أخطاء QZ اللي بتيجي بعد الاتصال (زي "Request blocked") لرسالة مفهومة، وأي خطأ تاني بيعدّي زي ما هو. */
+function rethrowFriendly(err: unknown): never {
+  const raw = err instanceof Error ? err.message : String(err ?? '')
+  if (/blocked/i.test(raw)) throw new Error(describeQzError(err))
+  throw err instanceof Error ? err : new Error(raw)
+}
+
+export interface QzDiagnosis {
+  ok: boolean
+  message: string
+  version?: string
+  printers?: number
+  defaultPrinter?: string | null
+}
+
+/** اختبار اتصال كامل (بدون طباعة): الاتصال + نسخة QZ + عدد الطابعات — لزرار "اختبار الاتصال" في إعدادات الطباعة. */
+export async function diagnoseQz(): Promise<QzDiagnosis> {
+  try {
+    await ensureConnected()
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+  }
+  try {
+    const version: string | undefined = await qz.api.getVersion()
+    const names: string | string[] = await qz.printers.find()
+    const list = Array.isArray(names) ? names : names ? [names] : []
+    let def: string | null = null
+    try {
+      def = await qz.printers.getDefault()
+    } catch {
+      def = null
+    }
+    return {
+      ok: true,
+      message: list.length ? 'QZ Tray شغال والموقع متصل بيه — الطباعة جاهزة.' : 'QZ Tray متصل لكن مش لاقي أي طابعة متعرّفة على الجهاز ده.',
+      version,
+      printers: list.length,
+      defaultPrinter: def
+    }
+  } catch (err) {
+    return { ok: false, message: describeQzError(err) }
   }
 }
 
@@ -72,15 +148,19 @@ export interface QzPrintOptions {
 export async function printHtmlViaQz(html: string, options: QzPrintOptions): Promise<void> {
   await ensureConnected()
 
-  const printerName = options.printerName || (await qz.printers.getDefault())
-  if (!printerName) throw new Error('مفيش طابعة افتراضية متعرّفة على الجهاز ده')
+  try {
+    const printerName = options.printerName || (await qz.printers.getDefault())
+    if (!printerName) throw new Error('مفيش طابعة افتراضية متعرّفة على الجهاز ده')
 
-  const config = qz.configs.create(printerName, {
-    size: { width: options.widthMm, height: 0 },
-    units: 'mm'
-  })
+    const config = qz.configs.create(printerName, {
+      size: { width: options.widthMm, height: 0 },
+      units: 'mm'
+    })
 
-  await qz.print(config, [{ type: 'pixel', format: 'html', flavor: 'plain', data: html }])
+    await qz.print(config, [{ type: 'pixel', format: 'html', flavor: 'plain', data: html }])
+  } catch (err) {
+    rethrowFriendly(err)
+  }
 }
 
 const CSS_PX_PER_MM = 96 / 25.4
@@ -152,19 +232,23 @@ export async function renderHtmlToImage(html: string, widthMm: number): Promise<
 export async function printHtmlAsImageViaQz(html: string, options: QzPrintOptions): Promise<void> {
   await ensureConnected()
 
-  const printerName = options.printerName || (await qz.printers.getDefault())
-  if (!printerName) throw new Error('مفيش طابعة افتراضية متعرّفة على الجهاز ده')
+  try {
+    const printerName = options.printerName || (await qz.printers.getDefault())
+    if (!printerName) throw new Error('مفيش طابعة افتراضية متعرّفة على الجهاز ده')
 
-  const { base64, heightMm } = await renderHtmlToImage(html, options.widthMm)
-  const config = qz.configs.create(printerName, {
-    size: { width: options.widthMm, height: Math.ceil(heightMm) },
-    units: 'mm',
-    margins: 0,
-    scaleContent: true,
-    interpolation: 'nearest-neighbor'
-  })
+    const { base64, heightMm } = await renderHtmlToImage(html, options.widthMm)
+    const config = qz.configs.create(printerName, {
+      size: { width: options.widthMm, height: Math.ceil(heightMm) },
+      units: 'mm',
+      margins: 0,
+      scaleContent: true,
+      interpolation: 'nearest-neighbor'
+    })
 
-  await qz.print(config, [{ type: 'pixel', format: 'image', flavor: 'base64', data: base64 }])
+    await qz.print(config, [{ type: 'pixel', format: 'image', flavor: 'base64', data: base64 }])
+  } catch (err) {
+    rethrowFriendly(err)
+  }
 }
 
 /** بيتأكد إن QZ Tray شغال أصلًا من غير ما يعمل أي طباعة — مفيد لعرض حالة الاتصال في الواجهة. */
@@ -187,14 +271,23 @@ export async function openCashDrawerViaQz(printerName: string, pin: 'pin2' | 'pi
   if (!printerName) throw new Error('حدد طابعة افتراضية من إعدادات الطباعة أولًا')
 
   const m = pin === 'pin5' ? 1 : 0
-  const config = qz.configs.create(printerName)
-  await qz.print(config, [{ type: 'raw', format: 'command', data: [0x1b, 0x70, m, 0x19, 0xfa] }])
+  try {
+    const config = qz.configs.create(printerName)
+    await qz.print(config, [{ type: 'raw', format: 'command', data: [0x1b, 0x70, m, 0x19, 0xfa] }])
+  } catch (err) {
+    rethrowFriendly(err)
+  }
 }
 
 /** طابعات الجهاز ده (اللي QZ Tray شايفها) — بديل getPrintersAsync بتاع Electron. */
 export async function listPrintersViaQz(): Promise<{ name: string; displayName: string; isDefault: boolean }[]> {
   await ensureConnected()
-  const names: string[] = await qz.printers.find()
+  let names: string[]
+  try {
+    names = await qz.printers.find()
+  } catch (err) {
+    rethrowFriendly(err)
+  }
   let def: string | null = null
   try {
     def = await qz.printers.getDefault()
