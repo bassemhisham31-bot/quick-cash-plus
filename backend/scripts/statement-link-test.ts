@@ -18,8 +18,17 @@ import { createProduct } from '../src/main/services/catalog'
 import { createCustomer, recordCustomerPayment } from '../src/main/services/customers'
 import { openDay } from '../src/main/services/cashSession'
 import { checkout } from '../src/main/services/pos'
-import { createStatementLink, getStatementLinkInfo, isPreviewFetch, revokeStatementLink } from '../src/main/services/statementLink'
-import { __setFakeSocketForTests, sendCustomerStatementLinkByWhatsApp } from '../src/main/services/whatsapp'
+import {
+  createStatementLink,
+  createVendorStatementLink,
+  getStatementLinkInfo,
+  getVendorStatementLinkInfo,
+  isPreviewFetch,
+  revokeStatementLink,
+  revokeVendorStatementLink
+} from '../src/main/services/statementLink'
+import { addVendorAccountEntries, createVendor, updateVendor } from '../src/main/services/vendors'
+import { __setFakeSocketForTests, sendCustomerStatementLinkByWhatsApp, sendVendorStatementLinkByWhatsApp } from '../src/main/services/whatsapp'
 import { createApp } from '../src/http/server'
 import { buildHandlerMap, MUTATING_CHANNELS } from '../src/main/handlers'
 import type { CheckoutInput, ProductInput } from '../src/shared/types'
@@ -168,6 +177,85 @@ async function main(): Promise<void> {
   const l3 = await createStatementLink(evil.id, 'https://shop.example.test')
   await getDb().execute({ sql: "UPDATE customers SET deleted_at = datetime('now') WHERE id = ?", args: [evil.id] })
   assert((await get(pathOf(l3.url!))).status === 404, 'عميل محذوف → الرابط 404')
+
+  console.log('7b) رابط كشف حساب المورد')
+  const vend = await createVendor({ name: 'مورد <b>زيت</b>', phone: '01099998888', address: '', notes: '', openingBalance: 0 })
+  const vendNoPhone = await createVendor({ name: 'مورد بدون رقم', phone: '', address: '', notes: '', openingBalance: 0 })
+  await addVendorAccountEntries(vend.id, [
+    { date: '2026-02-01', kind: 'opening', description: 'رصيد أول المدة', debit: 1000, credit: 0 },
+    { date: '2026-02-10', kind: 'purchase', description: 'مشتريات صويا — 100 كجم × سعر 50', debit: 5000, credit: 0 },
+    { date: '2026-02-12', kind: 'payment', description: 'سداد — بنك مصر', debit: 0, credit: 2000 }
+  ])
+  const vInfo0 = await getVendorStatementLinkInfo(vend.id, 'https://shop.example.test')
+  assert(!vInfo0.enabled && vInfo0.url === null, 'المورد: قبل التفعيل مفيش رابط')
+  const vLink = await createVendorStatementLink(vend.id, 'https://shop.example.test')
+  assert(vLink.enabled && /^https:\/\/shop\.example\.test\/api\/s\/[A-Za-z0-9_-]{32}$/.test(vLink.url ?? ''), 'رابط المورد بتوكن عشوائي 32 حرف على نفس المسار العام')
+  assert((await createVendorStatementLink(vend.id, 'https://shop.example.test')).url === vLink.url, 'استدعاء تاني بيرجّع نفس رابط المورد')
+  const vWrong = await createVendorStatementLink(99999, 'https://shop.example.test').catch((e) => e)
+  assert(vWrong instanceof Error, 'مورد مش موجود → خطأ')
+  const vPath = pathOf(vLink.url!)
+  const vRes = await get(vPath)
+  const vHtml = await vRes.text()
+  assert(vRes.status === 200 && vHtml.includes('كشف حساب المورد'), 'صفحة المورد 200 وعنوانها «كشف حساب المورد»')
+  assert(vHtml.includes('المبلغ المستحق لك عندنا') && vHtml.includes('4,000.00'), 'الرصيد 4,000.00 بصيغة «المبلغ المستحق لك عندنا» (منظور المورد)')
+  assert(!vHtml.includes('المبلغ المستحق عليك'), 'مفيش صيغة العميل في صفحة المورد')
+  assert(vHtml.includes('سداد — بنك مصر') && vHtml.includes('مشتريات صويا') && vHtml.includes('رصيد سابق'), 'حركات المورد + رصيد سابق ظاهرين')
+  assert(vHtml.includes('مستحق لك') && vHtml.includes('مسدّد / مخصوم'), 'أعمدة المورد: «مستحق لك» و«مسدّد / مخصوم»')
+  assert(!vHtml.includes('<b>زيت</b>') && vHtml.includes('&lt;b&gt;'), 'اسم المورد متهرّب منه (لا XSS)')
+  assert(!vHtml.includes('<script'), 'مفيش سكريبت في صفحة المورد')
+  assert((await getVendorStatementLinkInfo(vend.id, 'https://shop.example.test')).views === 1, 'عدّاد فتح المورد = 1')
+  await fetch(base + vPath, { headers: { 'user-agent': 'WhatsApp/2.24.20.80 A' } })
+  assert((await getVendorStatementLinkInfo(vend.id, 'https://shop.example.test')).views === 1, 'معاينة واتساب ما زوّدتش عدّاد المورد')
+  // الكشف حيّ: حركة جديدة (فاتورة مشتريات حقيقية) تظهر في نفس الرابط
+  await addVendorAccountEntries(vend.id, [{ date: '2026-02-20', kind: 'payment', description: 'سداد تاني', debit: 0, credit: 4000 }])
+  const vHtml2 = await (await get(vPath)).text()
+  assert(vHtml2.includes('الحساب مسدّد') && vHtml2.includes('سداد تاني'), 'الكشف حيّ: بعد سداد 4000 الصفحة بتقول «الحساب مسدّد»')
+  // رصيد بالسالب (مدفوع زيادة)
+  await addVendorAccountEntries(vend.id, [{ date: '2026-02-21', kind: 'payment', description: 'دفعة زيادة', debit: 0, credit: 300 }])
+  const vHtml3 = await (await get(vPath)).text()
+  assert(vHtml3.includes('رصيد للمحل عندك') && vHtml3.includes('300.00'), 'رصيد سالب: «رصيد للمحل عندك (مدفوع زيادة)» 300.00')
+  // الطرف التاني: توكن العميل مش بيفتح مورد والعكس بيتفرّق بالتوكن
+  const custTokenPath = pathOf((await createStatementLink((await createCustomer({ name: 'عميل للتجربة', phone: '', address: '', notes: '', openingBalance: 50, loyaltyEnabled: true })).id, 'https://shop.example.test')).url!)
+  const cHtml = await (await get(custTokenPath)).text()
+  assert(cHtml.includes('كشف حساب العميل') && !cHtml.includes('كشف حساب المورد'), 'رابط العميل لسه بيفتح صفحة العميل')
+
+  const vSent: { jid: string; text: string }[] = []
+  __setFakeSocketForTests({ sendMessage: async (jid, content) => void vSent.push({ jid, text: content.text }) })
+  await addVendorAccountEntries(vend.id, [{ date: '2026-02-22', kind: 'purchase', description: 'مشتريات', debit: 1300, credit: 0 }]) // رصيد 1000
+  const vWa = await sendVendorStatementLinkByWhatsApp(vend.id, 'https://shop.example.test')
+  assert(vWa.ok && vSent.length === 1 && vSent[0].jid === '201099998888@s.whatsapp.net', 'واتساب المورد اتبعت لرقمه')
+  assert(
+    vSent[0].text.includes('المبلغ المستحق لك عندنا: 1000.00 (وقت الإرسال)') && vSent[0].text.includes(vLink.url!) && vSent[0].text.includes('بيتحدّث تلقائيًا'),
+    'الرسالة: الرصيد وقت الإرسال + نفس الرابط + «بيتحدّث تلقائيًا»'
+  )
+  console.log(vSent[0].text.split('\n').map((l) => '     ' + l).join('\n'))
+  const vWaNoPhone = await sendVendorStatementLinkByWhatsApp(vendNoPhone.id, 'https://shop.example.test')
+  assert(!vWaNoPhone.ok && (vWaNoPhone.error ?? '').includes('رقم'), 'مورد من غير رقم → رسالة واضحة')
+  assert(!(await getVendorStatementLinkInfo(vendNoPhone.id, 'https://shop.example.test')).enabled, 'فشل الإرسال ما عملش رابط للمورد من غير رقم')
+  const updated = await updateVendor(vendNoPhone.id, { name: ' مورد بدون رقم (اتعدّل) ', phone: ' 01011112222 ', address: 'العنوان', notes: 'ملاحظة' })
+  assert(updated.name === 'مورد بدون رقم (اتعدّل)' && updated.phone === '01011112222' && updated.address === 'العنوان' && updated.notes === 'ملاحظة', 'تعديل المورد: الاسم والموبايل والعنوان والملاحظات (بعد تنظيف المسافات)')
+  const emptyName = await updateVendor(vendNoPhone.id, { name: '  ', phone: '' }).catch((e) => e)
+  assert(emptyName instanceof Error, 'تعديل المورد بدون اسم → خطأ')
+  const vWa2 = await sendVendorStatementLinkByWhatsApp(vendNoPhone.id, 'https://shop.example.test')
+  assert(vWa2.ok && vSent.length === 2 && vSent[1].jid === '201011112222@s.whatsapp.net' && vSent[1].text.includes('حسابك مسدّد'), 'بعد إضافة الرقم الإرسال اشتغل (حساب صفر → «حسابك مسدّد»)')
+  __setFakeSocketForTests(null)
+  const handlers2 = buildHandlerMap()
+  assert(
+    ['vendors:getStatementLink', 'vendors:createStatementLink', 'vendors:revokeStatementLink', 'vendors:sendStatementLinkWhatsApp', 'vendors:update'].every((c) => !!handlers2[c]),
+    'قنوات المورد متسجّلة'
+  )
+  assert(
+    ['vendors:getStatementLink', 'vendors:createStatementLink', 'vendors:revokeStatementLink', 'vendors:sendStatementLinkWhatsApp'].every((c) => !MUTATING_CHANNELS.has(c)) && MUTATING_CHANNELS.has('vendors:update'),
+    'قنوات الرابط مش mutating (مفيش remount) وتعديل المورد mutating'
+  )
+  const vRenewed = await createVendorStatementLink(vend.id, 'https://shop.example.test', true)
+  assert(vRenewed.url !== vLink.url && vRenewed.views === 0, 'تجديد رابط المورد = توكن جديد وعدّاد صفر')
+  assert((await get(vPath)).status === 404 && (await get(pathOf(vRenewed.url!))).status === 200, 'رابط المورد القديم بطل والجديد شغال')
+  await revokeVendorStatementLink(vend.id)
+  assert((await get(pathOf(vRenewed.url!))).status === 404 && !(await getVendorStatementLinkInfo(vend.id, 'https://shop.example.test')).enabled, 'إلغاء رابط المورد → 404')
+  const vLink3 = await createVendorStatementLink(vend.id, 'https://shop.example.test')
+  await getDb().execute({ sql: "UPDATE vendors SET deleted_at = datetime('now') WHERE id = ?", args: [vend.id] })
+  assert((await get(pathOf(vLink3.url!))).status === 404, 'مورد اتحذف → الرابط 404')
 
   console.log('8) حد المحاولات')
   let last = 0

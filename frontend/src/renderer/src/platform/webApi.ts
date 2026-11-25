@@ -883,6 +883,15 @@ const api = {
   vendors: {
     list: (search = ''): Promise<VendorView[]> => invoke('vendors:list', search),
     create: (input: VendorInput): Promise<VendorView> => invoke('vendors:create', input),
+    update: (vendorId: number, input: { name: string; phone: string; address?: string; notes?: string }): Promise<VendorView> =>
+      invoke('vendors:update', vendorId, input),
+    /** رابط كشف حساب المورد (ويب فقط، مضاف يدويًا) — زي رابط العميل */
+    getStatementLink: (vendorId: number): Promise<StatementLinkInfo> => invoke('vendors:getStatementLink', vendorId, window.location.origin),
+    createStatementLink: (vendorId: number, regenerate = false): Promise<StatementLinkInfo> =>
+      invoke('vendors:createStatementLink', vendorId, window.location.origin, regenerate),
+    revokeStatementLink: (vendorId: number): Promise<void> => invoke('vendors:revokeStatementLink', vendorId),
+    sendStatementLinkWhatsApp: (vendorId: number): Promise<WhatsAppSendResult & { url?: string }> =>
+      invoke('vendors:sendStatementLinkWhatsApp', vendorId, window.location.origin),
     getStatement: (vendorId: number): Promise<StatementView> =>
       invoke('vendors:getStatement', vendorId),
     recordPayment: (

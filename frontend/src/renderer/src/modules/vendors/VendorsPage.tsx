@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
 import { StatementModal } from '../../components/StatementModal'
+import { StatementLinkModal } from '../../components/StatementLinkModal'
+import { alertDialog } from '../../components/ConfirmDialogHost'
 import { formatCurrency as currency } from '../../lib/currency'
 import type { PaymentMethod, PurchaseInvoiceListItem, StatementView, VendorView } from '../../../../shared/types'
 
@@ -15,6 +17,10 @@ export function VendorsPage(): JSX.Element {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [statementFor, setStatementFor] = useState<VendorView | null>(null)
+  const [statementLinkFor, setStatementLinkFor] = useState<VendorView | null>(null)
+  const [editing, setEditing] = useState<VendorView | null>(null)
+  const [editForm, setEditForm] = useState({ name: '', phone: '', address: '', notes: '' })
+  const [savingEdit, setSavingEdit] = useState(false)
   const [statement, setStatement] = useState<StatementView | null>(null)
   const [unpaidInvoices, setUnpaidInvoices] = useState<PurchaseInvoiceListItem[]>([])
   const [allVendors, setAllVendors] = useState<VendorView[]>([])
@@ -50,6 +56,26 @@ export function VendorsPage(): JSX.Element {
     setForm(emptyForm)
     setShowForm(false)
     refresh()
+  }
+
+  function openEdit(vendor: VendorView): void {
+    setEditing(vendor)
+    setEditForm({ name: vendor.name, phone: vendor.phone ?? '', address: vendor.address ?? '', notes: vendor.notes ?? '' })
+  }
+
+  async function saveEdit(e: FormEvent): Promise<void> {
+    e.preventDefault()
+    if (!editing || savingEdit) return
+    setSavingEdit(true)
+    try {
+      await window.api.vendors.update(editing.id, editForm)
+      setEditing(null)
+      refresh()
+    } catch (err: any) {
+      await alertDialog(err?.message ?? 'تعذر حفظ بيانات المورد')
+    } finally {
+      setSavingEdit(false)
+    }
   }
 
   async function openStatement(vendor: VendorView): Promise<void> {
@@ -115,9 +141,23 @@ export function VendorsPage(): JSX.Element {
           <div key={v.id} className="qcp-card" style={{ cursor: 'pointer' }} onClick={() => openStatement(v)}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div className="qcp-icon-badge orange">🚚</div>
-              <span className={`qcp-pill ${v.balance > 0 ? 'warn' : 'success'}`}>
-                {v.balance > 0 ? t('parties.owed') : t('parties.settled')}
-              </span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="qcp-pill"
+                  style={{ cursor: 'pointer', border: 'none' }}
+                  title="تعديل بيانات المورد (الاسم والموبايل والعنوان)"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    openEdit(v)
+                  }}
+                >
+                  ✏️ تعديل
+                </button>
+                <span className={`qcp-pill ${v.balance > 0 ? 'warn' : 'success'}`}>
+                  {v.balance > 0 ? t('parties.owed') : t('parties.settled')}
+                </span>
+              </div>
             </div>
             <div style={{ fontWeight: 700, marginBottom: 2 }}>{v.name}</div>
             <div style={{ color: 'var(--qcp-ink-faint)', fontSize: 12 }}>{v.phone || '—'}</div>
@@ -206,7 +246,56 @@ export function VendorsPage(): JSX.Element {
             setUnpaidInvoices([])
           }}
           onRecordPayment={handleRecordPayment}
+          onOpenLink={() => setStatementLinkFor(statementFor)}
         />
+      )}
+
+      {statementLinkFor && (
+        <StatementLinkModal
+          kind="vendor"
+          party={{ id: statementLinkFor.id, name: statementLinkFor.name, phone: statementLinkFor.phone }}
+          onClose={() => setStatementLinkFor(null)}
+        />
+      )}
+
+      {editing && (
+        <div className="qcp-modal-backdrop" onClick={() => setEditing(null)}>
+          <form
+            className="qcp-modal"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={saveEdit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') e.preventDefault()
+            }}
+          >
+            <h2 style={{ marginTop: 0 }}>تعديل بيانات المورد</h2>
+            <div className="qcp-field">
+              <label>{t('parties.name')}</label>
+              <input className="qcp-input" required value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
+              <label>{t('parties.phone')}</label>
+              <input className="qcp-input" value={editForm.phone} onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
+              <label>{t('parties.address')}</label>
+              <input className="qcp-input" value={editForm.address} onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
+              <label>{t('parties.notes')}</label>
+              <input className="qcp-input" value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} />
+            </div>
+            <p style={{ margin: '0 0 12px', fontSize: 12.5, color: 'var(--qcp-ink-faint)' }}>الرصيد والحركات مابتتغيّرش من هنا.</p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="qcp-btn qcp-btn-primary" type="submit" disabled={savingEdit}>
+                {t('parties.save')}
+              </button>
+              <button className="qcp-btn qcp-btn-secondary" type="button" onClick={() => setEditing(null)}>
+                {t('parties.cancel')}
+              </button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   )

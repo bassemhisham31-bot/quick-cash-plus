@@ -476,7 +476,7 @@ export function CustomersPage(): JSX.Element {
 
       {statementLinkFor && (
         <StatementLinkModal
-          customer={{ id: statementLinkFor.id, name: statementLinkFor.name, phone: statementLinkFor.phone }}
+          party={{ id: statementLinkFor.id, name: statementLinkFor.name, phone: statementLinkFor.phone }}
           onClose={() => setStatementLinkFor(null)}
         />
       )}

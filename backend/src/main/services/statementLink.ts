@@ -1,13 +1,22 @@
 import { randomBytes } from 'crypto'
 import { getDb } from '../db'
 import { getCustomerLedger } from './customers'
+import { getVendorStatement } from './vendors'
 import { getPosUiSettings, getStoreSettings } from './settings'
-import type { StatementLinkInfo } from '../../shared/types'
+import type { StatementEntry, StatementLinkInfo } from '../../shared/types'
 
 /**
- * رابط كشف حساب العميل (ويب فقط) — بيتبعت على واتساب والعميل يفتحه من غير تسجيل دخول.
- * الأمان: التوكن عشوائي 192 بت (مفيش رقم عميل ظاهر)، الصفحة قراءة فقط، والرابط بيتلغي/يتجدّد بأي وقت.
+ * رابط كشف الحساب (ويب فقط) — للعميل وللمورد: بيتبعت على واتساب ويتفتح من غير تسجيل دخول.
+ * الأمان: التوكن عشوائي 192 بت (مفيش رقم ظاهر في الرابط)، الصفحة قراءة فقط، والرابط بيتلغي/يتجدّد بأي وقت.
+ * نفس المسار /api/s/<token> بيخدم الاتنين (العميل في customer_statement_links والمورد في vendor_statement_links).
  */
+
+export type PartyKind = 'customer' | 'vendor'
+
+const PARTY = {
+  customer: { table: 'customer_statement_links', idCol: 'customer_id' },
+  vendor: { table: 'vendor_statement_links', idCol: 'vendor_id' }
+} as const
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{20,64}$/
 /** أقصى عدد حركات بتتعرض في الصفحة — الأقدم بيتلخّص في «رصيد سابق». */
@@ -31,18 +40,24 @@ export function statementLinkUrl(origin: string | undefined, token: string): str
   return `${siteOrigin(origin)}/api/s/${token}`
 }
 
-async function assertCustomer(customerId: number): Promise<void> {
-  const rs = await getDb().execute({ sql: 'SELECT is_walk_in FROM customers WHERE id = ? AND deleted_at IS NULL', args: [customerId] })
-  const row = rs.rows[0] as any
-  if (!row) throw new Error('العميل غير موجود')
-  if (row.is_walk_in) throw new Error('العميل النقدي الافتراضي ملوش كشف حساب')
+async function assertParty(kind: PartyKind, id: number): Promise<void> {
+  if (kind === 'customer') {
+    const rs = await getDb().execute({ sql: 'SELECT is_walk_in FROM customers WHERE id = ? AND deleted_at IS NULL', args: [id] })
+    const row = rs.rows[0] as any
+    if (!row) throw new Error('العميل غير موجود')
+    if (row.is_walk_in) throw new Error('العميل النقدي الافتراضي ملوش كشف حساب')
+    return
+  }
+  const rs = await getDb().execute({ sql: 'SELECT id FROM vendors WHERE id = ? AND deleted_at IS NULL', args: [id] })
+  if (!rs.rows[0]) throw new Error('المورد غير موجود')
 }
 
-export async function getStatementLinkInfo(customerId: number, origin?: string): Promise<StatementLinkInfo> {
-  await assertCustomer(customerId)
+async function linkInfo(kind: PartyKind, id: number, origin?: string): Promise<StatementLinkInfo> {
+  await assertParty(kind, id)
+  const { table, idCol } = PARTY[kind]
   const rs = await getDb().execute({
-    sql: 'SELECT token, created_at AS createdAt, last_viewed_at AS lastViewedAt, views FROM customer_statement_links WHERE customer_id = ?',
-    args: [customerId]
+    sql: `SELECT token, created_at AS createdAt, last_viewed_at AS lastViewedAt, views FROM ${table} WHERE ${idCol} = ?`,
+    args: [id]
   })
   const row = rs.rows[0] as any
   if (!row) return { enabled: false, url: null, createdAt: null, lastViewedAt: null, views: 0 }
@@ -56,24 +71,38 @@ export async function getStatementLinkInfo(customerId: number, origin?: string):
 }
 
 /** بيرجّع الرابط الحالي أو يعمل واحد جديد. regenerate=true بيعمل توكن جديد والرابط القديم بيبطل فورًا. */
-export async function createStatementLink(customerId: number, origin?: string, regenerate = false): Promise<StatementLinkInfo> {
-  await assertCustomer(customerId)
+async function linkCreate(kind: PartyKind, id: number, origin?: string, regenerate = false): Promise<StatementLinkInfo> {
+  await assertParty(kind, id)
+  const { table, idCol } = PARTY[kind]
   const db = getDb()
-  const existing = (await db.execute({ sql: 'SELECT 1 AS x FROM customer_statement_links WHERE customer_id = ?', args: [customerId] })).rows[0]
+  const existing = (await db.execute({ sql: `SELECT 1 AS x FROM ${table} WHERE ${idCol} = ?`, args: [id] })).rows[0]
   if (!existing || regenerate) {
     const token = randomBytes(24).toString('base64url')
     await db.execute({
-      sql: `INSERT INTO customer_statement_links (customer_id, token) VALUES (?, ?)
-            ON CONFLICT(customer_id) DO UPDATE SET token = excluded.token, created_at = datetime('now'), last_viewed_at = NULL, views = 0`,
-      args: [customerId, token]
+      sql: `INSERT INTO ${table} (${idCol}, token) VALUES (?, ?)
+            ON CONFLICT(${idCol}) DO UPDATE SET token = excluded.token, created_at = datetime('now'), last_viewed_at = NULL, views = 0`,
+      args: [id, token]
     })
   }
-  return getStatementLinkInfo(customerId, origin)
+  return linkInfo(kind, id, origin)
 }
 
-export async function revokeStatementLink(customerId: number): Promise<void> {
-  await getDb().execute({ sql: 'DELETE FROM customer_statement_links WHERE customer_id = ?', args: [customerId] })
+async function linkRevoke(kind: PartyKind, id: number): Promise<void> {
+  const { table, idCol } = PARTY[kind]
+  await getDb().execute({ sql: `DELETE FROM ${table} WHERE ${idCol} = ?`, args: [id] })
 }
+
+// ----- العميل -----
+export const getStatementLinkInfo = (customerId: number, origin?: string): Promise<StatementLinkInfo> => linkInfo('customer', customerId, origin)
+export const createStatementLink = (customerId: number, origin?: string, regenerate = false): Promise<StatementLinkInfo> =>
+  linkCreate('customer', customerId, origin, regenerate)
+export const revokeStatementLink = (customerId: number): Promise<void> => linkRevoke('customer', customerId)
+
+// ----- المورد -----
+export const getVendorStatementLinkInfo = (vendorId: number, origin?: string): Promise<StatementLinkInfo> => linkInfo('vendor', vendorId, origin)
+export const createVendorStatementLink = (vendorId: number, origin?: string, regenerate = false): Promise<StatementLinkInfo> =>
+  linkCreate('vendor', vendorId, origin, regenerate)
+export const revokeVendorStatementLink = (vendorId: number): Promise<void> => linkRevoke('vendor', vendorId)
 
 const esc = (s: unknown): string =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
@@ -102,7 +131,7 @@ body{margin:0;background:#f3f5f9;color:#1b2430;font-family:Tahoma,"Segoe UI",Ari
 .ent .am{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:5px;font-size:13px}
 .ent .am>span{white-space:nowrap}
 .ent .n{direction:ltr;unicode-bidi:isolate;font-weight:700}
-.ent .debit .n{color:#c0392b}.ent .credit .n{color:#1e8449}
+.ent .debit .n{color:#c0392b}.ent .credit .n{color:#1e8449}.ent .paid .n{color:#475467}
 .ent .bl{margin-inline-start:auto;color:#475467}
 .ent.open{background:#f7f8fb;border-radius:8px;padding:11px 10px}
 .foot{text-align:center;margin:14px 0 4px}
@@ -118,49 +147,123 @@ export function isPreviewFetch(userAgent: string | undefined, method = 'GET'): b
   return /whatsapp|facebookexternalhit|facebot|telegrambot|twitterbot|slackbot|linkedinbot|discordbot|skypeuripreview|googlebot|bingbot|\bbot\b|crawler|spider|preview/i.test(userAgent ?? '')
 }
 
-/**
- * صفحة الكشف العامة (HTML جاهز). بترجّع null لو التوكن مش صالح/اتلغى — الرد واحد في كل الحالات عشان مفيش تخمين.
- * countView=false لمعاينات الروبوتات: بنرد بنفس الصفحة بس من غير ما نزوّد عدّاد الفتح.
- */
-export async function renderPublicStatementPage(token: string, countView = true): Promise<string | null> {
-  if (!isValidStatementToken(token)) return null
+interface PageLabels {
+  who: string
+  /** رصيد موجب (مستحق على العميل / مستحق للمورد) */
+  positive: string
+  negative: string
+  zero: string
+  debitWord: string
+  creditWord: string
+  /** موجب = ممتاز للطرف ده؟ (المورد: اللي له عندنا) — بيحدد لون الرصيد */
+  positiveIsGood: boolean
+}
+
+const CUSTOMER_LABELS: PageLabels = {
+  who: 'كشف حساب العميل',
+  positive: 'المبلغ المستحق عليك',
+  negative: 'رصيد لك عند المحل',
+  zero: 'الحساب مسدّد — لا توجد مستحقات',
+  debitWord: 'عليك',
+  creditWord: 'لك',
+  positiveIsGood: false
+}
+const VENDOR_LABELS: PageLabels = {
+  who: 'كشف حساب المورد',
+  positive: 'المبلغ المستحق لك عندنا',
+  negative: 'رصيد للمحل عندك (مدفوع زيادة)',
+  zero: 'الحساب مسدّد — لا توجد مستحقات',
+  debitWord: 'مستحق لك',
+  creditWord: 'مسدّد / مخصوم',
+  positiveIsGood: true
+}
+
+/** بيلاقي صاحب التوكن (عميل أو مورد) ويزوّد عدّاد الفتح لو مطلوب. بيرجّع null لأي توكن مش صالح/ملغي/لعميل أو مورد محذوف. */
+async function resolveToken(token: string, countView: boolean): Promise<{ kind: PartyKind; id: number } | null> {
   const db = getDb()
-  const link = (
+  const cust = (
     await db.execute({
-      sql: `SELECT l.customer_id AS customerId FROM customer_statement_links l
+      sql: `SELECT l.customer_id AS id FROM customer_statement_links l
             JOIN customers c ON c.id = l.customer_id AND c.deleted_at IS NULL AND c.is_walk_in = 0
             WHERE l.token = ?`,
       args: [token]
     })
   ).rows[0] as any
-  if (!link) return null
-  const customerId = Number(link.customerId)
-  if (countView) {
-    await db.execute({ sql: "UPDATE customer_statement_links SET views = views + 1, last_viewed_at = datetime('now') WHERE customer_id = ?", args: [customerId] })
+  let found: { kind: PartyKind; id: number } | null = cust ? { kind: 'customer', id: Number(cust.id) } : null
+  if (!found) {
+    const vend = (
+      await db.execute({
+        sql: `SELECT l.vendor_id AS id FROM vendor_statement_links l
+              JOIN vendors v ON v.id = l.vendor_id AND v.deleted_at IS NULL
+              WHERE l.token = ?`,
+        args: [token]
+      })
+    ).rows[0] as any
+    if (vend) found = { kind: 'vendor', id: Number(vend.id) }
   }
+  if (found && countView) {
+    const { table, idCol } = PARTY[found.kind]
+    await db.execute({ sql: `UPDATE ${table} SET views = views + 1, last_viewed_at = datetime('now') WHERE ${idCol} = ?`, args: [found.id] })
+  }
+  return found
+}
 
-  const [ledger, store, pos] = await Promise.all([getCustomerLedger(customerId, {}), getStoreSettings(), getPosUiSettings()])
-  const entries = ledger.entries
+/**
+ * صفحة الكشف العامة (HTML جاهز) للعميل أو المورد. بترجّع null لو التوكن مش صالح/اتلغى — الرد واحد في كل الحالات عشان مفيش تخمين.
+ * countView=false لمعاينات الروبوتات: بنرد بنفس الصفحة بس من غير ما نزوّد عدّاد الفتح.
+ */
+export async function renderPublicStatementPage(token: string, countView = true): Promise<string | null> {
+  if (!isValidStatementToken(token)) return null
+  const found = await resolveToken(token, countView)
+  if (!found) return null
+
+  let name: string
+  let balance: number
+  let entries: StatementEntry[]
+  let openingBalance: number
+  let labels: PageLabels
+  if (found.kind === 'customer') {
+    const ledger = await getCustomerLedger(found.id, {})
+    name = ledger.customerName
+    balance = ledger.balance
+    entries = ledger.entries
+    openingBalance = ledger.openingBalance ?? 0
+    labels = CUSTOMER_LABELS
+  } else {
+    const vendor = (await getDb().execute({ sql: 'SELECT name FROM vendors WHERE id = ?', args: [found.id] })).rows[0] as any
+    const st = await getVendorStatement(found.id)
+    name = String(vendor?.name ?? '')
+    balance = st.balance
+    entries = st.entries
+    openingBalance = st.openingBalance ?? 0
+    labels = VENDOR_LABELS
+  }
+  const [store, pos] = await Promise.all([getStoreSettings(), getPosUiSettings()])
+
   const shown = entries.slice(-PAGE_MAX_ENTRIES)
   const skipped = entries.length - shown.length
-  const opening = skipped > 0 ? (entries[skipped - 1].balance ?? 0) : (ledger.openingBalance ?? 0)
-  const closing = entries.length ? (entries[entries.length - 1].balance ?? 0) : (ledger.openingBalance ?? 0)
-  const balance = ledger.balance
-  const kind = balance > 0.005 ? 'due' : balance < -0.005 ? 'credit' : 'zero'
-  const label = kind === 'due' ? 'المبلغ المستحق عليك' : kind === 'credit' ? 'رصيد لك عند المحل' : 'الحساب مسدّد — لا توجد مستحقات'
+  const opening = skipped > 0 ? (entries[skipped - 1].balance ?? 0) : openingBalance
+  const closing = entries.length ? (entries[entries.length - 1].balance ?? 0) : openingBalance
+  const pos2 = balance > 0.005
+  const neg2 = balance < -0.005
+  // لون الرصيد: العميل المدين أحمر، والمورد اللي له فلوس عندنا أخضر
+  const kind = pos2 ? (labels.positiveIsGood ? 'credit' : 'due') : neg2 ? (labels.positiveIsGood ? 'due' : 'credit') : 'zero'
+  const label = pos2 ? labels.positive : neg2 ? labels.negative : labels.zero
   const sym = esc(pos.currencySymbol || '')
+  const debitClass = labels.positiveIsGood ? 'credit' : 'debit'
+  const creditClass = labels.positiveIsGood ? 'paid' : 'credit'
   // الأحدث أولًا (أنسب للموبايل)، وكل حركة كارت فيه الأرقام تحت البيان — من غير جدول عريض يحتاج سحب جنب
   const rows = [...shown]
     .reverse()
     .map(
       (e) =>
         `<div class="ent"><div class="top"><span class="desc">${esc(e.description)}</span><span class="dt">${esc(String(e.date).slice(0, 10))}</span></div>` +
-        `<div class="am">${e.debit ? `<span class="debit">عليك <span class="n">${numFmt.format(e.debit)}</span></span>` : ''}` +
-        `${e.credit ? `<span class="credit">لك <span class="n">${numFmt.format(e.credit)}</span></span>` : ''}` +
+        `<div class="am">${e.debit ? `<span class="${debitClass}">${labels.debitWord} <span class="n">${numFmt.format(e.debit)}</span></span>` : ''}` +
+        `${e.credit ? `<span class="${creditClass}">${labels.creditWord} <span class="n">${numFmt.format(e.credit)}</span></span>` : ''}` +
         `<span class="bl">الرصيد <span class="n">${numFmt.format(e.balance ?? 0)}</span></span></div></div>`
     )
     .join('')
-  const title = `كشف حساب — ${ledger.customerName}`
+  const title = `كشف حساب — ${name}`
   const contact = [store.phone, store.address].filter(Boolean).map((v) => esc(v)).join(' — ')
 
   return `<!doctype html>
@@ -182,12 +285,12 @@ export async function renderPublicStatementPage(token: string, countView = true)
     <div><h1>${esc(store.name)}</h1>${contact ? `<div class="muted">${contact}</div>` : ''}</div>
   </div>
   <div class="card">
-    <div class="muted">كشف حساب العميل</div>
-    <div style="font-size:17px;font-weight:700">${esc(ledger.customerName)}</div>
+    <div class="muted">${labels.who}</div>
+    <div style="font-size:17px;font-weight:700">${esc(name)}</div>
   </div>
   <div class="card bal ${kind}">
     <div class="lbl">${label}</div>
-    ${kind === 'zero' ? '' : `<div class="amt">${numFmt.format(Math.abs(balance))} <span style="font-size:16px">${sym}</span></div>`}
+    ${!pos2 && !neg2 ? '' : `<div class="amt">${numFmt.format(Math.abs(balance))} <span style="font-size:16px">${sym}</span></div>`}
     <div class="muted" style="margin-top:6px">الكشف بيتحدّث تلقائيًا مع كل حركة جديدة — افتح الرابط تاني أو اعمل ريفرش (اسحب الصفحة لتحت) وهتشوف آخر رصيد.</div>
   </div>
   <div class="card">

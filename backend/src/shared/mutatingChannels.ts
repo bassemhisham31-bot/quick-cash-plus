@@ -67,6 +67,7 @@ export const MUTATING_CHANNELS = new Set<string>([
   'customers:linkVendor',
   'customers:unlinkVendor',
   'vendors:create',
+  'vendors:update',
   'vendors:recordPayment',
   'stock:transfer',
   'purchases:create',
