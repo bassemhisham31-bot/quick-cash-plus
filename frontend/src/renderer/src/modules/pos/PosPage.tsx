@@ -101,6 +101,12 @@ export function PosPage(): JSX.Element {
   const disabledFeatures = useAppStore((s) => s.disabledFeatures)
 
   const [products, setProducts] = useState<Product[]>([])
+  // آخر قائمة كاملة (من غير بحث) — بنطابق منها الكود فورًا وإحنا بنكتب، من غير ما نستنى رد السيرفر
+  const catalogRef = useRef<Product[]>([])
+  function applyProducts(term: string, list: Product[]): void {
+    if (!term.trim()) catalogRef.current = list
+    setProducts(list)
+  }
   const [search, setSearch] = useState('')
   const [cart, setCart] = useState<CartLine[]>([])
   const [discountType, setDiscountType] = useState<'percent' | 'value'>('value')
@@ -232,7 +238,7 @@ export function PosPage(): JSX.Element {
   useEffect(() => {
     // يحدّث كميات المخزون المعروضة فورًا لو جهاز تاني باع نفس الصنف، من غير ما يمس السلة الحالية
     return window.api.onDataChanged(() => {
-      if (warehouseId) window.api.catalog.listProducts(search, warehouseId).then(setProducts)
+      if (warehouseId) window.api.catalog.listProducts(search, warehouseId).then((l) => applyProducts(search, l))
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [warehouseId, search])
@@ -240,7 +246,7 @@ export function PosPage(): JSX.Element {
   useEffect(() => {
     if (!warehouseId) return
     const id = setTimeout(() => {
-      window.api.catalog.listProducts(search, warehouseId).then(setProducts)
+      window.api.catalog.listProducts(search, warehouseId).then((l) => applyProducts(search, l))
     }, 200)
     return () => clearTimeout(id)
   }, [search, warehouseId])
@@ -330,7 +336,17 @@ export function PosPage(): JSX.Element {
     for (const l of cart) map.set(l.productId, (map.get(l.productId) ?? 0) + l.qty)
     return map
   }, [cart])
-  const visibleProducts = products.filter((p) => p.showInPos && (categoryFilter === null || p.categoryId === categoryFilter))
+  // لو اللي اتكتب هو كود صنف بالظبط (مش جزء من كود صنف تاني) يظهر الصنف ده لوحده — من القائمة الطازة لو وصلت، وإلا من القائمة الكاملة المحفوظة
+  const typedCode = search.trim()
+  const exactCodeMatches = typedCode
+    ? (() => {
+        const fresh = products.filter((p) => p.barcode === typedCode && p.showInPos)
+        return fresh.length ? fresh : catalogRef.current.filter((p) => p.barcode === typedCode && p.showInPos)
+      })()
+    : []
+  const visibleProducts = exactCodeMatches.length
+    ? exactCodeMatches
+    : products.filter((p) => p.showInPos && (categoryFilter === null || p.categoryId === categoryFilter))
   const { allowed: canDiscount, maxPercent: maxDiscountPercent } = discountRules(user, posUiSettings)
   const canEditPrice = !!posUiSettings?.priceEditEnabled && hasPermission(user, 'pos.editPrice')
 
@@ -556,7 +572,7 @@ export function PosPage(): JSX.Element {
       setBulkPosting(false)
       setHeldSelected(new Set())
       refreshHeld()
-      window.api.catalog.listProducts(search, warehouseId).then(setProducts)
+      window.api.catalog.listProducts(search, warehouseId).then((l) => applyProducts(search, l))
       window.api.customers.list('').then(setCustomers)
       playSound('sell')
       setHeldMessage(
@@ -1002,7 +1018,7 @@ export function PosPage(): JSX.Element {
       setTableId(null)
       setDelivery(null)
       window.api.customers.list('').then(setCustomers)
-      window.api.catalog.listProducts(search, warehouseId).then(setProducts)
+      window.api.catalog.listProducts(search, warehouseId).then((l) => applyProducts(search, l))
     } finally {
       setCheckingOut(false)
     }
@@ -2064,7 +2080,7 @@ export function PosPage(): JSX.Element {
           }}
           onReturned={() => {
             // المخزون ورصيد العميل اتغيروا
-            if (warehouseId) window.api.catalog.listProducts(search, warehouseId).then(setProducts)
+            if (warehouseId) window.api.catalog.listProducts(search, warehouseId).then((l) => applyProducts(search, l))
             window.api.customers.list('').then(setCustomers)
           }}
         />
