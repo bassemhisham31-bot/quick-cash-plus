@@ -409,14 +409,19 @@ export async function sendCustomerStatementLinkByWhatsApp(customerId: number, or
     const link = await createStatementLink(customerId, origin)
     if (!link.url) return { ok: false, error: 'تعذر عمل رابط كشف الحساب' }
     const due = ledger.balance
+    // الرصيد في الرسالة وقت الإرسال بس (نص ثابت)؛ الرابط نفسه بيتحدّث تلقائيًا مع كل حركة — بنوضّح ده للعميل
     const balanceLine =
-      due > 0.005 ? `المبلغ المستحق عليك: ${money(due)}` : due < -0.005 ? `رصيد لك عندنا: ${money(Math.abs(due))}` : 'حسابك مسدّد — مفيش مستحقات'
+      due > 0.005
+        ? `المبلغ المستحق عليك: ${money(due)} (وقت الإرسال)`
+        : due < -0.005
+          ? `رصيد لك عندنا: ${money(Math.abs(due))} (وقت الإرسال)`
+          : 'حسابك مسدّد — مفيش مستحقات (وقت الإرسال)'
     const message = [
       `📄 كشف حساب — ${store.name}`,
       `أهلًا ${ledger.customerName}`,
       balanceLine,
       '',
-      'تقدر تشوف كشف حسابك بالتفصيل من الرابط ده:',
+      'تقدر تشوف كشف حسابك بالتفصيل من الرابط ده — بيتحدّث تلقائيًا مع كل حركة جديدة، افتحه تاني في أي وقت:',
       link.url
     ].join('\n')
     const sent = await sendWhatsAppMessage(ledger.customerPhone, message)
