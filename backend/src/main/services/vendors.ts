@@ -56,51 +56,174 @@ export async function createVendor(input: VendorInput): Promise<VendorView> {
   return mapRow(created.rows[0])
 }
 
+const r2 = (n: number): number => Math.round(n * 100) / 100
+
+/**
+ * كشف حساب المورد الكامل: فواتير المشتريات (مدين) والمرتجعات والسداد والتسويات (دائن) وحركات الحساب التاريخية (أرقام فقط)،
+ * برصيد جاري بعد كل حركة. «رصيد سابق» = الرصيد الحالي − صافي كل الحركات (بيغطي أي رصيد افتتاحي/حركة مش متسجّلة هنا).
+ * مدين = بيزوّد اللي علينا للمورد، دائن = بيقلّله.
+ */
 export async function getVendorStatement(vendorId: number): Promise<StatementView> {
   const db = getDb()
   const vendorRs = await db.execute({ sql: 'SELECT * FROM vendors WHERE id = ?', args: [vendorId] })
   const vendor = vendorRs.rows[0] as any
   if (!vendor) throw new Error('المورد غير موجود')
 
+  const all: StatementEntry[] = []
+
+  // فواتير المشتريات: الآجل = مدين بالإجمالي ودائن بالمدفوع وقت الشراء (السداد اللاحق على الفاتورة بيظهر لوحده)، غير الآجل مدفوع بالكامل
+  const invoicesRs = await db.execute({
+    sql: `SELECT pi.id, pi.number, pi.total, pi.paid, pi.payment_method AS method, pi.created_at AS createdAt,
+                 COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.invoice_id = pi.id AND p.party_type = 'vendor'), 0) AS linkedPaid
+          FROM purchase_invoices pi WHERE pi.vendor_id = ?`,
+    args: [vendorId]
+  })
+  for (const r of invoicesRs.rows as any[]) {
+    const total = Number(r.total)
+    const paidNow = r.method === 'credit' ? Math.max(0, Number(r.paid) - Number(r.linkedPaid)) : total
+    all.push({
+      type: 'invoice',
+      id: Number(r.id),
+      date: r.createdAt,
+      description: `فاتورة مشتريات ${r.number} (${paymentMethodLabel(r.method)})`,
+      debit: total,
+      credit: paidNow
+    })
+  }
+
+  // مرتجع المشتريات: على فاتورة آجل بينقص اللي علينا، وعلى فاتورة مدفوعة الرد نقدي (مدين ودائن بنفس القيمة)
+  const returnsRs = await db.execute({
+    sql: `SELECT r.id, r.amount, r.created_at AS createdAt, pi.number, pi.payment_method AS method
+          FROM purchase_returns r JOIN purchase_invoices pi ON pi.id = r.purchase_invoice_id WHERE pi.vendor_id = ?`,
+    args: [vendorId]
+  })
+  for (const r of returnsRs.rows as any[]) {
+    const amount = Number(r.amount)
+    const cashBack = r.method !== 'credit'
+    all.push({
+      type: 'return',
+      id: Number(r.id),
+      date: r.createdAt,
+      description: `مرتجع على فاتورة ${r.number}${cashBack ? ' (رد نقدي)' : ''}`,
+      debit: cashBack ? amount : 0,
+      credit: amount
+    })
+  }
+
   const paymentsRs = await db.execute({
     sql: `SELECT p.id, p.amount, p.method, p.note, p.created_at AS createdAt, pi.number AS invoiceNumber
           FROM payments p
           LEFT JOIN purchase_invoices pi ON pi.id = p.invoice_id
-          WHERE p.party_type = 'vendor' AND p.party_id = ? ORDER BY p.created_at`,
+          WHERE p.party_type = 'vendor' AND p.party_id = ?`,
     args: [vendorId]
   })
+  for (const r of paymentsRs.rows as any[]) {
+    all.push({
+      type: 'payment',
+      id: Number(r.id),
+      date: r.createdAt,
+      description: `سداد (${paymentMethodLabel(r.method)})${r.invoiceNumber ? ` — لفاتورة ${r.invoiceNumber}` : ''}${r.note ? ' — ' + r.note : ''}`,
+      debit: 0,
+      credit: Number(r.amount)
+    })
+  }
 
   const settlementsRs = await db.execute({
     sql: `SELECT s.id, s.amount, s.note, s.created_at AS createdAt, si.number AS invoiceNumber
           FROM party_settlements s
           LEFT JOIN sales_invoices si ON si.id = s.sales_invoice_id
-          WHERE s.vendor_id = ? ORDER BY s.created_at`,
+          WHERE s.vendor_id = ?`,
     args: [vendorId]
   })
-
-  const entries: StatementEntry[] = paymentsRs.rows.map((r: any) => ({
-    type: 'payment' as const,
-    id: Number(r.id),
-    date: r.createdAt,
-    description: `سداد (${paymentMethodLabel(r.method)})${r.invoiceNumber ? ` — لفاتورة ${r.invoiceNumber}` : ''}${r.note ? ' — ' + r.note : ''}`,
-    debit: 0,
-    credit: Number(r.amount)
-  }))
-
-  settlementsRs.rows.forEach((r: any) => {
-    entries.push({
-      type: 'payment' as const,
+  for (const r of settlementsRs.rows as any[]) {
+    all.push({
+      type: 'payment',
       id: 1_000_000 + Number(r.id),
       date: r.createdAt,
       description: `تسوية مقابل بيع للعميل المرتبط${r.invoiceNumber ? ` — فاتورة ${r.invoiceNumber}` : ''}`,
       debit: 0,
       credit: Number(r.amount)
     })
+  }
+
+  // حركات الحساب التاريخية (أرقام فقط — منقولة من كشوف قديمة)
+  const historyRs = await db.execute({
+    sql: `SELECT id, entry_date AS date, kind, description, debit, credit FROM vendor_account_entries WHERE vendor_id = ? ORDER BY id`,
+    args: [vendorId]
   })
+  const historyType: Record<string, StatementEntry['type']> = { opening: 'opening', purchase: 'invoice', return: 'return', payment: 'payment' }
+  for (const r of historyRs.rows as any[]) {
+    all.push({
+      type: historyType[r.kind] ?? 'invoice',
+      id: 2_000_000 + Number(r.id),
+      date: r.date,
+      description: r.description,
+      debit: Number(r.debit),
+      credit: Number(r.credit)
+    })
+  }
 
-  entries.sort((a, b) => a.date.localeCompare(b.date))
+  all.sort((a, b) => a.date.localeCompare(b.date)) // ثابت: الحركات في نفس اللحظة بتفضل بترتيب إدخالها
 
-  return { balance: Number(vendor.balance), entries }
+  const balance = Number(vendor.balance)
+  const net = all.reduce((s, e) => s + e.debit - e.credit, 0)
+  let running = balance - net // رصيد قبل أول حركة معروضة
+  const openingBalance = r2(running)
+  const entries: StatementEntry[] = all.map((e) => {
+    running += e.debit - e.credit
+    return { ...e, balance: r2(running) }
+  })
+  return {
+    balance,
+    openingBalance,
+    entries,
+    totalDebit: r2(entries.reduce((s, e) => s + e.debit, 0)),
+    totalCredit: r2(entries.reduce((s, e) => s + e.credit, 0))
+  }
+}
+
+export interface VendorAccountEntryInput {
+  /** YYYY-MM-DD */
+  date: string
+  kind: 'opening' | 'purchase' | 'return' | 'payment'
+  description: string
+  debit: number
+  credit: number
+}
+
+/**
+ * نقل حركات حساب مورد قديمة كأرقام فقط (بيستخدمها سكريبت الاستيراد): بتتسجّل في كشف حساب المورد وبتتحسب على رصيده،
+ * من غير أي أثر على المخزون أو الخزن أو القيود (رصيد المورد هو اللي بيدخل المحاسبة كرصيد أول المدة).
+ */
+export async function addVendorAccountEntries(vendorId: number, items: VendorAccountEntryInput[]): Promise<{ inserted: number; net: number; balance: number }> {
+  const db = getDb()
+  const vendor = (await db.execute({ sql: 'SELECT id FROM vendors WHERE id = ? AND deleted_at IS NULL', args: [vendorId] })).rows[0]
+  if (!vendor) throw new Error('المورد غير موجود')
+  for (const e of items) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(e.date)) throw new Error(`تاريخ غير صالح: ${e.date}`)
+    if (!['opening', 'purchase', 'return', 'payment'].includes(e.kind)) throw new Error(`نوع حركة غير صالح: ${e.kind}`)
+    if (!(e.debit >= 0) || !(e.credit >= 0) || (e.debit === 0 && e.credit === 0)) throw new Error('مبلغ الحركة لازم يكون رقم أكبر من صفر في مدين أو دائن')
+  }
+  const tx = await db.transaction('write')
+  try {
+    let net = 0
+    for (const e of items) {
+      await tx.execute({
+        sql: 'INSERT INTO vendor_account_entries (vendor_id, entry_date, kind, description, debit, credit) VALUES (?, ?, ?, ?, ?, ?)',
+        // تاريخ من غير وقت (الكشوف القديمة مالهاش وقت): بيترتّب قبل أي حركة حقيقية في نفس اليوم، وترتيب الإدخال محفوظ للحركات التاريخية
+        args: [vendorId, e.date, e.kind, e.description.trim(), r2(e.debit), r2(e.credit)]
+      })
+      net += r2(e.debit) - r2(e.credit)
+    }
+    net = r2(net)
+    if (net !== 0) await tx.execute({ sql: 'UPDATE vendors SET balance = balance + ? WHERE id = ?', args: [net, vendorId] })
+    await tx.commit()
+    const balance = Number(((await db.execute({ sql: 'SELECT balance FROM vendors WHERE id = ?', args: [vendorId] })).rows[0] as any).balance)
+    return { inserted: items.length, net, balance }
+  } catch (err) {
+    await tx.rollback()
+    throw err
+  }
 }
 
 export async function recordVendorPayment(
