@@ -190,7 +190,10 @@ import {
   listUnpaidPurchaseInvoices,
   listVendors,
   recordVendorPayment,
-  updateVendor
+  updateVendor,
+  addVendorManualEntry,
+  deleteVendorAccountEntry,
+  type VendorManualEntryInput
 } from './services/vendors'
 import {
   createExpense,
@@ -474,6 +477,9 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'vendors:revokeStatementLink': (vendorId: number) => revokeVendorStatementLink(vendorId),
     'vendors:sendStatementLinkWhatsApp': (vendorId: number, origin?: string) =>
       sendVendorStatementLinkByWhatsApp(vendorId, typeof origin === 'string' ? origin : undefined),
+    // حركة يدوية على حساب المورد (مبلغ وتاريخ وبيان — من غير فاتورة/مخزون/خزنة) وحذفها (للأدمن بس، الـactor بيتضاف في آخر الـargs)
+    'vendors:addAccountEntry': (vendorId: number, input: VendorManualEntryInput) => addVendorManualEntry(vendorId, input),
+    'vendors:deleteAccountEntry': (entryId: number, actor?: unknown) => deleteVendorAccountEntry(entryId, actor),
     'vendors:getStatement': (vendorId: number) => getVendorStatement(vendorId),
     'vendors:recordPayment': (
       vendorId: number,
