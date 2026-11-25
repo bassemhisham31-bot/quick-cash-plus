@@ -18,7 +18,7 @@ import { createProduct } from '../src/main/services/catalog'
 import { createCustomer, recordCustomerPayment } from '../src/main/services/customers'
 import { openDay } from '../src/main/services/cashSession'
 import { checkout } from '../src/main/services/pos'
-import { createStatementLink, getStatementLinkInfo, revokeStatementLink } from '../src/main/services/statementLink'
+import { createStatementLink, getStatementLinkInfo, isPreviewFetch, revokeStatementLink } from '../src/main/services/statementLink'
 import { __setFakeSocketForTests, sendCustomerStatementLinkByWhatsApp } from '../src/main/services/whatsapp'
 import { createApp } from '../src/http/server'
 import { buildHandlerMap, MUTATING_CHANNELS } from '../src/main/handlers'
@@ -95,8 +95,22 @@ async function main(): Promise<void> {
   assert((r1.headers.get('cache-control') ?? '').includes('no-store') && (r1.headers.get('x-robots-tag') ?? '').includes('noindex'), 'no-store + noindex')
   assert((r1.headers.get('content-security-policy') ?? '').includes("default-src 'none'"), 'CSP مقفولة (مفيش سكريبت)')
   assert(!html1.includes('<script'), 'مفيش أي سكريبت في الصفحة')
+  assert(html1.includes('بيتحدّث تلقائيًا'), 'الصفحة فيها سطر توضيحي إن الكشف بيتحدّث تلقائيًا')
   const info1 = await getStatementLinkInfo(evil.id, 'https://shop.example.test')
   assert(info1.views === 1 && !!info1.lastViewedAt, 'عدّاد الفتح = 1')
+
+  console.log('2b) معاينات الروبوتات ما بتتحسبش فتح')
+  const viewsNow = async (): Promise<number> => (await getStatementLinkInfo(evil.id, 'https://shop.example.test')).views
+  const ua = (agent: string) => fetch(base + url1, { headers: { 'user-agent': agent } })
+  const waPreview = await ua('WhatsApp/2.24.20.80 A')
+  assert(waPreview.status === 200 && (await waPreview.text()).includes('340.00'), 'معاينة واتساب بتاخد الصفحة عادي')
+  await ua('facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)')
+  await ua('TelegramBot (like TwitterBot)')
+  await fetch(base + url1, { method: 'HEAD' })
+  assert((await viewsNow()) === 1, 'واتساب/فيسبوك/تيليجرام/HEAD ما زوّدوش عدّاد الفتح (لسه 1)')
+  await ua('Mozilla/5.0 (Linux; Android 13; SM-A546B) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36')
+  assert((await viewsNow()) === 2, 'فتح العميل من موبايله (Chrome) اتحسب (بقى 2)')
+  assert(isPreviewFetch('WhatsApp/2.23.1') && isPreviewFetch('Googlebot/2.1') && !isPreviewFetch('Mozilla/5.0 (iPhone) Safari/604.1') && !isPreviewFetch(undefined) && isPreviewFetch('Mozilla/5.0', 'HEAD'), 'isPreviewFetch بيفرّق بين الروبوت والمتصفح')
 
   await recordCustomerPayment(evil.id, 40, 'cash', '', 1)
   const html1b = await (await get(url1)).text()
@@ -131,6 +145,7 @@ async function main(): Promise<void> {
   const wa = await sendCustomerStatementLinkByWhatsApp(evil.id, 'https://shop.example.test')
   assert(wa.ok && sent.length === 1 && sent[0].jid === '201012345678@s.whatsapp.net', 'الرسالة اتبعتت لرقم العميل')
   assert(sent[0]?.text.includes(link.url!) && sent[0].text.includes('المبلغ المستحق عليك: 300.00'), 'فيها نفس الرابط والرصيد الحالي')
+  assert(sent[0].text.includes('(وقت الإرسال)') && sent[0].text.includes('بيتحدّث تلقائيًا مع كل حركة جديدة'), 'الرسالة بتوضّح إن الرصيد وقت الإرسال وإن الرابط بيتحدّث تلقائيًا')
   console.log(sent[0].text.split('\n').map((l) => '     ' + l).join('\n'))
   const waNoPhone = await sendCustomerStatementLinkByWhatsApp(noPhone.id, 'https://shop.example.test')
   assert(!waNoPhone.ok && (waNoPhone.error ?? '').includes('رقم'), 'عميل من غير رقم → رسالة واضحة')

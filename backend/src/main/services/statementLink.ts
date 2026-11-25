@@ -109,8 +109,20 @@ body{margin:0;background:#f3f5f9;color:#1b2430;font-family:Tahoma,"Segoe UI",Ari
 @media print{body{background:#fff}.card{box-shadow:none;border:1px solid #ddd}}
 `
 
-/** صفحة الكشف العامة (HTML جاهز). بترجّع null لو التوكن مش صالح/اتلغى — الرد واحد في كل الحالات عشان مفيش تخمين. */
-export async function renderPublicStatementPage(token: string): Promise<string | null> {
+/**
+ * معاينة الرابط اللي واتساب/فيسبوك/تيليجرام وغيرهم بيجيبوها لوحدهم أول ما الرسالة تتبعت (روبوت مش العميل) —
+ * مش بتتحسب «فتح» في عدّاد الفتح. بنفس المنطق: طلبات HEAD (مش بتعرض صفحة للإنسان).
+ */
+export function isPreviewFetch(userAgent: string | undefined, method = 'GET'): boolean {
+  if (method.toUpperCase() === 'HEAD') return true
+  return /whatsapp|facebookexternalhit|facebot|telegrambot|twitterbot|slackbot|linkedinbot|discordbot|skypeuripreview|googlebot|bingbot|\bbot\b|crawler|spider|preview/i.test(userAgent ?? '')
+}
+
+/**
+ * صفحة الكشف العامة (HTML جاهز). بترجّع null لو التوكن مش صالح/اتلغى — الرد واحد في كل الحالات عشان مفيش تخمين.
+ * countView=false لمعاينات الروبوتات: بنرد بنفس الصفحة بس من غير ما نزوّد عدّاد الفتح.
+ */
+export async function renderPublicStatementPage(token: string, countView = true): Promise<string | null> {
   if (!isValidStatementToken(token)) return null
   const db = getDb()
   const link = (
@@ -123,7 +135,9 @@ export async function renderPublicStatementPage(token: string): Promise<string |
   ).rows[0] as any
   if (!link) return null
   const customerId = Number(link.customerId)
-  await db.execute({ sql: "UPDATE customer_statement_links SET views = views + 1, last_viewed_at = datetime('now') WHERE customer_id = ?", args: [customerId] })
+  if (countView) {
+    await db.execute({ sql: "UPDATE customer_statement_links SET views = views + 1, last_viewed_at = datetime('now') WHERE customer_id = ?", args: [customerId] })
+  }
 
   const [ledger, store, pos] = await Promise.all([getCustomerLedger(customerId, {}), getStoreSettings(), getPosUiSettings()])
   const entries = ledger.entries
@@ -174,6 +188,7 @@ export async function renderPublicStatementPage(token: string): Promise<string |
   <div class="card bal ${kind}">
     <div class="lbl">${label}</div>
     ${kind === 'zero' ? '' : `<div class="amt">${numFmt.format(Math.abs(balance))} <span style="font-size:16px">${sym}</span></div>`}
+    <div class="muted" style="margin-top:6px">الكشف بيتحدّث تلقائيًا مع كل حركة جديدة — افتح الرابط تاني أو اعمل ريفرش (اسحب الصفحة لتحت) وهتشوف آخر رصيد.</div>
   </div>
   <div class="card">
     ${skipped > 0 ? `<div class="muted" style="margin-bottom:6px">بنعرض آخر ${shown.length} حركة من ${entries.length} — الحركات الأقدم متلخّصة في «رصيد سابق».</div>` : ''}

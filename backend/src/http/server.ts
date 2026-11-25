@@ -21,7 +21,7 @@ import { triggerDebouncedSync } from '../main/services/priceCheckerSync'
 import { signToken, requireAuth, verifyToken, type AuthedRequest } from './auth'
 import { FORGOT_PASSWORD_REPLY, requestPasswordReset, resetPasswordWithToken } from '../main/services/passwordReset'
 import { getQzCredentials, signQzMessage } from '../main/services/qzSigning'
-import { renderPublicStatementPage } from '../main/services/statementLink'
+import { isPreviewFetch, renderPublicStatementPage } from '../main/services/statementLink'
 
 const handlers = buildHandlerMap()
 
@@ -216,7 +216,8 @@ export function createApp(): express.Express {
       return
     }
     try {
-      const html = await renderPublicStatementPage(String(req.params.token))
+      // معاينة واتساب (روبوت) وطلبات HEAD بترد بنفس الصفحة بس من غير ما تتحسب «فتح» في عدّاد العميل
+      const html = await renderPublicStatementPage(String(req.params.token), !isPreviewFetch(req.get('user-agent'), req.method))
       if (!html) {
         res.status(404).type('html').send(STATEMENT_NOT_FOUND)
         return
