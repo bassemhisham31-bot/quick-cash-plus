@@ -21,6 +21,7 @@ import { triggerDebouncedSync } from '../main/services/priceCheckerSync'
 import { signToken, requireAuth, verifyToken, type AuthedRequest } from './auth'
 import { FORGOT_PASSWORD_REPLY, requestPasswordReset, resetPasswordWithToken } from '../main/services/passwordReset'
 import { getQzCredentials, signQzMessage } from '../main/services/qzSigning'
+import { renderPublicStatementPage } from '../main/services/statementLink'
 
 const handlers = buildHandlerMap()
 
@@ -194,6 +195,36 @@ export function createApp(): express.Express {
       res.json({ ok: true })
     } catch (err: any) {
       res.status(400).json({ ok: false, error: err?.message ?? 'حدث خطأ' })
+    }
+  })
+
+  /**
+   * صفحة كشف حساب العميل العامة (قبل بوابة المصادقة): الرابط اللي بيتبعت للعميل على واتساب. التوكن العشوائي هو الإذن الوحيد،
+   * الصفحة قراءة فقط، والرد واحد (404) لأي توكن غلط أو ملغي. مفيش اسم قناة فيها ':' فمفيش خطر تطابق route غلط.
+   */
+  const STATEMENT_NOT_FOUND = `<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>الرابط غير صالح</title></head><body style="font-family:Tahoma,Arial,sans-serif;background:#f3f5f9;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0"><div style="background:#fff;border-radius:14px;padding:28px;max-width:360px;text-align:center;box-shadow:0 1px 4px rgba(20,30,50,.1)"><div style="font-size:34px">🔒</div><h2 style="margin:8px 0">الرابط غير صالح</h2><p style="color:#667085;margin:0">الرابط ده اتلغى أو مش صحيح. اطلب من المحل يبعتلك رابط جديد.</p></div></body></html>`
+  app.get('/api/s/:token', async (req, res) => {
+    res.set({
+      'Cache-Control': 'no-store',
+      'X-Robots-Tag': 'noindex, nofollow',
+      'Referrer-Policy': 'no-referrer',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+    })
+    if (rateLimited(`stmt:${req.ip}`, 60, 60 * 1000)) {
+      res.status(429).type('text/plain').send('محاولات كتير، جرّب بعد شوية')
+      return
+    }
+    try {
+      const html = await renderPublicStatementPage(String(req.params.token))
+      if (!html) {
+        res.status(404).type('html').send(STATEMENT_NOT_FOUND)
+        return
+      }
+      res.type('html').send(html)
+    } catch (err: any) {
+      console.error('[statement-link]', err?.message ?? err)
+      res.status(500).type('text/plain').send('حصل خطأ — جرّب تاني بعد شوية')
     }
   })
 

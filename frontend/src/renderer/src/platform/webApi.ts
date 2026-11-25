@@ -19,6 +19,7 @@ import type {
   DirectReturnInput,
   DirectReturnResult,
   StatementFilter,
+  StatementLinkInfo,
   ActivateLicenseResult,
   KitchenNotification,
   AssistantChatMessage,
@@ -845,6 +846,13 @@ const api = {
     importExcel: (): Promise<ProductImportResult> => importCustomersFile(),
     sendStatementWhatsApp: (customerId: number, filter?: StatementFilter): Promise<WhatsAppSendResult> =>
       invoke('customers:sendStatementWhatsApp', customerId, filter),
+    /** رابط كشف الحساب للعميل (ويب فقط، مضاف يدويًا) — الواجهة بتبعت عنوان الموقع عشان السيرفر يبني الرابط الكامل */
+    getStatementLink: (customerId: number): Promise<StatementLinkInfo> => invoke('customers:getStatementLink', customerId, window.location.origin),
+    createStatementLink: (customerId: number, regenerate = false): Promise<StatementLinkInfo> =>
+      invoke('customers:createStatementLink', customerId, window.location.origin, regenerate),
+    revokeStatementLink: (customerId: number): Promise<void> => invoke('customers:revokeStatementLink', customerId),
+    sendStatementLinkWhatsApp: (customerId: number): Promise<WhatsAppSendResult & { url?: string }> =>
+      invoke('customers:sendStatementLinkWhatsApp', customerId, window.location.origin),
     getStatement: (customerId: number): Promise<StatementView> =>
       invoke('customers:getStatement', customerId),
     getLedger: (customerId: number, filter?: StatementFilter): Promise<StatementView> =>

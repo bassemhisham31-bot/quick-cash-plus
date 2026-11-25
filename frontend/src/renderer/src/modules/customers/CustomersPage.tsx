@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
 import { StatementModal } from '../../components/StatementModal'
+import { StatementLinkModal } from '../../components/StatementLinkModal'
 import { alertDialog } from '../../components/ConfirmDialogHost'
 import { formatCurrency as currency } from '../../lib/currency'
 import { playSound } from '../../lib/sounds'
@@ -26,6 +27,7 @@ export function CustomersPage(): JSX.Element {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [statementFor, setStatementFor] = useState<CustomerView | null>(null)
+  const [statementLinkFor, setStatementLinkFor] = useState<CustomerView | null>(null)
   const [statement, setStatement] = useState<StatementView | null>(null)
   const [statementFilter, setStatementFilter] = useState<{ from: string; to: string }>({ from: '', to: '' })
   const [vendors, setVendors] = useState<VendorView[]>([])
@@ -468,6 +470,14 @@ export function CustomersPage(): JSX.Element {
           onFilterChange={changeStatementFilter}
           onPrint={printStatement}
           onSendWhatsApp={sendStatementWhatsApp}
+          onOpenLink={() => setStatementLinkFor(statementFor)}
+        />
+      )}
+
+      {statementLinkFor && (
+        <StatementLinkModal
+          customer={{ id: statementLinkFor.id, name: statementLinkFor.name, phone: statementLinkFor.phone }}
+          onClose={() => setStatementLinkFor(null)}
         />
       )}
     </div>
