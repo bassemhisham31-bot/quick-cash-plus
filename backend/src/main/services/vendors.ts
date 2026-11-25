@@ -3,6 +3,7 @@ import type {
   PaymentMethod,
   PurchaseInvoiceListItem,
   StatementEntry,
+  StatementFilter,
   StatementView,
   VendorInput,
   VendorView
@@ -81,7 +82,7 @@ export async function updateVendor(
  * برصيد جاري بعد كل حركة. «رصيد سابق» = الرصيد الحالي − صافي كل الحركات (بيغطي أي رصيد افتتاحي/حركة مش متسجّلة هنا).
  * مدين = بيزوّد اللي علينا للمورد، دائن = بيقلّله.
  */
-export async function getVendorStatement(vendorId: number): Promise<StatementView> {
+export async function getVendorStatement(vendorId: number, filter: StatementFilter = {}): Promise<StatementView> {
   const db = getDb()
   const vendorRs = await db.execute({ sql: 'SELECT * FROM vendors WHERE id = ?', args: [vendorId] })
   const vendor = vendorRs.rows[0] as any
@@ -185,12 +186,23 @@ export async function getVendorStatement(vendorId: number): Promise<StatementVie
 
   const balance = Number(vendor.balance)
   const net = all.reduce((s, e) => s + e.debit - e.credit, 0)
-  let running = balance - net // رصيد قبل أول حركة معروضة
-  const openingBalance = r2(running)
-  const entries: StatementEntry[] = all.map((e) => {
+  let running = balance - net // رصيد قبل أول حركة
+  let openingBalance = r2(running)
+  // فلتر التاريخ (من/إلى شاملين): بنقارن بالتاريخ بس (أول 10 حروف) لأن الحركات التاريخية تاريخها من غير وقت.
+  // اللي قبل «من» بيتلخّص في «رصيد سابق»، واللي بعد «إلى» مابيتعرضش.
+  const from = filter.from ?? null
+  const to = filter.to ?? null
+  const entries: StatementEntry[] = []
+  for (const e of all) {
     running += e.debit - e.credit
-    return { ...e, balance: r2(running) }
-  })
+    const day = e.date.slice(0, 10)
+    if (from && day < from) {
+      openingBalance = r2(running)
+      continue
+    }
+    if (to && day > to) continue
+    entries.push({ ...e, balance: r2(running) })
+  }
   return {
     balance,
     openingBalance,

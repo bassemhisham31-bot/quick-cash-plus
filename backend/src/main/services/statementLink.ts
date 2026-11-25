@@ -19,8 +19,46 @@ const PARTY = {
 } as const
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{20,64}$/
-/** أقصى عدد حركات بتتعرض في الصفحة — الأقدم بيتلخّص في «رصيد سابق». */
-const PAGE_MAX_ENTRIES = 300
+/** فترة العرض (من/إلى شاملين) — اختيارية للاتنين. */
+export interface StatementRange {
+  from?: string
+  to?: string
+}
+
+/** تاريخ YYYY-MM-DD حقيقي (مش 2026-02-31 مثلًا)؟ */
+function validDay(v: unknown): string | undefined {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return undefined
+  const d = new Date(`${v}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v ? v : undefined
+}
+
+/** بيحوّل باراميترات الرابط (?from=&to=) لفترة صالحة: أي قيمة غلط بتتجاهل، ولو من > إلى بيتبدلوا. */
+export function parseStatementRange(from: unknown, to: unknown): StatementRange {
+  let f = validDay(from)
+  let t = validDay(to)
+  if (f && t && f > t) [f, t] = [t, f]
+  return { ...(f ? { from: f } : {}), ...(t ? { to: t } : {}) }
+}
+
+const cairoDay = (): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+
+/** اختصارات الفترة في الصفحة (بتوقيت القاهرة). */
+function presetRanges(): Array<{ label: string; from: string; to: string }> {
+  const today = cairoDay()
+  const [y, m] = today.split('-').map(Number)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const ymd = (yy: number, mm: number, dd: number): string => `${yy}-${pad(mm)}-${pad(dd)}`
+  const prevStart = new Date(Date.UTC(y, m - 2, 1))
+  const prevEndDay = new Date(Date.UTC(y, m - 1, 0)).getUTCDate()
+  const threeStart = new Date(Date.UTC(y, m - 3, 1))
+  return [
+    { label: 'الشهر ده', from: ymd(y, m, 1), to: today },
+    { label: 'الشهر اللي فات', from: ymd(prevStart.getUTCFullYear(), prevStart.getUTCMonth() + 1, 1), to: ymd(prevStart.getUTCFullYear(), prevStart.getUTCMonth() + 1, prevEndDay) },
+    { label: 'آخر 3 شهور', from: ymd(threeStart.getUTCFullYear(), threeStart.getUTCMonth() + 1, 1), to: today },
+    { label: 'السنة دي', from: ymd(y, 1, 1), to: today }
+  ]
+}
 
 export function isValidStatementToken(token: unknown): token is string {
   return typeof token === 'string' && TOKEN_RE.test(token)
@@ -134,6 +172,15 @@ body{margin:0;background:#f3f5f9;color:#1b2430;font-family:Tahoma,"Segoe UI",Ari
 .ent .debit .n{color:#c0392b}.ent .credit .n{color:#1e8449}.ent .paid .n{color:#475467}
 .ent .bl{margin-inline-start:auto;color:#475467}
 .ent.open{background:#f7f8fb;border-radius:8px;padding:11px 10px}
+.flt label{display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:#475467;flex:1;min-width:130px}
+.flt input{font:inherit;padding:8px 10px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;color:#1b2430;width:100%}
+.frow{display:flex;gap:10px;flex-wrap:wrap}
+.fbtn{display:flex;align-items:center;gap:14px;margin-top:10px}
+.fbtn button{font:inherit;font-weight:700;padding:9px 22px;border:0;border-radius:8px;background:#2f5bea;color:#fff;cursor:pointer}
+.lnk{color:#2f5bea;text-decoration:none;font-size:13px}
+.pre{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;padding-top:10px;border-top:1px solid #eef0f4}
+.sum{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:13px;margin-bottom:6px;padding:8px 10px;background:#f7f8fb;border-radius:8px}
+.sum .n{direction:ltr;unicode-bidi:isolate}
 .foot{text-align:center;margin:14px 0 4px}
 @media print{body{background:#fff}.card{box-shadow:none;border:1px solid #ddd}}
 `
@@ -212,9 +259,11 @@ async function resolveToken(token: string, countView: boolean): Promise<{ kind: 
  * صفحة الكشف العامة (HTML جاهز) للعميل أو المورد. بترجّع null لو التوكن مش صالح/اتلغى — الرد واحد في كل الحالات عشان مفيش تخمين.
  * countView=false لمعاينات الروبوتات: بنرد بنفس الصفحة بس من غير ما نزوّد عدّاد الفتح.
  */
-export async function renderPublicStatementPage(token: string, countView = true): Promise<string | null> {
+export async function renderPublicStatementPage(token: string, countView = true, range: StatementRange = {}): Promise<string | null> {
   if (!isValidStatementToken(token)) return null
-  const found = await resolveToken(token, countView)
+  const filtered = !!(range.from || range.to)
+  // عدّاد الفتح بيحسب أول فتح بس: تغيير فلتر الفترة جوه الصفحة مش «فتح» جديد
+  const found = await resolveToken(token, countView && !filtered)
   if (!found) return null
 
   let name: string
@@ -223,7 +272,7 @@ export async function renderPublicStatementPage(token: string, countView = true)
   let openingBalance: number
   let labels: PageLabels
   if (found.kind === 'customer') {
-    const ledger = await getCustomerLedger(found.id, {})
+    const ledger = await getCustomerLedger(found.id, range)
     name = ledger.customerName
     balance = ledger.balance
     entries = ledger.entries
@@ -231,7 +280,7 @@ export async function renderPublicStatementPage(token: string, countView = true)
     labels = CUSTOMER_LABELS
   } else {
     const vendor = (await getDb().execute({ sql: 'SELECT name FROM vendors WHERE id = ?', args: [found.id] })).rows[0] as any
-    const st = await getVendorStatement(found.id)
+    const st = await getVendorStatement(found.id, range)
     name = String(vendor?.name ?? '')
     balance = st.balance
     entries = st.entries
@@ -240,10 +289,16 @@ export async function renderPublicStatementPage(token: string, countView = true)
   }
   const [store, pos] = await Promise.all([getStoreSettings(), getPosUiSettings()])
 
-  const shown = entries.slice(-PAGE_MAX_ENTRIES)
-  const skipped = entries.length - shown.length
-  const opening = skipped > 0 ? (entries[skipped - 1].balance ?? 0) : openingBalance
+  // كل الحركات من غير حد أقصى. مع فلتر الفترة: «رصيد سابق» = الرصيد قبل بداية الفترة، و«رصيد نهاية الفترة» = بعد آخر حركة فيها
+  const shown = entries
+  const opening = openingBalance
   const closing = entries.length ? (entries[entries.length - 1].balance ?? 0) : openingBalance
+  const periodDebit = entries.reduce((s, e) => s + e.debit, 0)
+  const periodCredit = entries.reduce((s, e) => s + e.credit, 0)
+  const presets = presetRanges()
+  // التواريخ جوه <bdi dir="ltr"> عشان ما تتعكسش بصريًا في الصفحة العربية (القيم متحقق منها قبل كده، فآمنة)
+  const dayText = (v: string | undefined, fallback: string): string => (v ? `<bdi dir="ltr">${v}</bdi>` : fallback)
+  const rangeText = `من ${dayText(range.from, 'أول حركة')} إلى ${dayText(range.to, 'النهاردة')}`
   const pos2 = balance > 0.005
   const neg2 = balance < -0.005
   // لون الرصيد: العميل المدين أحمر، والمورد اللي له فلوس عندنا أخضر
@@ -293,12 +348,25 @@ export async function renderPublicStatementPage(token: string, countView = true)
     ${!pos2 && !neg2 ? '' : `<div class="amt">${numFmt.format(Math.abs(balance))} <span style="font-size:16px">${sym}</span></div>`}
     <div class="muted" style="margin-top:6px">الكشف بيتحدّث تلقائيًا مع كل حركة جديدة — افتح الرابط تاني أو اعمل ريفرش (اسحب الصفحة لتحت) وهتشوف آخر رصيد.</div>
   </div>
+  <form class="card flt" method="get" action="">
+    <div class="muted" style="margin-bottom:8px">عرض حركات فترة معيّنة</div>
+    <div class="frow">
+      <label>من<input type="date" name="from" value="${range.from ?? ''}" /></label>
+      <label>إلى<input type="date" name="to" value="${range.to ?? ''}" /></label>
+    </div>
+    <div class="fbtn"><button type="submit">عرض</button>${filtered ? '<a class="lnk" href="?">كل الحركات</a>' : ''}</div>
+    <div class="pre">${presets.map((p) => `<a class="lnk" href="?from=${p.from}&amp;to=${p.to}">${p.label}</a>`).join('')}</div>
+  </form>
   <div class="card">
-    ${skipped > 0 ? `<div class="muted" style="margin-bottom:6px">بنعرض آخر ${shown.length} حركة من ${entries.length} — الحركات الأقدم متلخّصة في «رصيد سابق».</div>` : ''}
-    <div class="muted" style="margin-bottom:4px">الحركات (الأحدث أولًا) — الرصيد الحالي: <b dir="ltr">${numFmt.format(closing)}</b></div>
+    ${
+      filtered
+        ? `<div class="muted" style="margin-bottom:4px">الحركات في الفترة <b>${rangeText}</b> (الأحدث أولًا)</div>` +
+          `<div class="sum"><span>${labels.debitWord}: <b class="n">${numFmt.format(periodDebit)}</b></span><span>${labels.creditWord}: <b class="n">${numFmt.format(periodCredit)}</b></span><span>رصيد نهاية الفترة: <b class="n">${numFmt.format(closing)}</b></span></div>`
+        : `<div class="muted" style="margin-bottom:4px">كل الحركات (${entries.length}) — الأحدث أولًا — الرصيد الحالي: <b dir="ltr">${numFmt.format(closing)}</b></div>`
+    }
     <div>
-      ${rows || '<div class="muted" style="text-align:center;padding:10px">لا توجد حركات</div>'}
-      <div class="ent open"><div class="top"><span class="desc">رصيد سابق</span></div><div class="am"><span class="bl" style="margin-inline-start:0">الرصيد <span class="n">${numFmt.format(opening)}</span></span></div></div>
+      ${rows || '<div class="muted" style="text-align:center;padding:10px">لا توجد حركات في الفترة دي</div>'}
+      <div class="ent open"><div class="top"><span class="desc">رصيد سابق${filtered ? ' (قبل الفترة)' : ''}</span></div><div class="am"><span class="bl" style="margin-inline-start:0">الرصيد <span class="n">${numFmt.format(opening)}</span></span></div></div>
     </div>
   </div>
   <div class="foot muted">آخر تحديث: ${nowText()}${contact ? `<br />للاستفسار: ${contact}` : ''}</div>
