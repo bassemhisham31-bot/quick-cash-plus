@@ -21,7 +21,7 @@ import { triggerDebouncedSync } from '../main/services/priceCheckerSync'
 import { signToken, requireAuth, verifyToken, type AuthedRequest } from './auth'
 import { FORGOT_PASSWORD_REPLY, requestPasswordReset, resetPasswordWithToken } from '../main/services/passwordReset'
 import { getQzCredentials, signQzMessage } from '../main/services/qzSigning'
-import { isPreviewFetch, renderPublicStatementPage } from '../main/services/statementLink'
+import { isPreviewFetch, parseStatementRange, renderPublicStatementPage } from '../main/services/statementLink'
 
 const handlers = buildHandlerMap()
 
@@ -209,7 +209,7 @@ export function createApp(): express.Express {
       'X-Robots-Tag': 'noindex, nofollow',
       'Referrer-Policy': 'no-referrer',
       'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+      'Content-Security-Policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'"
     })
     if (rateLimited(`stmt:${req.ip}`, 60, 60 * 1000)) {
       res.status(429).type('text/plain').send('محاولات كتير، جرّب بعد شوية')
@@ -217,7 +217,9 @@ export function createApp(): express.Express {
     }
     try {
       // معاينة واتساب (روبوت) وطلبات HEAD بترد بنفس الصفحة بس من غير ما تتحسب «فتح» في عدّاد العميل
-      const html = await renderPublicStatementPage(String(req.params.token), !isPreviewFetch(req.get('user-agent'), req.method))
+      // ?from=YYYY-MM-DD&to=YYYY-MM-DD: فترة العرض (أي قيمة غلط بتتجاهل). تغيير الفترة مش بيتحسب «فتح» جديد
+      const range = parseStatementRange(req.query.from, req.query.to)
+      const html = await renderPublicStatementPage(String(req.params.token), !isPreviewFetch(req.get('user-agent'), req.method), range)
       if (!html) {
         res.status(404).type('html').send(STATEMENT_NOT_FOUND)
         return

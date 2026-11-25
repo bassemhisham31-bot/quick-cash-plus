@@ -24,6 +24,7 @@ import {
   getStatementLinkInfo,
   getVendorStatementLinkInfo,
   isPreviewFetch,
+  parseStatementRange,
   revokeStatementLink,
   revokeVendorStatementLink
 } from '../src/main/services/statementLink'
@@ -256,6 +257,61 @@ async function main(): Promise<void> {
   const vLink3 = await createVendorStatementLink(vend.id, 'https://shop.example.test')
   await getDb().execute({ sql: "UPDATE vendors SET deleted_at = datetime('now') WHERE id = ?", args: [vend.id] })
   assert((await get(pathOf(vLink3.url!))).status === 404, 'مورد اتحذف → الرابط 404')
+
+  console.log('7c) من غير حد أقصى للحركات + فلتر الفترة (من/إلى)')
+  assert(
+    JSON.stringify(parseStatementRange('2026-02-30', 'abc')) === '{}' &&
+      JSON.stringify(parseStatementRange('2026-03-10', '2026-03-01')) === '{"from":"2026-03-01","to":"2026-03-10"}' &&
+      JSON.stringify(parseStatementRange(['2026-01-01'], undefined)) === '{}' &&
+      JSON.stringify(parseStatementRange('2026-01-05', undefined)) === '{"from":"2026-01-05"}',
+    'parseStatementRange: تاريخ مش حقيقي/نص غلط بيتجاهل، ومن > إلى بيتبدّلوا، والتواريخ الصحيحة بتعدّي'
+  )
+  const bigVendor = await createVendor({ name: 'مورد كتير الحركات', phone: '', address: '', notes: '', openingBalance: 0 })
+  const bigDates: string[] = []
+  const bigEntries = Array.from({ length: 350 }, (_, i) => {
+    const d = new Date(Date.UTC(2025, 0, 1 + i)).toISOString().slice(0, 10)
+    bigDates.push(d)
+    return { date: d, kind: 'purchase' as const, description: `مشتريات رقم ${i + 1}`, debit: 10, credit: 0 }
+  })
+  await addVendorAccountEntries(bigVendor.id, bigEntries)
+  const bigLink = await createVendorStatementLink(bigVendor.id, 'https://shop.example.test')
+  const bigPath = pathOf(bigLink.url!)
+  const countEnt = (h: string): number => (h.match(/<div class="ent">/g) ?? []).length
+  const allRes = await get(bigPath)
+  const allHtml = await allRes.text()
+  assert(countEnt(allHtml) === 350 && !allHtml.includes('بنعرض آخر'), 'مفيش حد أقصى: 350 حركة كلها ظاهرة (كان الحد 300)')
+  assert(allHtml.includes('name="from"') && allHtml.includes('name="to"') && allHtml.includes('آخر 3 شهور') && allHtml.includes('الشهر ده'), 'الصفحة فيها فورم من/إلى واختصارات الفترة')
+  assert((allRes.headers.get('content-security-policy') ?? '').includes("form-action 'self'"), "CSP بتسمح بإرسال الفورم لنفس الصفحة (form-action 'self')")
+  assert((await getVendorStatementLinkInfo(bigVendor.id, 'https://shop.example.test')).views === 1, 'أول فتح اتحسب (1)')
+
+  const f1 = await (await get(`${bigPath}?from=2025-01-11&to=2025-01-20`)).text()
+  assert(countEnt(f1) === 10 && f1.includes('مشتريات رقم 11') && f1.includes('مشتريات رقم 20') && !f1.includes('مشتريات رقم 10<') && !f1.includes('مشتريات رقم 21'), 'فلتر 11→20 يناير: 10 حركات بالظبط')
+  assert(f1.includes('رصيد سابق (قبل الفترة)') && f1.includes('100.00') && f1.includes('رصيد نهاية الفترة') && f1.includes('200.00'), '«رصيد سابق (قبل الفترة)» 100.00 و«رصيد نهاية الفترة» 200.00')
+  assert(f1.includes('الحركات في الفترة') && f1.includes('value="2025-01-11"') && f1.includes('value="2025-01-20"') && f1.includes('كل الحركات'), 'عنوان الفترة + التواريخ متعبّية في الفورم + رابط «كل الحركات»')
+  const f2 = await (await get(`${bigPath}?from=2025-12-01`)).text()
+  assert(countEnt(f2) === bigDates.filter((d) => d >= '2025-12-01').length, 'فلتر مفتوح من الأول (من بس): كل الحركات من 1 ديسمبر')
+  const f3 = await (await get(`${bigPath}?to=2025-01-05`)).text()
+  assert(countEnt(f3) === 5 && f3.includes('50.00'), 'فلتر «إلى» بس: أول 5 حركات ونهاية الفترة 50.00')
+  const f4 = await (await get(`${bigPath}?from=2025-01-20&to=2025-01-11`)).text()
+  assert(countEnt(f4) === 10, 'من > إلى بيتبدّلوا: نفس الـ10 حركات')
+  const f5 = await (await get(`${bigPath}?from=abc&to=2025-13-45`)).text()
+  assert(countEnt(f5) === 350 && !f5.includes('الحركات في الفترة'), 'باراميترات غلط بتتجاهل: كل الحركات')
+  const f6 = await (await get(`${bigPath}?from=2030-01-01&to=2030-12-31`)).text()
+  assert(countEnt(f6) === 0 && f6.includes('لا توجد حركات في الفترة دي') && f6.includes('3,500.00'), 'فترة من غير حركات: رسالة + «رصيد سابق» 3,500.00 (الرصيد الكامل)')
+  const xss = await (await get(`${bigPath}?from=%22%3E%3Cscript%3E&to=x`)).text()
+  assert(!xss.includes('<script') && countEnt(xss) === 350, 'قيمة فيها HTML في الفلتر ما بتتنفّذش ولا بتظهر')
+  // 5 طلبات بفلتر صالح (f1,f2,f3,f4,f6) ما اتحسبوش، وطلبين باراميترات غلط (f5 وxss) اتعاملوا كفتح عادي → 1 + 2
+  assert((await getVendorStatementLinkInfo(bigVendor.id, 'https://shop.example.test')).views === 3, 'فلتر الفترة الصالح ما زوّدش عدّاد الفتح (5 طلبات)، والباراميترات الغلط اتحسبت فتح عادي (1 + 2 = 3)')
+  // نفس الفلتر على صفحة العميل (بحركات بتاريخ النهارده)
+  const cf = await createCustomer({ name: 'عميل الفلتر', phone: '', address: '', notes: '', openingBalance: 200, loyaltyEnabled: true })
+  await recordCustomerPayment(cf.id, 50, 'cash', 'دفعة الفلتر', 1)
+  const cfPath = pathOf((await createStatementLink(cf.id, 'https://shop.example.test')).url!)
+  const cAll = await (await get(cfPath)).text()
+  const cOld = await (await get(`${cfPath}?from=2000-01-01&to=2000-12-31`)).text()
+  const cNow = await (await get(`${cfPath}?from=2000-01-01&to=2099-12-31`)).text()
+  assert(cAll.includes('دفعة الفلتر') && cAll.includes('name="from"'), 'صفحة العميل: فيها الحركة وفورم الفترة')
+  assert(!cOld.includes('دفعة الفلتر') && cOld.includes('لا توجد حركات في الفترة دي') && cOld.includes('200.00'), 'العميل: فترة قديمة من غير حركات و«رصيد سابق» 200.00')
+  assert(cNow.includes('دفعة الفلتر') && cNow.includes('رصيد نهاية الفترة') && cNow.includes('150.00'), 'العميل: فترة بتغطي النهارده فيها الدفعة ونهاية الفترة 150.00')
 
   console.log('8) حد المحاولات')
   let last = 0
