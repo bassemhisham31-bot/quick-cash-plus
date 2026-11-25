@@ -122,9 +122,17 @@ import {
   sendHeldInvoiceByWhatsApp,
   sendWhatsAppMessage,
   sendCustomerStatementLinkByWhatsApp,
+  sendVendorStatementLinkByWhatsApp,
   startWhatsAppPairing
 } from './services/whatsapp'
-import { createStatementLink, getStatementLinkInfo, revokeStatementLink } from './services/statementLink'
+import {
+  createStatementLink,
+  createVendorStatementLink,
+  getStatementLinkInfo,
+  getVendorStatementLinkInfo,
+  revokeStatementLink,
+  revokeVendorStatementLink
+} from './services/statementLink'
 import { generateBarcodeDataUrl, decodeWeightBarcode } from './services/barcode'
 import {
   openCashDrawer,
@@ -181,7 +189,8 @@ import {
   getVendorStatement,
   listUnpaidPurchaseInvoices,
   listVendors,
-  recordVendorPayment
+  recordVendorPayment,
+  updateVendor
 } from './services/vendors'
 import {
   createExpense,
@@ -457,6 +466,14 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
 
     'vendors:list': (search: string) => listVendors(search),
     'vendors:create': (input: VendorInput) => createVendor(input),
+    'vendors:update': (vendorId: number, input: { name: string; phone: string; address?: string; notes?: string }) => updateVendor(vendorId, input),
+    // رابط كشف حساب المورد (ويب فقط) — زي رابط العميل: مقصود إنها مش في MUTATING_CHANNELS (الـbroadcast بيعمل remount ويقفل النافذة)
+    'vendors:getStatementLink': (vendorId: number, origin?: string) => getVendorStatementLinkInfo(vendorId, typeof origin === 'string' ? origin : undefined),
+    'vendors:createStatementLink': (vendorId: number, origin?: string, regenerate?: boolean) =>
+      createVendorStatementLink(vendorId, typeof origin === 'string' ? origin : undefined, regenerate === true),
+    'vendors:revokeStatementLink': (vendorId: number) => revokeVendorStatementLink(vendorId),
+    'vendors:sendStatementLinkWhatsApp': (vendorId: number, origin?: string) =>
+      sendVendorStatementLinkByWhatsApp(vendorId, typeof origin === 'string' ? origin : undefined),
     'vendors:getStatement': (vendorId: number) => getVendorStatement(vendorId),
     'vendors:recordPayment': (
       vendorId: number,

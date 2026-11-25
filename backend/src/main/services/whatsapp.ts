@@ -12,7 +12,7 @@ import { getCustomerLedger, getCustomerPhoneAndName } from './customers'
 import { getStoreSettings, getWhatsAppSettings } from './settings'
 import { getInvoiceView } from './invoices'
 import { getHeldInvoice } from './heldInvoices'
-import { createStatementLink } from './statementLink'
+import { createStatementLink, createVendorStatementLink } from './statementLink'
 import type { StatementFilter, WhatsAppSendResult, WhatsAppStatus } from '../../shared/types'
 
 let sock: any = null
@@ -425,6 +425,41 @@ export async function sendCustomerStatementLinkByWhatsApp(customerId: number, or
       link.url
     ].join('\n')
     const sent = await sendWhatsAppMessage(ledger.customerPhone, message)
+    return sent.ok ? { ok: true, url: link.url } : sent
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر إرسال رابط كشف الحساب' }
+  }
+}
+
+/**
+ * إرسال رابط كشف حساب المورد على واتساب (نفس فكرة رابط العميل): الرصيد وقت الإرسال + رابط بيتحدّث تلقائيًا.
+ * رصيد موجب = مستحق للمورد عندنا، سالب = مدفوع له زيادة.
+ */
+export async function sendVendorStatementLinkByWhatsApp(vendorId: number, origin?: string): Promise<WhatsAppSendResult & { url?: string }> {
+  try {
+    if (!connected || !sock) return { ok: false, error: 'واتساب غير متصل — اربط الجلسة من الإعدادات أولًا' }
+    const vendor = (await getDb().execute({ sql: 'SELECT name, phone, balance FROM vendors WHERE id = ? AND deleted_at IS NULL', args: [vendorId] })).rows[0] as any
+    if (!vendor) return { ok: false, error: 'المورد غير موجود' }
+    if (!String(vendor.phone ?? '').trim()) return { ok: false, error: 'المورد مالوش رقم موبايل — ضيف الرقم من «تعديل» الأول' }
+    const store = await getStoreSettings()
+    const link = await createVendorStatementLink(vendorId, origin)
+    if (!link.url) return { ok: false, error: 'تعذر عمل رابط كشف الحساب' }
+    const due = Number(vendor.balance)
+    const balanceLine =
+      due > 0.005
+        ? `المبلغ المستحق لك عندنا: ${money(due)} (وقت الإرسال)`
+        : due < -0.005
+          ? `رصيد لنا عندك: ${money(Math.abs(due))} (وقت الإرسال)`
+          : 'حسابك مسدّد — مفيش مستحقات (وقت الإرسال)'
+    const message = [
+      `📄 كشف حساب مورد — ${store.name}`,
+      `أهلًا ${vendor.name}`,
+      balanceLine,
+      '',
+      'تقدر تشوف كشف حسابك بالتفصيل من الرابط ده — بيتحدّث تلقائيًا مع كل حركة جديدة، افتحه تاني في أي وقت:',
+      link.url
+    ].join('\n')
+    const sent = await sendWhatsAppMessage(String(vendor.phone), message)
     return sent.ok ? { ok: true, url: link.url } : sent
   } catch (err: any) {
     return { ok: false, error: err?.message ?? 'تعذر إرسال رابط كشف الحساب' }

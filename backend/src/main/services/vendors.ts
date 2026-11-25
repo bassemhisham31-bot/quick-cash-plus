@@ -58,6 +58,24 @@ export async function createVendor(input: VendorInput): Promise<VendorView> {
 
 const r2 = (n: number): number => Math.round(n * 100) / 100
 
+/** تعديل بيانات المورد الأساسية (الاسم/الموبايل/العنوان/الملاحظات) — الرصيد والحركات مابتتأثرش. */
+export async function updateVendor(
+  vendorId: number,
+  input: { name: string; phone: string; address?: string; notes?: string }
+): Promise<VendorView> {
+  const db = getDb()
+  const name = (input?.name ?? '').trim()
+  if (!name) throw new Error('اسم المورد مطلوب')
+  const exists = await db.execute({ sql: 'SELECT id FROM vendors WHERE id = ? AND deleted_at IS NULL', args: [vendorId] })
+  if (!exists.rows[0]) throw new Error('المورد غير موجود')
+  await db.execute({
+    sql: 'UPDATE vendors SET name = ?, phone = ?, address = ?, notes = ? WHERE id = ?',
+    args: [name, (input.phone ?? '').trim() || null, (input.address ?? '').trim() || null, (input.notes ?? '').trim() || null, vendorId]
+  })
+  const rs = await db.execute({ sql: `${VENDOR_SELECT} WHERE v.id = ?`, args: [vendorId] })
+  return mapRow(rs.rows[0])
+}
+
 /**
  * كشف حساب المورد الكامل: فواتير المشتريات (مدين) والمرتجعات والسداد والتسويات (دائن) وحركات الحساب التاريخية (أرقام فقط)،
  * برصيد جاري بعد كل حركة. «رصيد سابق» = الرصيد الحالي − صافي كل الحركات (بيغطي أي رصيد افتتاحي/حركة مش متسجّلة هنا).
