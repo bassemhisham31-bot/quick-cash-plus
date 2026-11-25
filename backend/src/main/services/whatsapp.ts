@@ -12,6 +12,7 @@ import { getCustomerLedger, getCustomerPhoneAndName } from './customers'
 import { getStoreSettings, getWhatsAppSettings } from './settings'
 import { getInvoiceView } from './invoices'
 import { getHeldInvoice } from './heldInvoices'
+import { createStatementLink } from './statementLink'
 import type { StatementFilter, WhatsAppSendResult, WhatsAppStatus } from '../../shared/types'
 
 let sock: any = null
@@ -392,6 +393,36 @@ export async function sendCustomerStatementByWhatsApp(customerId: number, filter
     return await sendWhatsAppMessage(ledger.customerPhone, message)
   } catch (err: any) {
     return { ok: false, error: err?.message ?? 'تعذر إرسال كشف الحساب' }
+  }
+}
+
+/**
+ * إرسال رابط كشف الحساب للعميل على واتساب: رسالة قصيرة فيها الرصيد الحالي + رابط يفتح الكشف الكامل من غير تسجيل دخول.
+ * بيعمل الرابط لو مش موجود (أو بيستخدم الموجود). origin = عنوان الموقع من الواجهة (أو QCP_PUBLIC_URL).
+ */
+export async function sendCustomerStatementLinkByWhatsApp(customerId: number, origin?: string): Promise<WhatsAppSendResult & { url?: string }> {
+  try {
+    if (!connected || !sock) return { ok: false, error: 'واتساب غير متصل — اربط الجلسة من الإعدادات أولًا' }
+    const ledger = await getCustomerLedger(customerId, {})
+    if (!ledger.customerPhone?.trim()) return { ok: false, error: 'العميل مالوش رقم موبايل — ضيف الرقم من «تعديل» الأول' }
+    const store = await getStoreSettings()
+    const link = await createStatementLink(customerId, origin)
+    if (!link.url) return { ok: false, error: 'تعذر عمل رابط كشف الحساب' }
+    const due = ledger.balance
+    const balanceLine =
+      due > 0.005 ? `المبلغ المستحق عليك: ${money(due)}` : due < -0.005 ? `رصيد لك عندنا: ${money(Math.abs(due))}` : 'حسابك مسدّد — مفيش مستحقات'
+    const message = [
+      `📄 كشف حساب — ${store.name}`,
+      `أهلًا ${ledger.customerName}`,
+      balanceLine,
+      '',
+      'تقدر تشوف كشف حسابك بالتفصيل من الرابط ده:',
+      link.url
+    ].join('\n')
+    const sent = await sendWhatsAppMessage(ledger.customerPhone, message)
+    return sent.ok ? { ok: true, url: link.url } : sent
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'تعذر إرسال رابط كشف الحساب' }
   }
 }
 

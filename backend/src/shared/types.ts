@@ -2107,3 +2107,12 @@ export interface AttachmentFile {
   mime: string
   dataBase64: string
 }
+
+/** رابط كشف حساب العميل (ويب فقط): بيتبعت على واتساب ويتفتح من غير تسجيل دخول */
+export interface StatementLinkInfo {
+  enabled: boolean
+  url: string | null
+  createdAt: string | null
+  lastViewedAt: string | null
+  views: number
+}

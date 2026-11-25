@@ -15,6 +15,8 @@ interface Props {
   onPrint?: () => void
   /** إرسال الكشف (بنفس الفلتر) للعميل على واتساب */
   onSendWhatsApp?: () => Promise<void>
+  /** رابط كشف الحساب (ويب): يفتح نافذة إرسال/نسخ/تجديد/إلغاء الرابط */
+  onOpenLink?: () => void
 }
 
 export function StatementModal({
@@ -26,7 +28,8 @@ export function StatementModal({
   filter,
   onFilterChange,
   onPrint,
-  onSendWhatsApp
+  onSendWhatsApp,
+  onOpenLink
 }: Props): JSX.Element {
   const withBalance = statement.openingBalance !== undefined
   const { t } = useTranslation()
@@ -73,7 +76,7 @@ export function StatementModal({
           {t('parties.balance')}: {currency(statement.balance)}
         </div>
 
-        {(filter && onFilterChange) || onPrint || onSendWhatsApp ? (
+        {(filter && onFilterChange) || onPrint || onSendWhatsApp || onOpenLink ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
             {filter && onFilterChange && (
               <>
@@ -108,6 +111,11 @@ export function StatementModal({
                   }}
                 >
                   {sendingWa ? '...جاري الإرسال' : '🟢 إرسال واتساب'}
+                </button>
+              )}
+              {onOpenLink && (
+                <button type="button" className="qcp-btn qcp-btn-secondary" onClick={onOpenLink}>
+                  🔗 رابط الكشف
                 </button>
               )}
               {onPrint && (

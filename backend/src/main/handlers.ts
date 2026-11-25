@@ -121,8 +121,10 @@ import {
   sendCustomerStatementByWhatsApp,
   sendHeldInvoiceByWhatsApp,
   sendWhatsAppMessage,
+  sendCustomerStatementLinkByWhatsApp,
   startWhatsAppPairing
 } from './services/whatsapp'
+import { createStatementLink, getStatementLinkInfo, revokeStatementLink } from './services/statementLink'
 import { generateBarcodeDataUrl, decodeWeightBarcode } from './services/barcode'
 import {
   openCashDrawer,
@@ -430,6 +432,15 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'customers:importExcel': (dataBase64: string) => importCustomersFromExcel(dataBase64),
     'customers:sendStatementWhatsApp': (customerId: number, filter?: StatementFilter) =>
       sendCustomerStatementByWhatsApp(customerId, filter ?? {}),
+    // رابط كشف الحساب (ويب فقط): الواجهة بتبعت origin الموقع. مقصود إنها مش في MUTATING_CHANNELS — الـmutating بيبث «تم التغيير» فبتتعمل
+    // remount لشاشة العملاء وتتقفل نافذة الرابط وهي مفتوحة (والرابط نفسه مش بيغيّر أي بيانات بتظهر في شاشات تانية).
+    'customers:getStatementLink': (customerId: number, origin?: string) =>
+      getStatementLinkInfo(customerId, typeof origin === 'string' ? origin : undefined),
+    'customers:createStatementLink': (customerId: number, origin?: string, regenerate?: boolean) =>
+      createStatementLink(customerId, typeof origin === 'string' ? origin : undefined, regenerate === true),
+    'customers:revokeStatementLink': (customerId: number) => revokeStatementLink(customerId),
+    'customers:sendStatementLinkWhatsApp': (customerId: number, origin?: string) =>
+      sendCustomerStatementLinkByWhatsApp(customerId, typeof origin === 'string' ? origin : undefined),
     'customers:getStatement': (customerId: number) => getCustomerStatement(customerId),
     'customers:getLedger': (customerId: number, filter?: StatementFilter) => getCustomerLedger(customerId, filter ?? {}),
     'customers:statementHtml': (customerId: number, filter?: StatementFilter) => buildCustomerStatementHtml(customerId, filter ?? {}),
