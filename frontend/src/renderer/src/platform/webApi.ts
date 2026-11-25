@@ -885,6 +885,10 @@ const api = {
     create: (input: VendorInput): Promise<VendorView> => invoke('vendors:create', input),
     update: (vendorId: number, input: { name: string; phone: string; address?: string; notes?: string }): Promise<VendorView> =>
       invoke('vendors:update', vendorId, input),
+    /** حركة يدوية على حساب المورد (مبلغ وتاريخ وبيان — من غير فاتورة/مخزون/خزنة) وحذفها (للأدمن بس) — ويب فقط، مضاف يدويًا */
+    addAccountEntry: (vendorId: number, input: { date: string; kind: 'purchase' | 'payment' | 'return'; amount: number; description?: string }): Promise<VendorView> =>
+      invoke('vendors:addAccountEntry', vendorId, input),
+    deleteAccountEntry: (entryId: number): Promise<VendorView> => invoke('vendors:deleteAccountEntry', entryId),
     /** رابط كشف حساب المورد (ويب فقط، مضاف يدويًا) — زي رابط العميل */
     getStatementLink: (vendorId: number): Promise<StatementLinkInfo> => invoke('vendors:getStatementLink', vendorId, window.location.origin),
     createStatementLink: (vendorId: number, regenerate = false): Promise<StatementLinkInfo> =>

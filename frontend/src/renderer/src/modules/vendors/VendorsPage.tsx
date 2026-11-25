@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../store/appStore'
 import { StatementModal } from '../../components/StatementModal'
 import { StatementLinkModal } from '../../components/StatementLinkModal'
-import { alertDialog } from '../../components/ConfirmDialogHost'
+import { VendorEntryModal } from '../../components/VendorEntryModal'
+import { alertDialog, confirmDialog } from '../../components/ConfirmDialogHost'
 import { formatCurrency as currency } from '../../lib/currency'
-import type { PaymentMethod, PurchaseInvoiceListItem, StatementView, VendorView } from '../../../../shared/types'
+import type { PaymentMethod, PurchaseInvoiceListItem, StatementEntry, StatementView, VendorView } from '../../../../shared/types'
 
 const emptyForm = { name: '', phone: '', address: '', notes: '', openingBalance: '0' }
 
@@ -18,6 +19,7 @@ export function VendorsPage(): JSX.Element {
   const [form, setForm] = useState(emptyForm)
   const [statementFor, setStatementFor] = useState<VendorView | null>(null)
   const [statementLinkFor, setStatementLinkFor] = useState<VendorView | null>(null)
+  const [entryFor, setEntryFor] = useState<VendorView | null>(null)
   const [editing, setEditing] = useState<VendorView | null>(null)
   const [editForm, setEditForm] = useState({ name: '', phone: '', address: '', notes: '' })
   const [savingEdit, setSavingEdit] = useState(false)
@@ -44,6 +46,19 @@ export function VendorsPage(): JSX.Element {
     return () => clearTimeout(id)
   }, [search])
 
+  // الشاشة بتتحدّث لوحدها (مش بتتعمل لها remount لما حاجة تتغيّر) عشان نافذة كشف الحساب المفتوحة ما تتقفلش بعد إضافة/حذف حركة
+  const openStatementId = statementFor?.id ?? null
+  useEffect(() => {
+    return window.api.onDataChanged(() => {
+      window.api.vendors.list(search).then(setVendors)
+      window.api.vendors.list('').then(setAllVendors)
+      if (openStatementId != null) {
+        window.api.vendors.getStatement(openStatementId).then(setStatement)
+        window.api.vendors.listUnpaidInvoices(openStatementId).then(setUnpaidInvoices)
+      }
+    })
+  }, [search, openStatementId])
+
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault()
     await window.api.vendors.create({
@@ -56,6 +71,29 @@ export function VendorsPage(): JSX.Element {
     setForm(emptyForm)
     setShowForm(false)
     refresh()
+  }
+
+  /** بعد إضافة/حذف حركة: الكشف والأرصدة تتحدّث والنافذة تفضل مفتوحة */
+  async function reloadAfterEntryChange(vendorId: number): Promise<void> {
+    setStatement(await window.api.vendors.getStatement(vendorId))
+    const fresh = (await window.api.vendors.list('')).find((v) => v.id === vendorId)
+    if (fresh) setStatementFor(fresh)
+    refresh()
+  }
+
+  async function handleDeleteEntry(entry: StatementEntry): Promise<void> {
+    if (!statementFor) return
+    const ok = await confirmDialog(
+      `حذف الحركة دي من حساب المورد؟\n${entry.date} — ${entry.description}\n${entry.debit ? 'مدين ' + currency(entry.debit) : 'دائن ' + currency(entry.credit)}\nرصيد المورد هيرجع لما كان قبلها.`,
+      { confirmLabel: 'احذف الحركة', danger: true }
+    )
+    if (!ok) return
+    try {
+      await window.api.vendors.deleteAccountEntry(entry.id - 2_000_000)
+      await reloadAfterEntryChange(statementFor.id)
+    } catch (err: any) {
+      await alertDialog(err?.message ?? 'تعذر حذف الحركة')
+    }
   }
 
   function openEdit(vendor: VendorView): void {
@@ -247,6 +285,19 @@ export function VendorsPage(): JSX.Element {
           }}
           onRecordPayment={handleRecordPayment}
           onOpenLink={() => setStatementLinkFor(statementFor)}
+          onAddEntry={() => setEntryFor(statementFor)}
+          onDeleteEntry={user?.role === 'admin' ? handleDeleteEntry : undefined}
+        />
+      )}
+
+      {entryFor && (
+        <VendorEntryModal
+          vendorName={entryFor.name}
+          onClose={() => setEntryFor(null)}
+          onSubmit={async (input) => {
+            await window.api.vendors.addAccountEntry(entryFor.id, input)
+          }}
+          onSaved={() => reloadAfterEntryChange(entryFor.id)}
         />
       )}
 

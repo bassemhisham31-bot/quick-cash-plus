@@ -873,6 +873,8 @@ export interface StatementEntry {
   credit: number
   /** الرصيد بعد الحركة (كشف حساب العميل) */
   balance?: number
+  /** حركة حساب يدوية/منقولة (كشف المورد) ينفع الأدمن يحذفها */
+  deletable?: boolean
 }
 
 export interface StatementView {

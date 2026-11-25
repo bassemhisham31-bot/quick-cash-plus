@@ -13,7 +13,16 @@ process.env.QCP_DATA_DIR = DATA_DIR
 
 import { getDb, initDatabaseAtPath } from '../src/main/db'
 import { createProduct } from '../src/main/services/catalog'
-import { createVendor, addVendorAccountEntries, getVendorStatement, recordVendorPayment } from '../src/main/services/vendors'
+import {
+  createVendor,
+  addVendorAccountEntries,
+  addVendorManualEntry,
+  deleteVendorAccountEntry,
+  getVendorStatement,
+  recordVendorPayment
+} from '../src/main/services/vendors'
+import { ACTOR_META_KEY, type ActorMeta } from '../src/shared/activityActor'
+import { buildHandlerMap, MUTATING_CHANNELS } from '../src/main/handlers'
 import { createPurchaseInvoice, returnPurchaseLines } from '../src/main/services/purchases'
 import { buildLedger } from '../src/main/services/ledger'
 import type { ProductInput } from '../src/shared/types'
@@ -124,6 +133,46 @@ async function main(): Promise<void> {
   const apNet = Math.round(lines.filter((l) => l.role === 'ap').reduce((s, l) => s + l.credit - l.debit, 0) * 100) / 100
   const vendSum = await count('SELECT COALESCE(SUM(balance),0) n FROM vendors')
   assert(apNet === vendSum && vendSum === 3200, `رصيد الموردين في الحسابات (${apNet}) = مجموع أرصدة الموردين (${vendSum})`)
+
+  console.log('6) حركة يدوية على حساب المورد (مبلغ وتاريخ وبيان بس)')
+  const man = await createVendor({ name: 'مورد الحركات اليدوية', phone: '', address: '', notes: '', openingBalance: 0 })
+  const snapBefore = await snapshot()
+  const v1 = await addVendorManualEntry(man.id, { date: '2026-02-01', kind: 'purchase', amount: 700, description: '  حاجة أمانة  ' })
+  assert(v1.balance === 700, 'مشتريات 700 → اللي علينا للمورد 700')
+  const v2 = await addVendorManualEntry(man.id, { date: '2026-02-05', kind: 'payment', amount: 200 })
+  const v3 = await addVendorManualEntry(man.id, { date: '2026-02-03', kind: 'return', amount: 50, description: '' })
+  assert(v2.balance === 500 && v3.balance === 450, 'سداد 200 ثم مرتجع 50 → الرصيد 450')
+  assert(JSON.stringify(snapBefore) === JSON.stringify(await snapshot()), 'مفيش أي أثر على المخزون/الفواتير/المدفوعات/القيود/الخزن (حركة أرقام بس)')
+  const ms = await getVendorStatement(man.id)
+  assert(ms.entries.map((e) => e.date).join(',') === '2026-02-01,2026-02-03,2026-02-05', 'الكشف مرتّب بالتاريخ مش بترتيب الإدخال')
+  assert(ms.entries.map((e) => e.balance).join(',') === '700,650,450' && ms.openingBalance === 0, 'الرصيد الجاري 700 ← 650 ← 450 و«رصيد سابق» 0')
+  assert(ms.entries[0].description === 'حاجة أمانة' && ms.entries[1].description === 'مرتجع / خصم (حركة يدوية)' && ms.entries[2].description === 'سداد (حركة يدوية)', 'البيان بيتنضّف، والفاضي بياخد وصف افتراضي حسب النوع')
+  assert(ms.entries.every((e) => e.deletable === true), 'حركات الحساب اليدوية قابلة للحذف')
+  const realOnes = (await getVendorStatement(other.id)).entries.concat((await getVendorStatement(vendor.id)).entries.filter((e) => e.id < 2_000_000))
+  assert(realOnes.length > 0 && realOnes.every((e) => !e.deletable), 'الفواتير والسداد والمرتجع الحقيقيين مش قابلين للحذف من هنا')
+
+  const bad = async (input: any): Promise<boolean> => (await addVendorManualEntry(man.id, input).catch((e) => e)) instanceof Error
+  assert(await bad({ date: '2026-02-01', kind: 'weird', amount: 5 }), 'نوع غلط → خطأ')
+  assert((await bad({ date: '2026-02-01', kind: 'payment', amount: 0 })) && (await bad({ date: '2026-02-01', kind: 'payment', amount: -5 })) && (await bad({ date: '2026-02-01', kind: 'payment', amount: NaN })) && (await bad({ date: '2026-02-01', kind: 'payment', amount: 1e15 })), 'مبلغ صفر/سالب/مش رقم/ضخم → خطأ')
+  assert((await bad({ date: '2026-02-30', kind: 'payment', amount: 5 })) && (await bad({ date: '1/2/2026', kind: 'payment', amount: 5 })) && (await bad({ date: '', kind: 'payment', amount: 5 })), 'تاريخ مش حقيقي/بصيغة غلط → خطأ')
+  assert(await bad({ date: '2099-01-01', kind: 'purchase', amount: 5 }), 'تاريخ في المستقبل → خطأ')
+  assert((await addVendorManualEntry(99999, { date: '2026-02-01', kind: 'payment', amount: 5 }).catch((e) => e)) instanceof Error, 'مورد مش موجود → خطأ')
+  assert((await getVendorStatement(man.id)).balance === 450, 'المحاولات الغلط ما غيّرتش الرصيد')
+
+  console.log('7) حذف حركة (للأدمن بس)')
+  await getDb().execute({ sql: "INSERT INTO users (username, password_hash, full_name, role) VALUES ('cashier-x', 'x', 'كاشير', 'cashier')", args: [] })
+  const cashierId = Number(((await getDb().execute("SELECT id FROM users WHERE username = 'cashier-x'")).rows[0] as any).id)
+  const actor = (userId: number | null): ActorMeta => ({ [ACTOR_META_KEY]: true, userId, username: 't' })
+  const target = ms.entries[0].id - 2_000_000
+  const denied = [await deleteVendorAccountEntry(target).catch((e) => e), await deleteVendorAccountEntry(target, actor(cashierId)).catch((e) => e), await deleteVendorAccountEntry(target, actor(null)).catch((e) => e), await deleteVendorAccountEntry(target, actor(999999)).catch((e) => e), await deleteVendorAccountEntry(target, { userId: 1 }).catch((e) => e)]
+  assert(denied.every((d) => d instanceof Error), 'بدون actor / كاشير / مجهول / actor مزوّر → مرفوض (الأدمن بس)')
+  assert((await getVendorStatement(man.id)).entries.length === 3, 'المرفوض ما حذفش حاجة')
+  const afterDel = await deleteVendorAccountEntry(target, actor(1))
+  assert(afterDel.balance === -250, 'الأدمن حذف المشتريات (700): الرصيد 450 − 700 = −250 (رجّع أثرها بالظبط)')
+  assert((await getVendorStatement(man.id)).entries.length === 2 && (await deleteVendorAccountEntry(target, actor(1)).catch((e) => e)) instanceof Error, 'الحركة اتشالت، وحذفها تاني → خطأ (مش موجودة)')
+  assert(JSON.stringify(snapBefore) === JSON.stringify(await snapshot()), 'الحذف برضه من غير أي أثر على المخزون/الفواتير/المدفوعات/القيود/الخزن')
+  const h = buildHandlerMap()
+  assert(!!h['vendors:addAccountEntry'] && !!h['vendors:deleteAccountEntry'] && MUTATING_CHANNELS.has('vendors:addAccountEntry') && MUTATING_CHANNELS.has('vendors:deleteAccountEntry'), 'القناتين متسجّلين ومتعلّمين mutating (تسجيل نشاط + الـactor)')
 
   console.log(`\n${passed} نجح / ${failed} فشل`)
   process.exit(failed ? 1 : 0)

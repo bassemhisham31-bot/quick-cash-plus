@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatCurrency as currency } from '../lib/currency'
-import type { PaymentMethod, PurchaseInvoiceListItem, StatementView } from '../../../shared/types'
+import type { PaymentMethod, PurchaseInvoiceListItem, StatementEntry, StatementView } from '../../../shared/types'
 
 interface Props {
   partyName: string
@@ -17,6 +17,10 @@ interface Props {
   onSendWhatsApp?: () => Promise<void>
   /** رابط كشف الحساب (ويب): يفتح نافذة إرسال/نسخ/تجديد/إلغاء الرابط */
   onOpenLink?: () => void
+  /** كشف المورد: يفتح نافذة إضافة حركة يدوية على الحساب (مبلغ وتاريخ وبيان) */
+  onAddEntry?: () => void
+  /** كشف المورد (للأدمن): حذف حركة حساب يدوية/منقولة — بتظهر ✕ على الحركات اللي `deletable` بس */
+  onDeleteEntry?: (entry: StatementEntry) => void | Promise<void>
 }
 
 export function StatementModal({
@@ -29,7 +33,9 @@ export function StatementModal({
   onFilterChange,
   onPrint,
   onSendWhatsApp,
-  onOpenLink
+  onOpenLink,
+  onAddEntry,
+  onDeleteEntry
 }: Props): JSX.Element {
   const withBalance = statement.openingBalance !== undefined
   const { t } = useTranslation()
@@ -76,7 +82,7 @@ export function StatementModal({
           {t('parties.balance')}: {currency(statement.balance)}
         </div>
 
-        {(filter && onFilterChange) || onPrint || onSendWhatsApp || onOpenLink ? (
+        {(filter && onFilterChange) || onPrint || onSendWhatsApp || onOpenLink || onAddEntry ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
             {filter && onFilterChange && (
               <>
@@ -113,6 +119,11 @@ export function StatementModal({
                   {sendingWa ? '...جاري الإرسال' : '🟢 إرسال واتساب'}
                 </button>
               )}
+              {onAddEntry && (
+                <button type="button" className="qcp-btn qcp-btn-secondary" onClick={onAddEntry}>
+                  ➕ حركة على الحساب
+                </button>
+              )}
               {onOpenLink && (
                 <button type="button" className="qcp-btn qcp-btn-secondary" onClick={onOpenLink}>
                   🔗 رابط الكشف
@@ -136,6 +147,7 @@ export function StatementModal({
                 <th>مدين</th>
                 <th>دائن</th>
                 {withBalance && <th>الرصيد</th>}
+                {onDeleteEntry && <th></th>}
               </tr>
             </thead>
             <tbody>
@@ -146,6 +158,7 @@ export function StatementModal({
                   <td></td>
                   <td></td>
                   <td>{currency(statement.openingBalance ?? 0)}</td>
+                  {onDeleteEntry && <td></td>}
                 </tr>
               )}
               {statement.entries.map((e) => (
@@ -155,6 +168,21 @@ export function StatementModal({
                   <td>{e.debit ? currency(e.debit) : '—'}</td>
                   <td>{e.credit ? currency(e.credit) : '—'}</td>
                   {withBalance && <td style={{ fontWeight: 700 }}>{currency(e.balance ?? 0)}</td>}
+                  {onDeleteEntry && (
+                    <td>
+                      {e.deletable ? (
+                        <button
+                          type="button"
+                          className="qcp-btn qcp-btn-secondary"
+                          style={{ padding: '2px 8px', minWidth: 0 }}
+                          title="حذف الحركة دي من الحساب (للأدمن)"
+                          onClick={() => void onDeleteEntry(e)}
+                        >
+                          ✕
+                        </button>
+                      ) : null}
+                    </td>
+                  )}
                 </tr>
               ))}
               {withBalance && statement.entries.length > 0 && (
@@ -164,11 +192,12 @@ export function StatementModal({
                   <td>{currency(statement.totalDebit ?? 0)}</td>
                   <td>{currency(statement.totalCredit ?? 0)}</td>
                   <td></td>
+                  {onDeleteEntry && <td></td>}
                 </tr>
               )}
               {statement.entries.length === 0 && (
                 <tr>
-                  <td colSpan={withBalance ? 5 : 4} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
+                  <td colSpan={(withBalance ? 5 : 4) + (onDeleteEntry ? 1 : 0)} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                     {t('parties.noEntries')}
                   </td>
                 </tr>

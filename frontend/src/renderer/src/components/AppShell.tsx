@@ -47,7 +47,8 @@ const SELF_REFRESHING_VIEWS: ViewName[] = [
   'restaurantCaptains',
   'delivery',
   'events',
-  'attendance'
+  'attendance',
+  'vendors'
 ]
 
 export function AppShell(): JSX.Element {

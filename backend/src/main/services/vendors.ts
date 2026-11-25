@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { isActorMeta } from '../../shared/activityActor'
 import type {
   PaymentMethod,
   PurchaseInvoiceListItem,
@@ -178,7 +179,8 @@ export async function getVendorStatement(vendorId: number, filter: StatementFilt
       date: r.date,
       description: r.description,
       debit: Number(r.debit),
-      credit: Number(r.credit)
+      credit: Number(r.credit),
+      deletable: true // حركة حساب (يدوية أو منقولة) بس هي اللي ينفع تتحذف — الفواتير والسداد الحقيقيين لأ
     })
   }
 
@@ -254,6 +256,75 @@ export async function addVendorAccountEntries(vendorId: number, items: VendorAcc
     await tx.rollback()
     throw err
   }
+}
+
+/** تاريخ YYYY-MM-DD حقيقي (مش 2026-02-31)؟ */
+function isRealDay(v: unknown): v is string {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false
+  const d = new Date(`${v}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v
+}
+
+const cairoToday = (): string => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+
+export interface VendorManualEntryInput {
+  /** YYYY-MM-DD (مش في المستقبل) */
+  date: string
+  /** purchase = بيزوّد اللي علينا للمورد | payment وreturn = بينقّصوه */
+  kind: 'purchase' | 'payment' | 'return'
+  amount: number
+  description?: string
+}
+
+const MANUAL_LABELS: Record<VendorManualEntryInput['kind'], string> = {
+  purchase: 'مشتريات (حركة يدوية)',
+  payment: 'سداد (حركة يدوية)',
+  return: 'مرتجع / خصم (حركة يدوية)'
+}
+
+/**
+ * إضافة حركة يدوية على حساب المورد — مبلغ وتاريخ وبيان بس: من غير فاتورة ولا مخزون ولا خزنة ولا قيود
+ * (لو الدفع فعلًا من الخزنة استخدم «تسجيل سداد»). بتظهر في كشف الحساب وفي رابط المورد، وبتتحسب على رصيده.
+ */
+export async function addVendorManualEntry(vendorId: number, input: VendorManualEntryInput): Promise<VendorView> {
+  const kind = input?.kind
+  if (kind !== 'purchase' && kind !== 'payment' && kind !== 'return') throw new Error('نوع الحركة غير صالح')
+  const amount = Number(input?.amount)
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 1e12) throw new Error('اكتب مبلغ صحيح أكبر من صفر')
+  if (!isRealDay(input?.date)) throw new Error('التاريخ غير صالح')
+  if (input.date > cairoToday()) throw new Error('التاريخ مينفعش يكون في المستقبل')
+  const description = (input.description ?? '').trim().slice(0, 300) || MANUAL_LABELS[kind]
+  await addVendorAccountEntries(vendorId, [
+    { date: input.date, kind, description, debit: kind === 'purchase' ? amount : 0, credit: kind === 'purchase' ? 0 : amount }
+  ])
+  const rs = await getDb().execute({ sql: `${VENDOR_SELECT} WHERE v.id = ?`, args: [vendorId] })
+  return mapRow(rs.rows[0])
+}
+
+/**
+ * حذف حركة حساب (يدوية أو منقولة من كشف قديم) — للأدمن بس، والصلاحية بتتراجع من القاعدة مش من الواجهة.
+ * بيرجّع رصيد المورد لما كان قبل الحركة. الفواتير والسداد الحقيقيين مالهمش حذف من هنا.
+ */
+export async function deleteVendorAccountEntry(entryId: number, actor?: unknown): Promise<VendorView> {
+  const db = getDb()
+  const userId = isActorMeta(actor) ? actor.userId : null
+  const role = userId ? ((await db.execute({ sql: 'SELECT role FROM users WHERE id = ?', args: [userId] })).rows[0] as any)?.role : null
+  if (role !== 'admin') throw new Error('حذف حركة الحساب للأدمن فقط')
+  const entry = (await db.execute({ sql: 'SELECT id, vendor_id, debit, credit FROM vendor_account_entries WHERE id = ?', args: [entryId] })).rows[0] as any
+  if (!entry) throw new Error('الحركة غير موجودة')
+  const vendorId = Number(entry.vendor_id)
+  const net = r2(Number(entry.debit) - Number(entry.credit))
+  const tx = await db.transaction('write')
+  try {
+    await tx.execute({ sql: 'DELETE FROM vendor_account_entries WHERE id = ?', args: [entryId] })
+    if (net !== 0) await tx.execute({ sql: 'UPDATE vendors SET balance = balance - ? WHERE id = ?', args: [net, vendorId] })
+    await tx.commit()
+  } catch (err) {
+    await tx.rollback()
+    throw err
+  }
+  const rs = await db.execute({ sql: `${VENDOR_SELECT} WHERE v.id = ?`, args: [vendorId] })
+  return mapRow(rs.rows[0])
 }
 
 export async function recordVendorPayment(
