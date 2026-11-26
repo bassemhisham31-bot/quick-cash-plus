@@ -8,11 +8,13 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx scripts/self-test.ts && tsx scripts/statement-link-test.ts && tsx scripts/vendor-history-test.ts && tsx scripts/branches-test.ts && tsx scripts/chart-test.ts && tsx scripts/features-test.ts && tsx scripts/elnasr-test.ts",
+    "test": "tsx scripts/self-test.ts && tsx scripts/statement-link-test.ts && tsx scripts/vendor-history-test.ts && tsx scripts/branches-test.ts && tsx scripts/chart-test.ts && tsx scripts/features-test.ts && tsx scripts/elnasr-test.ts && tsx scripts/close-reconcile-test.ts && tsx scripts/timezone-test.ts",
     "test:branches": "tsx scripts/branches-test.ts",
     "test:chart": "tsx scripts/chart-test.ts",
     "test:features": "tsx scripts/features-test.ts",
-    "test:elnasr": "tsx scripts/elnasr-test.ts"
+    "test:elnasr": "tsx scripts/elnasr-test.ts",
+    "test:close": "tsx scripts/close-reconcile-test.ts",
+    "test:timezone": "tsx scripts/timezone-test.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.14.0",

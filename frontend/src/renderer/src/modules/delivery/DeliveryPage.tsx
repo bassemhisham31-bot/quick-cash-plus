@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { formatCurrency as currency } from '../../lib/currency'
+import { localIsoDate } from '../../lib/dates'
 import { useAppStore } from '../../store/appStore'
 import { KITCHEN_STATUS_LABELS, formatElapsed, minutesSince } from '../restaurant/restaurantUi'
 import '../restaurant/restaurant.css'
@@ -28,11 +29,11 @@ const STATUS_FLOW: Record<DeliveryStatus, DeliveryStatus | null> = {
 function daysAgoIso(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() - days)
-  return d.toISOString().slice(0, 10)
+  return localIsoDate(d)
 }
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
+  return localIsoDate()
 }
 
 export function DeliveryPage(): JSX.Element {

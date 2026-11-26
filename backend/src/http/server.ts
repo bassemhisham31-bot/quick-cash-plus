@@ -22,6 +22,7 @@ import { signToken, requireAuth, verifyToken, type AuthedRequest } from './auth'
 import { FORGOT_PASSWORD_REPLY, requestPasswordReset, resetPasswordWithToken } from '../main/services/passwordReset'
 import { getQzCredentials, signQzMessage } from '../main/services/qzSigning'
 import { isPreviewFetch, parseStatementRange, renderPublicStatementPage } from '../main/services/statementLink'
+import { convertTimestampsDeep, shouldConvertChannel } from '../main/services/timezone'
 
 const handlers = buildHandlerMap()
 
@@ -339,7 +340,8 @@ export function createApp(): express.Express {
       const invoke = (): Promise<unknown> => (capture ? printCapture.run(capture, () => handler(...callArgs)) : handler(...callArgs))
       const result = await branchScope.run(scope, invoke)
       if (isMutating) await afterMutation(channel, actor)
-      res.json({ ok: true, result, ...(capture ? { printJobs: capture.jobs } : {}) })
+      // التواريخ في القاعدة بـUTC — الواجهة بتشوفها بتوقيت العميل (QCP_TIMEZONE)
+      res.json({ ok: true, result: shouldConvertChannel(channel) ? convertTimestampsDeep(result) : result, ...(capture ? { printJobs: capture.jobs } : {}) })
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message ?? 'حدث خطأ غير متوقع' })
     }

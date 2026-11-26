@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { utcToLocal } from './timezone'
 import type { CustomerInput, CustomerView, PaymentMethod, StatementEntry, StatementFilter, StatementView } from '../../shared/types'
 
 const CUSTOMER_SELECT = `
@@ -224,11 +225,11 @@ export async function getCustomerLedger(customerId: number, filter: StatementFil
   let openingBalance = running
   for (const e of all) {
     running += e.debit - e.credit
-    if (from && e.date < from) {
+    if (from && utcToLocal(e.date) < from) {
       openingBalance = running
       continue
     }
-    if (to && e.date > to) continue
+    if (to && utcToLocal(e.date) > to) continue
     entries.push({ ...e, balance: Math.round(running * 100) / 100 })
   }
   openingBalance = Math.round(openingBalance * 100) / 100

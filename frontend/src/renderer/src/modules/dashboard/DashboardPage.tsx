@@ -34,6 +34,24 @@ const PAYMENT_METHOD_KEYS: Record<PaymentMethod, string> = {
   instapay: 'pos.instapay'
 }
 
+/** أسماء حركات الخزينة في شاشة قفل الوردية (المفتاح = نوع الحركة اللي بيرجّعه السيرفر) */
+const CLOSE_LINE_LABELS: Record<string, string> = {
+  مبيعات: 'مبيعات نقدية',
+  إكرامية: '🎁 إكراميات (تيبس)',
+  'عربون حجز': '🎂 عربون/دفعات الحجوزات',
+  'استرداد حجز': '🎂 استرداد حجوزات',
+  'مرتجع مبيعات': 'مرتجعات مبيعات (مردود نقدي)',
+  'تحصيل عميل': 'تحصيلات من العملاء',
+  'سداد مورد': 'سداد للموردين',
+  مشتريات: 'مشتريات نقدية',
+  'مرتجع مشتريات': 'مرتجع مشتريات (مسترد من المورد)',
+  مصروف: 'مصروفات',
+  'شراء أصول ثابتة': 'شراء أصول ثابتة',
+  'سند قبض': 'سندات قبض',
+  'سند صرف': 'سندات صرف',
+  تحويل: 'تحويلات بين الخزائن'
+}
+
 export function DashboardPage(): JSX.Element {
   const { t } = useTranslation()
   const user = useAppStore((s) => s.user)
@@ -321,6 +339,12 @@ function CloseDayModal({ onClose, onClosed }: { onClose: () => void; onClosed: (
               <span>{t('dashboard.totalExpenses')}</span>
               <span>-{currency(closedReport.totalExpenses)}</span>
             </div>
+            {closedReport.fixedAssetExpenses > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--qcp-ink-faint)', fontSize: 13 }}>
+                <span>منها شراء أصول ثابتة</span>
+                <span>-{currency(closedReport.fixedAssetExpenses)}</span>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span>
                 {t('dashboard.totalPurchases')} ({closedReport.purchaseInvoiceCount})
@@ -392,26 +416,18 @@ function CloseDayModal({ onClose, onClosed }: { onClose: () => void; onClosed: (
                 <span>{t('dashboard.openingBalanceLabel')}</span>
                 <span>{currency(summary.openingBalance)}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>{t('dashboard.cashSales')}</span>
-                <span>+{currency(summary.cashSales)}</span>
-              </div>
-              {summary.tips > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>🎁 إكراميات (تيبس)</span>
-                  <span>+{currency(summary.tips)}</span>
+              {/* كل حركات الخزينة المختارة من فتح الوردية — الافتتاحي + السطور دي = المتوقع بالظبط (نفس رصيد الخزينة) */}
+              {summary.lines.map((l) => (
+                <div key={l.kind} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>
+                    {CLOSE_LINE_LABELS[l.kind] ?? l.kind} <small style={{ color: 'var(--qcp-ink-faint)' }}>({l.count})</small>
+                  </span>
+                  <span style={{ color: l.amount < 0 ? 'var(--qcp-critical)' : undefined }}>
+                    {l.amount < 0 ? '-' : '+'}
+                    {currency(Math.abs(l.amount))}
+                  </span>
                 </div>
-              )}
-              {summary.eventPayments !== 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>🎂 تحصيلات الحجوزات{summary.eventPayments !== summary.eventCashPayments ? ` (نقدي ${currency(summary.eventCashPayments)})` : ''}</span>
-                  <span>{summary.eventPayments > 0 ? '+' : ''}{currency(summary.eventPayments)}</span>
-                </div>
-              )}
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>{t('dashboard.cashExpenses')}</span>
-                <span>-{currency(summary.cashExpenses)}</span>
-              </div>
+              ))}
               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, borderTop: '1px dashed var(--qcp-border)', paddingTop: 6 }}>
                 <span>{t('dashboard.expectedCash')}</span>
                 <span>{currency(summary.expectedCash)}</span>

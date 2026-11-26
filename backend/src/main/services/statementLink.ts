@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto'
 import { getDb } from '../db'
 import { getCustomerLedger } from './customers'
 import { getVendorStatement } from './vendors'
+import { localDay } from './timezone'
 import { getPosUiSettings, getStoreSettings } from './settings'
 import type { StatementEntry, StatementLinkInfo } from '../../shared/types'
 
@@ -312,7 +313,7 @@ export async function renderPublicStatementPage(token: string, countView = true,
     .reverse()
     .map(
       (e) =>
-        `<div class="ent"><div class="top"><span class="desc">${esc(e.description)}</span><span class="dt">${esc(String(e.date).slice(0, 10))}</span></div>` +
+        `<div class="ent"><div class="top"><span class="desc">${esc(e.description)}</span><span class="dt">${esc(localDay(String(e.date)))}</span></div>` +
         `<div class="am">${e.debit ? `<span class="${debitClass}">${labels.debitWord} <span class="n">${numFmt.format(e.debit)}</span></span>` : ''}` +
         `${e.credit ? `<span class="${creditClass}">${labels.creditWord} <span class="n">${numFmt.format(e.credit)}</span></span>` : ''}` +
         `<span class="bl">الرصيد <span class="n">${numFmt.format(e.balance ?? 0)}</span></span></div></div>`

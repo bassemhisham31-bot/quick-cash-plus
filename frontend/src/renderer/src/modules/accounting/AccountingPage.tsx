@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAppStore } from '../../store/appStore'
 import { hasPermission } from '../../lib/permissions'
 import { formatCurrency as currency } from '../../lib/currency'
+import { localIsoDate } from '../../lib/dates'
 import { confirmDialog } from '../../components/ConfirmDialogHost'
 import { ReportView } from '../../components/ReportView'
 import type { ReportResult, Warehouse } from '../../../../shared/types'
@@ -38,7 +39,7 @@ const TYPE_LABELS: Record<string, string> = {
 type Tab = 'reports' | 'entries' | 'accounts'
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
+  return localIsoDate()
 }
 function monthStartIso(): string {
   const d = new Date()

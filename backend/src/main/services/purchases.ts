@@ -292,11 +292,11 @@ export async function listPurchaseReturns(filter: { from?: string; to?: string }
   const conditions: string[] = [bf.sql]
   const args: unknown[] = [...bf.args]
   if (filter.from) {
-    conditions.push('pr.created_at >= ?')
+    conditions.push("datetime(pr.created_at, 'localtime') >= ?")
     args.push(filter.from)
   }
   if (filter.to) {
-    conditions.push('pr.created_at <= ?')
+    conditions.push("datetime(pr.created_at, 'localtime') <= ?")
     args.push(filter.to)
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''

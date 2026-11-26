@@ -1030,8 +1030,12 @@ export interface ExpenseView {
 }
 
 export interface ExpensesByMethodSummary {
+  /** كل اللي خرج بالمصروفات حسب الوسيلة — شامل شراء الأصول الثابتة (هو اللي بيطلع من الخزينة فعلاً) */
   byMethod: { method: ExpenseMethod; total: number }[]
+  /** إجمالي اللي خرج (مصروفات + شراء أصول ثابتة) */
   totalExpenses: number
+  /** الجزء اللي كان شراء أصول ثابتة (مش مصروف في الأرباح) — جوّه totalExpenses */
+  fixedAssetsTotal: number
 }
 
 export interface Employee {
@@ -1585,6 +1589,16 @@ export interface CashSessionSummary {
   /** الجزء النقدي من تحصيلات الحجوزات */
   eventCashPayments: number
   expectedCash: number
+  /** كل حركات الخزينة المختارة من فتح الوردية مجمّعة بنوعها (+ داخل / − خارج) — الافتتاحي + مجموعها = expectedCash بالظبط */
+  lines: CashSessionLine[]
+}
+
+export interface CashSessionLine {
+  /** نوع الحركة (مبيعات، تحصيل عميل، مصروف، سداد مورد…) */
+  kind: string
+  /** الصافي: داخل − خارج */
+  amount: number
+  count: number
 }
 
 export interface ShiftSummaryReport {
@@ -1606,6 +1620,8 @@ export interface ShiftSummaryReport {
   totalEventPayments: number
   eventPaymentCount: number
   totalExpenses: number
+  /** الجزء من totalExpenses اللي كان شراء أصول ثابتة */
+  fixedAssetExpenses: number
   expensesByMethod: { method: ExpenseMethod; total: number }[]
   totalPurchases: number
   purchaseInvoiceCount: number

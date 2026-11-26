@@ -4,6 +4,7 @@
  */
 import { getDb } from '../db'
 import { branchFilter } from './branchScope'
+import { localDay, todayLocal } from './timezone'
 import type { ReportFilter, ReportResult } from '../../shared/types'
 
 const r2 = (n: number): number => Math.round((Number(n) || 0) * 100) / 100
@@ -13,11 +14,11 @@ function dateAndBranch(filter: ReportFilter, column: string, branchColumn: strin
   const parts: string[] = []
   const args: unknown[] = []
   if (filter.dateFrom) {
-    parts.push(`date(${column}) >= date(?)`)
+    parts.push(`date(${column}, 'localtime') >= date(?)`)
     args.push(filter.dateFrom)
   }
   if (filter.dateTo) {
-    parts.push(`date(${column}) <= date(?)`)
+    parts.push(`date(${column}, 'localtime') <= date(?)`)
     args.push(filter.dateTo)
   }
   const bf = branchFilter(branchColumn)
@@ -29,7 +30,7 @@ function dateAndBranch(filter: ReportFilter, column: string, branchColumn: strin
 }
 
 function todayStr(): string {
-  return new Date().toISOString().slice(0, 10)
+  return todayLocal()
 }
 
 function dueStatus(dueDate: string | null): string {
@@ -85,7 +86,7 @@ function buildMonthlyReport(title: string, partyLabel: string, rows: DueRow[], f
       month: key,
       party: r.party,
       number: r.number,
-      invoiceDate: r.invoiceDate.slice(0, 10),
+      invoiceDate: localDay(r.invoiceDate),
       dueDate: r.dueDate ?? '—',
       status: dueStatus(r.dueDate),
       original: r2(r.original),
@@ -210,7 +211,7 @@ export async function salesRepCommissionDetailReport(filter: ReportFilter): Prom
     grandCommission += Number(r.commission)
     out.push({
       rep: r.repName,
-      date: String(r.createdAt).slice(0, 10),
+      date: localDay(String(r.createdAt)),
       number: r.number,
       customer: r.customerName,
       pct: Number(r.pct),

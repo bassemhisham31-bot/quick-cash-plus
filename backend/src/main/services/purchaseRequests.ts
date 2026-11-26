@@ -20,11 +20,11 @@ export async function listPurchaseRequests(filter: PurchaseRequestFilter): Promi
     args.push(filter.vendorId)
   }
   if (filter.dateFrom) {
-    conditions.push('date(pr.created_at) >= date(?)')
+    conditions.push("date(pr.created_at, 'localtime') >= date(?)")
     args.push(filter.dateFrom)
   }
   if (filter.dateTo) {
-    conditions.push('date(pr.created_at) <= date(?)')
+    conditions.push("date(pr.created_at, 'localtime') <= date(?)")
     args.push(filter.dateTo)
   }
   const rs = await db.execute({

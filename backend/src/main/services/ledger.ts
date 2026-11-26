@@ -2,6 +2,7 @@ import { getDb } from '../db'
 import { currentBranchId } from './branchScope'
 import { creditShare } from './salePayments'
 import { loadTreasuryRows, resolveTreasury } from './treasuries'
+import { localDay } from './timezone'
 import { ensureAccounts, listAccounts, loadResolver, makeFixedAssetMatcher, type AccountResolver, type AccountRole, type AccountRow, type AccountType } from './accountsChart'
 import type { ReportResult } from '../../shared/types'
 
@@ -464,7 +465,7 @@ export async function deleteManualEntry(id: number): Promise<void> {
 /* ------------------------------ التقارير ------------------------------ */
 
 const cur = (key: string, label: string): { key: string; label: string; align: 'end'; format: 'currency' } => ({ key, label, align: 'end', format: 'currency' })
-const day = (ts: string): string => ts.slice(0, 10)
+const day = (ts: string): string => localDay(ts)
 
 function inRange(date: string, from?: string, to?: string): boolean {
   const d = day(date)

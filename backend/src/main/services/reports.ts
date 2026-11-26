@@ -6,6 +6,7 @@ import { getCustomerStatement } from './customers'
 import { getVendorStatement } from './vendors'
 import { assertReportInEdition } from './edition'
 import { SALE_PAY_LINES_SQL } from './salePayments'
+import { todayLocal } from './timezone'
 import { notFixedAssetSql } from './accountsChart'
 import { customerDailyDebtsReport, customerDueDatesReport, salesRepCommissionDetailReport, serviceSalesReport, vendorDueDatesReport } from './reportsExtra'
 import type { OverviewMetric, OverviewSummary, ReportFilter, ReportResult, ReportType } from '../../shared/types'
@@ -18,11 +19,11 @@ function dateConditions(filter: ReportFilter, column: string, branchColumn?: str
   const parts: string[] = []
   const args: unknown[] = []
   if (filter.dateFrom) {
-    parts.push(`date(${column}) >= date(?)`)
+    parts.push(`date(${column}, 'localtime') >= date(?)`)
     args.push(filter.dateFrom)
   }
   if (filter.dateTo) {
-    parts.push(`date(${column}) <= date(?)`)
+    parts.push(`date(${column}, 'localtime') <= date(?)`)
     args.push(filter.dateTo)
   }
   if (branchColumn) {
@@ -413,7 +414,7 @@ async function salesSummary(filter: ReportFilter): Promise<ReportResult> {
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
   const rs = await db.execute({
-    sql: `SELECT date(created_at) AS day, COUNT(*) AS invoiceCount, SUM(subtotal) AS subtotal,
+    sql: `SELECT date(created_at, 'localtime') AS day, COUNT(*) AS invoiceCount, SUM(subtotal) AS subtotal,
                  SUM(discount_total) AS discount, SUM(tax_total) AS tax, SUM(total) AS total
           FROM sales_invoices
           WHERE deleted_at IS NULL ${dateSql} ${warehouseSql}
@@ -609,7 +610,7 @@ async function profitLoss(filter: ReportFilter): Promise<ReportResult> {
   const salesArgs = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : [])]
 
   const salesRs = await db.execute({
-    sql: `SELECT date(i.created_at) AS day, SUM(i.total) AS sales,
+    sql: `SELECT date(i.created_at, 'localtime') AS day, SUM(i.total) AS sales,
                  COALESCE(SUM((SELECT COALESCE(SUM(si.qty * p.cost_price), 0)
                                FROM sales_items si JOIN products p ON p.id = si.product_id
                                WHERE si.invoice_id = i.id)), 0) AS cogs
@@ -621,7 +622,7 @@ async function profitLoss(filter: ReportFilter): Promise<ReportResult> {
 
   const { sql: expenseDateSql, args: expenseDateArgs } = dateConditions(filter, 'created_at', 'branch_id')
   const expensesRs = await db.execute({
-    sql: `SELECT date(created_at) AS day, COALESCE(SUM(amount), 0) AS expenses
+    sql: `SELECT date(created_at, 'localtime') AS day, COALESCE(SUM(amount), 0) AS expenses
           FROM expenses WHERE deleted_at IS NULL AND ${notFixedAssetSql()} ${expenseDateSql}
           GROUP BY day`,
     args: expenseDateArgs
@@ -670,7 +671,7 @@ async function monthlyExpenses(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
   const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'e.created_at', 'e.branch_id')
   const rs = await db.execute({
-    sql: `SELECT strftime('%Y-%m', e.created_at) AS month, COALESCE(c.name, 'بدون تصنيف') AS category,
+    sql: `SELECT strftime('%Y-%m', e.created_at, 'localtime') AS month, COALESCE(c.name, 'بدون تصنيف') AS category,
                  SUM(e.amount) AS amount
           FROM expenses e
           LEFT JOIN expense_categories c ON c.id = e.category_id
@@ -702,7 +703,7 @@ async function categorySalesDaily(filter: ReportFilter): Promise<ReportResult> {
     : ''
   const args = [...dateArgs, ...(filter.warehouseId ? [filter.warehouseId] : []), ...(filter.categoryId ? [filter.categoryId] : [])]
   const rs = await db.execute({
-    sql: `SELECT date(i.created_at) AS day, COALESCE(c.name, 'بدون تصنيف') AS category,
+    sql: `SELECT date(i.created_at, 'localtime') AS day, COALESCE(c.name, 'بدون تصنيف') AS category,
                  SUM(si.qty) AS qtySold, SUM(si.total) AS revenue
           FROM sales_items si
           JOIN sales_invoices i ON i.id = si.invoice_id
@@ -1006,7 +1007,7 @@ async function taxReport(filter: ReportFilter): Promise<ReportResult> {
   const db = getDb()
   const { sql: dateSql, args: dateArgs } = dateConditions(filter, 'created_at', 'branch_id')
   const rs = await db.execute({
-    sql: `SELECT date(created_at) AS day, SUM(subtotal - discount_total) AS taxableAmount, SUM(tax_total) AS taxCollected
+    sql: `SELECT date(created_at, 'localtime') AS day, SUM(subtotal - discount_total) AS taxableAmount, SUM(tax_total) AS taxCollected
           FROM sales_invoices
           WHERE deleted_at IS NULL ${dateSql}
           GROUP BY day
@@ -1299,7 +1300,7 @@ async function periodFlowTotals(
                                FROM sales_items si JOIN products p ON p.id = si.product_id
                                WHERE si.invoice_id = i.id)), 0) AS cogs
           FROM sales_invoices i
-          WHERE i.deleted_at IS NULL AND date(i.created_at) >= date(?) AND date(i.created_at) <= date(?) ${warehouseSql} AND ${bsi.sql}`,
+          WHERE i.deleted_at IS NULL AND date(i.created_at, 'localtime') >= date(?) AND date(i.created_at, 'localtime') <= date(?) ${warehouseSql} AND ${bsi.sql}`,
     args: [dateFrom, dateTo, ...warehouseArgs, ...bsi.args]
   })
 
@@ -1307,13 +1308,13 @@ async function periodFlowTotals(
     sql: `SELECT COALESCE(SUM(r.amount), 0) AS returns
           FROM sales_returns r
           JOIN sales_invoices i ON i.id = r.invoice_id
-          WHERE date(r.created_at) >= date(?) AND date(r.created_at) <= date(?) ${warehouseSql} AND ${bsr.sql}`,
+          WHERE date(r.created_at, 'localtime') >= date(?) AND date(r.created_at, 'localtime') <= date(?) ${warehouseSql} AND ${bsr.sql}`,
     args: [dateFrom, dateTo, ...warehouseArgs, ...bsr.args]
   })
 
   const expensesRs = await db.execute({
     sql: `SELECT COALESCE(SUM(amount), 0) AS expenses
-          FROM expenses WHERE deleted_at IS NULL AND ${notFixedAssetSql()} AND date(created_at) >= date(?) AND date(created_at) <= date(?) AND ${bse.sql}`,
+          FROM expenses WHERE deleted_at IS NULL AND ${notFixedAssetSql()} AND date(created_at, 'localtime') >= date(?) AND date(created_at, 'localtime') <= date(?) AND ${bse.sql}`,
     args: [dateFrom, dateTo, ...bse.args]
   })
 
@@ -1322,14 +1323,14 @@ async function periodFlowTotals(
           FROM sales_items si
           JOIN sales_invoices i ON i.id = si.invoice_id
           JOIN product_prices pp ON pp.product_id = si.product_id AND pp.tier = 'wholesale' AND pp.price = si.unit_price
-          WHERE i.deleted_at IS NULL AND date(i.created_at) >= date(?) AND date(i.created_at) <= date(?) ${warehouseSql} AND ${bsi.sql}`,
+          WHERE i.deleted_at IS NULL AND date(i.created_at, 'localtime') >= date(?) AND date(i.created_at, 'localtime') <= date(?) ${warehouseSql} AND ${bsi.sql}`,
     args: [dateFrom, dateTo, ...warehouseArgs, ...bsi.args]
   })
 
   const directReturnsRs = await db.execute({
     sql: `SELECT COALESCE(SUM(r.amount), 0) AS returns
           FROM direct_sales_returns r
-          WHERE date(r.created_at) >= date(?) AND date(r.created_at) <= date(?) ${warehouseId ? 'AND r.warehouse_id = ?' : ''} AND ${bsr.sql}`,
+          WHERE date(r.created_at, 'localtime') >= date(?) AND date(r.created_at, 'localtime') <= date(?) ${warehouseId ? 'AND r.warehouse_id = ?' : ''} AND ${bsr.sql}`,
     args: [dateFrom, dateTo, ...warehouseArgs, ...bsr.args]
   })
 
@@ -1344,9 +1345,9 @@ async function periodFlowTotals(
 
 export async function getOverviewSummary(filter: ReportFilter): Promise<OverviewSummary> {
   const db = getDb()
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayLocal()
   const dateTo = filter.dateTo || today
-  const dateFrom = filter.dateFrom || new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10)
+  const dateFrom = filter.dateFrom || new Date(Date.parse(today) - 29 * 86400000).toISOString().slice(0, 10)
 
   const periodDays = Math.max(1, Math.round((Date.parse(dateTo) - Date.parse(dateFrom)) / 86400000) + 1)
   const prevDateTo = new Date(Date.parse(dateFrom) - 86400000).toISOString().slice(0, 10)

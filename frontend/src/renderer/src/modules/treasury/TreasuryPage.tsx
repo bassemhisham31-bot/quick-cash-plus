@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAppStore } from '../../store/appStore'
 import { formatCurrency as currency } from '../../lib/currency'
+import { localIsoDate } from '../../lib/dates'
 import { confirmDialog } from '../../components/ConfirmDialogHost'
 import { ReportView } from '../../components/ReportView'
 import type {
@@ -39,12 +40,12 @@ const METHOD_OPTIONS: { value: string; label: string }[] = [
 ]
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
+  return localIsoDate()
 }
 function daysAgoIso(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() - days)
-  return d.toISOString().slice(0, 10)
+  return localIsoDate(d)
 }
 
 export function TreasuryPage(): JSX.Element {

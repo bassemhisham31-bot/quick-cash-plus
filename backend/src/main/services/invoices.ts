@@ -118,11 +118,11 @@ export async function listInvoices(filter: InvoiceListFilter): Promise<InvoiceLi
     args.push(term, term)
   }
   if (filter.dateFrom) {
-    conditions.push('date(i.created_at) >= date(?)')
+    conditions.push("date(i.created_at, 'localtime') >= date(?)")
     args.push(filter.dateFrom)
   }
   if (filter.dateTo) {
-    conditions.push('date(i.created_at) <= date(?)')
+    conditions.push("date(i.created_at, 'localtime') <= date(?)")
     args.push(filter.dateTo)
   }
   if (filter.paymentMethod !== 'all') {
@@ -437,11 +437,11 @@ export async function listSalesReturns(filter: { from?: string; to?: string } = 
   const conditions: string[] = [bf.sql]
   const args: unknown[] = [...bf.args]
   if (filter.from) {
-    conditions.push('sr.created_at >= ?')
+    conditions.push("datetime(sr.created_at, 'localtime') >= ?")
     args.push(filter.from)
   }
   if (filter.to) {
-    conditions.push('sr.created_at <= ?')
+    conditions.push("datetime(sr.created_at, 'localtime') <= ?")
     args.push(filter.to)
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''

@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { localDay } from './timezone'
 import { isActorMeta } from '../../shared/activityActor'
 import type {
   PaymentMethod,
@@ -197,7 +198,7 @@ export async function getVendorStatement(vendorId: number, filter: StatementFilt
   const entries: StatementEntry[] = []
   for (const e of all) {
     running += e.debit - e.credit
-    const day = e.date.slice(0, 10)
+    const day = localDay(e.date)
     if (from && day < from) {
       openingBalance = r2(running)
       continue

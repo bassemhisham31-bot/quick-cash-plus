@@ -1,6 +1,7 @@
 import { getDb } from '../db'
 import { assertBranchAccess, branchesEnabled, branchFilter, branchScope, currentBranchId, requireBranchId } from './branchScope'
 import { SALE_PAY_LINES_SQL } from './salePayments'
+import { utcToLocal } from './timezone'
 import type {
   CashDifferenceRow,
   ReportResult,
@@ -215,14 +216,21 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
   }
 
   // مرتجعات المشتريات المدفوعة (غير الآجل): الفلوس بترجع من المورد لنفس خزينة وسيلة دفع الفاتورة
+  // اللي بيرجع للخزينة مايزيدش عن اللي اتدفع فعلاً في الفاتورة (فاتورة نقدية اتدفع منها جزء بس: مرتجعها مايرجّعش فلوس ما خرجتش)
   const purchaseReturns = await db.execute(
-    `SELECT r.id, r.created_at, r.amount, r.branch_id, pi.number, pi.payment_method, v.name AS vendorName
+    `SELECT r.id, r.purchase_invoice_id, r.created_at, r.amount, r.branch_id, pi.number, pi.payment_method, pi.paid AS invoicePaid, v.name AS vendorName
      FROM purchase_returns r JOIN purchase_invoices pi ON pi.id = r.purchase_invoice_id LEFT JOIN vendors v ON v.id = pi.vendor_id
-     WHERE pi.payment_method != 'credit'`
+     WHERE pi.payment_method != 'credit'
+     ORDER BY r.id`
   )
+  const refundRoom = new Map<number, number>()
   for (const r of purchaseReturns.rows as any[]) {
+    const invoiceId = Number(r.purchase_invoice_id)
+    const room = refundRoom.get(invoiceId) ?? Math.max(0, Number(r.invoicePaid))
+    const refund = Math.min(Number(r.amount), room)
+    refundRoom.set(invoiceId, room - refund)
     push(
-      { ts: r.created_at, kind: 'مرتجع مشتريات', ref: r.number, description: `مرتجع للمورد ${r.vendorName ?? ''}`.trim(), inAmount: Number(r.amount), outAmount: 0 },
+      { ts: r.created_at, kind: 'مرتجع مشتريات', ref: r.number, description: `مرتجع للمورد ${r.vendorName ?? ''}`.trim(), inAmount: refund, outAmount: 0 },
       r.payment_method,
       null,
       Number(r.branch_id)
@@ -230,12 +238,13 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
   }
 
   const expenses = await db.execute(
-    `SELECT e.id, e.created_at, e.amount, e.method, e.treasury_id, e.branch_id, e.note, ec.name AS categoryName
+    `SELECT e.id, e.created_at, e.amount, e.method, e.treasury_id, e.branch_id, e.note, ec.name AS categoryName, COALESCE(ec.is_fixed_asset, 0) AS isFixedAsset
      FROM expenses e LEFT JOIN expense_categories ec ON ec.id = e.category_id WHERE e.deleted_at IS NULL`
   )
   for (const r of expenses.rows as any[]) {
     push(
-      { ts: r.created_at, kind: 'مصروف', ref: `E-${r.id}`, description: `${r.categoryName ?? 'مصروف'}${r.note ? ` — ${r.note}` : ''}`, inAmount: 0, outAmount: Number(r.amount) },
+      // شراء الأصول الثابتة بيطلع من الخزينة زي أي مصروف لكن بنوعه الخاص — عشان أرقام قفل اليوم تطابق شاشة المصروفات
+      { ts: r.created_at, kind: Number(r.isFixedAsset) ? 'شراء أصول ثابتة' : 'مصروف', ref: `E-${r.id}`, description: `${r.categoryName ?? 'مصروف'}${r.note ? ` — ${r.note}` : ''}`, inAmount: 0, outAmount: Number(r.amount) },
       r.method,
       r.treasury_id != null ? Number(r.treasury_id) : null,
       Number(r.branch_id)
@@ -466,11 +475,11 @@ export async function listVouchers(filter: { type?: 'receipt' | 'payment'; from?
     args.push(filter.type)
   }
   if (filter.from) {
-    conditions.push('v.created_at >= ?')
+    conditions.push("datetime(v.created_at, 'localtime') >= ?")
     args.push(filter.from)
   }
   if (filter.to) {
-    conditions.push('v.created_at <= ?')
+    conditions.push("datetime(v.created_at, 'localtime') <= ?")
     args.push(filter.to)
   }
   const rs = await getDb().execute({ sql: `${VOUCHER_SELECT} WHERE ${conditions.join(' AND ')} ORDER BY v.id DESC`, args: args as any })
@@ -581,11 +590,11 @@ export async function listCashDifferences(filter: { from?: string; to?: string }
   const conditions = [bf.sql]
   const args: unknown[] = [...bf.args]
   if (filter.from) {
-    conditions.push('d.created_at >= ?')
+    conditions.push("datetime(d.created_at, 'localtime') >= ?")
     args.push(filter.from)
   }
   if (filter.to) {
-    conditions.push('d.created_at <= ?')
+    conditions.push("datetime(d.created_at, 'localtime') <= ?")
     args.push(filter.to)
   }
   const rs = await getDb().execute({
@@ -616,14 +625,31 @@ export async function computeExpectedCash(
   branchId?: number | null,
   chosenTreasuryId?: number | null
 ): Promise<number> {
+  return (await computeExpectedCashDetails(openedAt, openingBalance, branchId, chosenTreasuryId)).expected
+}
+
+/** نفس حساب المتوقع + تفصيله حسب نوع الحركة: الافتتاحي + مجموع السطور = المتوقع بالظبط (عشان شاشة القفل تبان أرقامها بتجمع) */
+export async function computeExpectedCashDetails(
+  openedAt: string,
+  openingBalance: number,
+  branchId?: number | null,
+  chosenTreasuryId?: number | null
+): Promise<{ expected: number; lines: { kind: string; amount: number; count: number }[] }> {
   const treasuries = await loadTreasuryRows(false)
   // الخزينة اللي اختارها المستخدم وقت قفل الوردية (لو موجودة ونشطة) بدل النقدية الافتراضية
   const cashId = resolveTreasury(treasuries, 'cash', chosenTreasuryId ?? null, branchId)
   const movements = await collectMovements(treasuries)
-  const net = movements
-    .filter((m) => m.treasuryId === cashId && m.ts >= openedAt && !m.kind.includes('خزينة'))
-    .reduce((s, m) => s + m.inAmount - m.outAmount, 0)
-  return Math.round((openingBalance + net) * 100) / 100
+  const relevant = movements.filter((m) => m.treasuryId === cashId && m.ts >= openedAt && !m.kind.includes('خزينة'))
+  const byKind = new Map<string, { kind: string; amount: number; count: number }>()
+  for (const m of relevant) {
+    const row = byKind.get(m.kind) ?? { kind: m.kind, amount: 0, count: 0 }
+    row.amount += m.inAmount - m.outAmount
+    row.count += 1
+    byKind.set(m.kind, row)
+  }
+  const lines = [...byKind.values()].map((l) => ({ ...l, amount: Math.round(l.amount * 100) / 100 })).filter((l) => l.amount !== 0)
+  const net = relevant.reduce((s, m) => s + m.inAmount - m.outAmount, 0)
+  return { expected: Math.round((openingBalance + net) * 100) / 100, lines }
 }
 
 /* ------------------------------- كشف حركة خزينة ------------------------------- */
@@ -642,9 +668,9 @@ export async function getTreasuryStatement(treasuryId: number | null, from?: str
   const toTs = to ? `${to} 23:59:59` : null
 
   const openingBase = scope.reduce((s, t) => s + t.openingBalance, 0)
-  const before = fromTs ? movements.filter((m) => m.ts < fromTs) : []
+  const before = fromTs ? movements.filter((m) => utcToLocal(m.ts) < fromTs) : []
   let balance = openingBase + before.reduce((s, m) => s + m.inAmount - m.outAmount, 0)
-  const inRange = movements.filter((m) => (!fromTs || m.ts >= fromTs) && (!toTs || m.ts <= toTs))
+  const inRange = movements.filter((m) => (!fromTs || utcToLocal(m.ts) >= fromTs) && (!toTs || utcToLocal(m.ts) <= toTs))
 
   const rows: Record<string, string | number>[] = [
     { date: from ?? '', kind: 'رصيد أول المدة', ref: '', treasury: '', description: '', inAmount: 0, outAmount: 0, balance }

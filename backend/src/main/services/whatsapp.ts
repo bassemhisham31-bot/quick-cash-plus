@@ -13,6 +13,7 @@ import { getStoreSettings, getWhatsAppSettings } from './settings'
 import { getInvoiceView } from './invoices'
 import { getHeldInvoice } from './heldInvoices'
 import { createStatementLink, createVendorStatementLink } from './statementLink'
+import { localDay } from './timezone'
 import type { StatementFilter, WhatsAppSendResult, WhatsAppStatus } from '../../shared/types'
 
 let sock: any = null
@@ -368,7 +369,7 @@ export async function sendCustomerStatementByWhatsApp(customerId: number, filter
     const period =
       filter.from || filter.to ? `الفترة: ${filter.from ? 'من ' + filter.from : ''} ${filter.to ? 'إلى ' + filter.to : ''}`.trim() : ''
     const rows = shown.map((e) => {
-      const parts = [`${e.date.slice(0, 10)} — ${e.description}`]
+      const parts = [`${localDay(e.date)} — ${e.description}`]
       const amounts: string[] = []
       if (e.debit) amounts.push(`عليك ${money(e.debit)}`)
       if (e.credit) amounts.push(`لك ${money(e.credit)}`)

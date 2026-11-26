@@ -92,5 +92,13 @@ export async function getExpensesByMethodSummary(): Promise<ExpensesByMethodSumm
   })
   const byMethod = rs.rows.map((r: any) => ({ method: r.method, total: Number(r.total) }))
   const totalExpenses = byMethod.reduce((s, r) => s + r.total, 0)
-  return { byMethod, totalExpenses }
+  // شراء الأصول الثابتة جوّه الإجمالي (هو اللي خرج من الخزينة فعلاً) — الشاشة بتفصله عن «المصروفات»
+  const bfe = branchFilter('e.branch_id')
+  const assetsRs = await db.execute({
+    sql: `SELECT COALESCE(SUM(e.amount), 0) AS total
+          FROM expenses e JOIN expense_categories c ON c.id = e.category_id
+          WHERE e.deleted_at IS NULL AND c.is_fixed_asset = 1 AND ${bfe.sql}`,
+    args: bfe.args as any
+  })
+  return { byMethod, totalExpenses, fixedAssetsTotal: Number((assetsRs.rows[0] as any).total) }
 }

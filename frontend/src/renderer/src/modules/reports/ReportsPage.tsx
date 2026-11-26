@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatCurrency as currency } from '../../lib/currency'
+import { localIsoDate } from '../../lib/dates'
 import { useAppStore } from '../../store/appStore'
 import type { Category, CustomerView, OverviewSummary, ReportColumn, ReportResult, ReportType, VendorView, Warehouse } from '../../../../shared/types'
 import { isCountColumn } from '../../../../shared/types'
@@ -50,7 +51,7 @@ function formatCell(value: string | number, col: ReportColumn): string {
 }
 
 function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10)
+  return localIsoDate(d)
 }
 
 type ReportsTab = 'builder' | 'jard' | 'overview'

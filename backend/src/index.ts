@@ -7,6 +7,10 @@ import { existsSync } from 'fs'
 const envFile = process.env.QCP_ENV_FILE ?? '.env'
 if (existsSync(envFile)) process.loadEnvFile(envFile)
 
+// توقيت العميل (QCP_TIMEZONE) لازم يتظبط قبل أول استعلام — SQLite 'localtime' بتقرأه من TZ أول مرة بتتنادى
+const { applyProcessTimezone } = await import('./main/services/timezone')
+applyProcessTimezone()
+
 const { initDatabase } = await import('./main/db')
 const { startHttpServer } = await import('./http/server')
 const { scheduleAutoBackup } = await import('./main/services/backup')

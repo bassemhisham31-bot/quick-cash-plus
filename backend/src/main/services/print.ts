@@ -22,6 +22,7 @@ import { getVoucher } from './treasuries'
 import { getBooking } from './events'
 import { generateBarcodeDataUrl } from './barcode'
 import { printCapture } from './printContext'
+import { utcToLocal } from './timezone'
 import type {
   BarcodeLabelSettings,
   InvoiceView,
@@ -392,7 +393,7 @@ export async function printEventBooking(id: number, preview = false): Promise<Pr
   const payRows = booking.payments
     .map(
       (p) =>
-        `<div class="line"><span>${escapeHtml(p.createdAt.slice(0, 16))} — ${p.amount < 0 ? 'استرداد' : escapeHtml(p.note || 'دفعة')}</span><span>${currency.format(p.amount)}</span></div>`
+        `<div class="line"><span>${escapeHtml(utcToLocal(p.createdAt).slice(0, 16))} — ${p.amount < 0 ? 'استرداد' : escapeHtml(p.note || 'دفعة')}</span><span>${currency.format(p.amount)}</span></div>`
     )
     .join('')
   const html = `<!doctype html>
@@ -474,7 +475,7 @@ export async function printVoucher(id: number, preview = false): Promise<PrintRe
     <h1>${escapeHtml(storeSettings.name)}</h1>
     <div class="title">${isReceipt ? 'سند قبض' : 'سند صرف'}</div>
     <div class="line"><span>رقم السند</span><span>${escapeHtml(voucher.number)}</span></div>
-    <div class="line"><span>التاريخ</span><span>${escapeHtml(voucher.createdAt)}</span></div>
+    <div class="line"><span>التاريخ</span><span>${escapeHtml(utcToLocal(voucher.createdAt))}</span></div>
     <div class="line"><span>الخزينة</span><span>${escapeHtml(voucher.treasuryName)}</span></div>
     <div class="line"><span>${isReceipt ? 'استلمنا من' : 'صرفنا إلى'}</span><span>${escapeHtml(voucher.partyName)}</span></div>
     <hr />
@@ -650,7 +651,7 @@ function buildThermalQuotationHtml(
     <img class="invoice-barcode" src="${quotationBarcode}" />
     <hr />
     <div class="info-line"><span>الرقم</span><span>${escapeHtml(quotation.number)}</span></div>
-    <div class="info-line"><span>التاريخ</span><span>${escapeHtml(quotation.createdAt)}</span></div>
+    <div class="info-line"><span>التاريخ</span><span>${escapeHtml(utcToLocal(quotation.createdAt))}</span></div>
     <div class="info-line"><span>العميل</span><span>${escapeHtml(quotation.customerName)}</span></div>
     ${quotation.validUntil ? `<div class="info-line"><span>صالح حتى</span><span>${escapeHtml(quotation.validUntil)}</span></div>` : ''}
     <div class="info-line"><span>الحالة</span><span>${QUOTATION_STATUS_LABELS[quotation.status]}</span></div>
@@ -745,7 +746,7 @@ function buildFormalQuotationHtml(
       <span class="status-badge">${QUOTATION_STATUS_LABELS[quotation.status]}</span>
       <div class="invoice-meta">
         <div>الرقم: <b>${escapeHtml(quotation.number)}</b></div>
-        <div>التاريخ: ${escapeHtml(quotation.createdAt)}</div>
+        <div>التاريخ: ${escapeHtml(utcToLocal(quotation.createdAt))}</div>
         ${quotation.validUntil ? `<div>صالح حتى: ${escapeHtml(quotation.validUntil)}</div>` : ''}
         <div>أعدّه: ${escapeHtml(quotation.cashierName)}</div>
       </div>
@@ -880,7 +881,7 @@ function buildThermalStockPermitHtml(
     <img class="invoice-barcode" src="${permitBarcode}" />
     <hr />
     <div class="info-line"><span>الرقم</span><span>${escapeHtml(permit.number)}</span></div>
-    <div class="info-line"><span>التاريخ</span><span>${escapeHtml(permit.createdAt)}</span></div>
+    <div class="info-line"><span>التاريخ</span><span>${escapeHtml(utcToLocal(permit.createdAt))}</span></div>
     <div class="info-line"><span>المخزن</span><span>${escapeHtml(permit.warehouseName)}</span></div>
     <div class="info-line"><span>السبب</span><span>${escapeHtml(permit.reason ?? '—')}</span></div>
     <div class="info-line"><span>بواسطة</span><span>${escapeHtml(permit.userName)}</span></div>
@@ -961,7 +962,7 @@ function buildFormalStockPermitHtml(
       <img class="invoice-barcode" src="${permitBarcode}" />
       <div class="invoice-meta">
         <div>الرقم: <b>${escapeHtml(permit.number)}</b></div>
-        <div>التاريخ: ${escapeHtml(permit.createdAt)}</div>
+        <div>التاريخ: ${escapeHtml(utcToLocal(permit.createdAt))}</div>
         <div>بواسطة: ${escapeHtml(permit.userName)}</div>
       </div>
     </div>
@@ -1147,6 +1148,7 @@ function buildThermalShiftSummaryHtml(
     ${report.totalTips > 0 ? `<div class="totals-row"><span>🎁 إكراميات (تيبس)</span><span>${currency.format(report.totalTips)}</span></div>` : ''}
     ${report.eventPaymentCount > 0 ? `<div class="totals-row"><span>🎂 تحصيلات الحجوزات (${report.eventPaymentCount})</span><span>${currency.format(report.totalEventPayments)}</span></div>` : ''}
     <div class="totals-row"><span>إجمالي المصروفات</span><span>-${currency.format(report.totalExpenses)}</span></div>
+    ${report.fixedAssetExpenses > 0 ? `<div class="totals-row"><span>منها شراء أصول ثابتة</span><span>-${currency.format(report.fixedAssetExpenses)}</span></div>` : ''}
     <div class="totals-row"><span>إجمالي المشتريات (${report.purchaseInvoiceCount})</span><span>-${currency.format(report.totalPurchases)}</span></div>
     <div class="totals-row"><span>إجمالي المرتجعات (${report.returnCount})</span><span>-${currency.format(report.totalReturns)}</span></div>
     <hr />
@@ -1239,6 +1241,7 @@ function buildFormalShiftSummaryHtml(
         )
         .join('')}
       <div class="row"><span>إجمالي المصروفات</span><span>-${currency.format(report.totalExpenses)}</span></div>
+      ${report.fixedAssetExpenses > 0 ? `<div class="row"><span>منها شراء أصول ثابتة</span><span>-${currency.format(report.fixedAssetExpenses)}</span></div>` : ''}
       <div class="row"><span>إجمالي المشتريات (${report.purchaseInvoiceCount})</span><span>-${currency.format(report.totalPurchases)}</span></div>
       <div class="row"><span>إجمالي المرتجعات (${report.returnCount})</span><span>-${currency.format(report.totalReturns)}</span></div>
       <div class="row"><span>الرصيد المتوقع بالدرج</span><span>${report.expectedCash != null ? currency.format(report.expectedCash) : '—'}</span></div>
@@ -1414,7 +1417,7 @@ function buildThermalReceiptHtml(
     <hr />
     ${statusBadge(invoice.status)}
     <div class="info-line"><span>رقم الفاتورة</span><span>${escapeHtml(invoice.number)}</span></div>
-    <div class="info-line"><span>التاريخ</span><span>${escapeHtml(invoice.createdAt)}</span></div>
+    <div class="info-line"><span>التاريخ</span><span>${escapeHtml(utcToLocal(invoice.createdAt))}</span></div>
     <div class="info-line"><span>العميل</span><span>${escapeHtml(invoice.customerName)}</span></div>
     <div class="info-line"><span>الكاشير</span><span>${escapeHtml(invoice.cashierName)}</span></div>
     ${orderTypeInfoLinesHtml(invoice)}
@@ -1526,7 +1529,7 @@ function buildFormalInvoiceHtml(
       ${statusBadge(invoice.status)}
       <div class="invoice-meta">
         <div>رقم الفاتورة: <b>${escapeHtml(invoice.number)}</b></div>
-        <div>التاريخ: ${escapeHtml(invoice.createdAt)}</div>
+        <div>التاريخ: ${escapeHtml(utcToLocal(invoice.createdAt))}</div>
         <div>الكاشير: ${escapeHtml(invoice.cashierName)}</div>
       </div>
     </div>
@@ -1679,7 +1682,7 @@ function invoiceToDocReceipt(invoice: InvoiceView, tax: TaxSettings, qr: string 
     number: invoice.number,
     userName: invoice.cashierName,
     statusLabel: status,
-    date: invoice.createdAt,
+    date: utcToLocal(invoice.createdAt),
     customerName: invoice.customerName,
     customerAddress: invoice.customerAddress ?? null,
     lines: invoice.lines.map((l) => ({
@@ -1861,7 +1864,7 @@ async function printUnpostedDocument(
       number: String(held.id),
       userName: held.userName ?? '',
       statusLabel: 'لم يتم الترحيل',
-      date: held.createdAt,
+      date: utcToLocal(held.createdAt),
       customerName,
       customerAddress,
       lines,
@@ -1924,7 +1927,7 @@ export async function printDirectReturn(id: number, preview = false): Promise<Pr
       number: r.number,
       userName: r.userName,
       statusLabel: r.refundMethod === 'credit' ? 'خصم من رصيد العميل' : 'رد نقدي',
-      date: r.createdAt,
+      date: utcToLocal(r.createdAt),
       customerName: r.customerName,
       customerAddress: r.customerAddress,
       lines: r.lines.map((l) => ({ name: l.productName, qty: l.qty, unitPrice: l.unitPrice, value: l.amount, discount: 0 })),
@@ -1953,7 +1956,7 @@ export async function buildCustomerStatementHtml(
   const rows = ledger.entries
     .map(
       (e) =>
-        `<tr><td class="d">${escapeHtml(e.date)}</td><td>${escapeHtml(e.description)}</td><td class="n">${e.debit ? n(e.debit) : ''}</td><td class="n">${e.credit ? n(e.credit) : ''}</td><td class="n b">${n(e.balance ?? 0)}</td></tr>`
+        `<tr><td class="d">${escapeHtml(utcToLocal(e.date))}</td><td>${escapeHtml(e.description)}</td><td class="n">${e.debit ? n(e.debit) : ''}</td><td class="n">${e.credit ? n(e.credit) : ''}</td><td class="n b">${n(e.balance ?? 0)}</td></tr>`
     )
     .join('')
   const period =

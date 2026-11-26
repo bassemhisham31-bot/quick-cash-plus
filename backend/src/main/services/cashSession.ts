@@ -1,6 +1,6 @@
 import { getDb } from '../db'
 import { assertBranchAccess, branchesEnabled, branchFilter, currentBranchId, requireBranchId } from './branchScope'
-import { computeExpectedCash, loadTreasuryRows, recordCashDifference, resolveTreasury } from './treasuries'
+import { computeExpectedCash, computeExpectedCashDetails, loadTreasuryRows, recordCashDifference, resolveTreasury } from './treasuries'
 import { getSessionEventTotals } from './events'
 import { SALE_PAY_LINES_SQL } from './salePayments'
 import type { CashSessionSummary, ExpenseMethod, PaymentMethod, ShiftListRow, ShiftSummaryReport } from '../../shared/types'
@@ -118,6 +118,7 @@ export async function getCurrentSessionSummary(treasuryId?: number | null): Prom
   const chosen = await validateCloseTreasury(treasuryId, session.branchId)
 
   const { cashSales, cashExpenses, tips, eventPayments, eventCashPayments } = await computeCashTotals(session.id)
+  const details = await computeExpectedCashDetails(session.openedAt, session.openingBalance, session.branchId, chosen)
 
   return {
     sessionId: session.id,
@@ -128,7 +129,8 @@ export async function getCurrentSessionSummary(treasuryId?: number | null): Prom
     tips,
     eventPayments,
     eventCashPayments,
-    expectedCash: await computeExpectedCash(session.openedAt, session.openingBalance, session.branchId, chosen)
+    expectedCash: details.expected,
+    lines: details.lines
   }
 }
 
@@ -161,11 +163,11 @@ export async function listShifts(filter: { from?: string; to?: string } = {}): P
   const conditions: string[] = [bf.sql]
   const args: unknown[] = [...bf.args]
   if (filter.from) {
-    conditions.push('cs.opened_at >= ?')
+    conditions.push("datetime(cs.opened_at, 'localtime') >= ?")
     args.push(filter.from)
   }
   if (filter.to) {
-    conditions.push('cs.opened_at <= ?')
+    conditions.push("datetime(cs.opened_at, 'localtime') <= ?")
     args.push(filter.to)
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -265,6 +267,14 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
   })
   const expensesByMethod = expensesRs.rows.map((r: any) => ({ method: r.method as ExpenseMethod, total: Number(r.total) }))
   const totalExpenses = expensesByMethod.reduce((s, r) => s + r.total, 0)
+  // شراء الأصول الثابتة جوّه إجمالي المصروفات (خرج من الخزينة) — بنفصله عشان يطابق شاشة المصروفات
+  const assetsRs = await db.execute({
+    sql: `SELECT COALESCE(SUM(e.amount), 0) AS total
+          FROM expenses e JOIN expense_categories c ON c.id = e.category_id
+          WHERE e.session_id = ? AND e.deleted_at IS NULL AND c.is_fixed_asset = 1`,
+    args: [sessionId]
+  })
+  const fixedAssetExpenses = Number((assetsRs.rows[0] as any).total)
 
   // المشتريات مالهاش session_id في الجدول، فبنحسبها بمدى وقت الوردية (من فتحها لحد إغلاقها أو الآن لو لسه مفتوحة)
   const rangeEnd = session.closedAt ?? "datetime('now')"
@@ -306,6 +316,7 @@ export async function getShiftSummaryReport(sessionId: number): Promise<ShiftSum
     totalEventPayments: eventTotals.total,
     eventPaymentCount: eventTotals.count,
     totalExpenses,
+    fixedAssetExpenses,
     expensesByMethod,
     totalPurchases,
     purchaseInvoiceCount,

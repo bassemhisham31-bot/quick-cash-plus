@@ -69,11 +69,11 @@ function dateCond(col: string, f: AccountingReportFilter, args: unknown[], branc
     }
   }
   if (f.from) {
-    parts.push(`date(${col}) >= ?`)
+    parts.push(`date(${col}, 'localtime') >= ?`)
     args.push(f.from)
   }
   if (f.to) {
-    parts.push(`date(${col}) <= ?`)
+    parts.push(`date(${col}, 'localtime') <= ?`)
     args.push(f.to)
   }
   return parts.length ? parts.join(' AND ') : '1 = 1'
@@ -108,7 +108,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
       return accountLedgerReport(f.accountCode ?? (await defaultLedgerAccountCode()), f.from, f.to)
     case 'daily_sales': {
       const rs = await db.execute({
-        sql: `SELECT date(i.created_at) AS day, COUNT(*) AS cnt,
+        sql: `SELECT date(i.created_at, 'localtime') AS day, COUNT(*) AS cnt,
                      SUM(i.subtotal) AS subtotal, SUM(i.discount_total) AS discount, SUM(i.tax_total) AS tax,
                      COALESCE(SUM((SELECT SUM(si.discount) FROM sales_items si WHERE si.invoice_id = i.id)), 0) AS itemsDiscount,
                      SUM(i.delivery_fee) AS delivery, SUM(i.service_charge_total) AS service, SUM(i.total) AS total,
@@ -117,7 +117,7 @@ export async function runAccountingReport(type: AccountingReportType, f: Account
                      SUM(${salePayShareSql('i', ['wallet', 'vodafone_cash', 'instapay'])}) AS wallet,
                      SUM(${salePayShareSql('i', ['credit'])}) AS credit
               FROM sales_invoices i WHERE i.deleted_at IS NULL AND ${dateCond('i.created_at', f, args, 'i.branch_id')}
-              GROUP BY date(i.created_at) ORDER BY day`,
+              GROUP BY date(i.created_at, 'localtime') ORDER BY day`,
         args: args as any
       })
       const rows = (rs.rows as any[]).map((r) => ({

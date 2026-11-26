@@ -93,17 +93,36 @@ export function ExpenseLogTab(): JSX.Element {
     refresh()
   }
 
-  // شراء الأصول الثابتة مش مصروف — مبيدخلش في إجمالي المصروفات
-  const total = expenses.reduce((sum, e) => sum + (e.isFixedAsset ? 0 : e.amount), 0)
+  // الأرقام من السيرفر (كل المصروفات) مش من القائمة المعروضة (آخر 200 بس) — وكلها بتطابق قفل الوردية والخزينة:
+  // اللي خرج من الخزينة = المصروفات + شراء الأصول الثابتة (الأصل مش مصروف في الأرباح، بس الفلوس طلعت)
+  const paidOut = byMethod?.totalExpenses ?? expenses.reduce((sum, e) => sum + e.amount, 0)
+  const assetsTotal = byMethod?.fixedAssetsTotal ?? expenses.reduce((sum, e) => sum + (e.isFixedAsset ? e.amount : 0), 0)
+  const total = paidOut - assetsTotal
   const selectedCategory = categories.find((c) => c.id === form.categoryId)
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div className="qcp-card" style={{ display: 'inline-block' }}>
-          <div className="qcp-icon-badge orange">💸</div>
-          <div className="qcp-kpi-value">{currency(total)}</div>
-          <div className="qcp-kpi-label">{t('expenses.totalExpenses')}</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div className="qcp-card" style={{ display: 'inline-block' }}>
+            <div className="qcp-icon-badge orange">💸</div>
+            <div className="qcp-kpi-value">{currency(total)}</div>
+            <div className="qcp-kpi-label">{t('expenses.totalExpenses')}</div>
+          </div>
+          {assetsTotal > 0 && (
+            <>
+              <div className="qcp-card" style={{ display: 'inline-block' }}>
+                <div className="qcp-icon-badge blue">🏗️</div>
+                <div className="qcp-kpi-value">{currency(assetsTotal)}</div>
+                <div className="qcp-kpi-label">شراء أصول ثابتة (مش مصروف)</div>
+              </div>
+              <div className="qcp-card" style={{ display: 'inline-block' }}>
+                <div className="qcp-icon-badge purple">🧾</div>
+                <div className="qcp-kpi-value">{currency(paidOut)}</div>
+                <div className="qcp-kpi-label">إجمالي اللي خرج من الخزينة</div>
+              </div>
+            </>
+          )}
         </div>
         <button className="qcp-btn qcp-btn-primary" onClick={() => setShowForm(true)}>
           + {t('expenses.add')}
