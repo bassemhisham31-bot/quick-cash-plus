@@ -13,6 +13,8 @@ import { confirmDialog } from '../../components/ConfirmDialogHost'
 import { lineDiscountAmount } from '../../../../shared/types'
 import { SalesReturnFlow } from '../returns/SalesReturnFlow'
 import { ensureDeleteAllowed } from '../../lib/deleteGuard'
+import { registerPosBridge, type PosBridge } from '../../lib/assistantBridge'
+import { bestMatch } from '../../lib/assistantActions'
 import '../restaurant/restaurant.css'
 import './pos.css'
 import type {
@@ -122,7 +124,7 @@ export function PosPage(): JSX.Element {
   const [heldSearch, setHeldSearch] = useState('')
   const heldQuery = heldSearch.trim().toLowerCase()
   const filteredHeld = heldQuery
-    ? heldList.filter((h) => `${h.customerLabel ?? ''} ${h.id} ${h.userName ?? ''}`.toLowerCase().includes(heldQuery))
+    ? heldList.filter((h) => `${h.customerLabel ?? ''} ${h.customerName ?? ''} ${h.id} ${h.userName ?? ''}`.toLowerCase().includes(heldQuery))
     : heldList
   const [showHeld, setShowHeld] = useState(false)
   useEffect(() => {
@@ -981,6 +983,73 @@ export function PosPage(): JSX.Element {
     else void handleCheckout()
   }
 
+  // ───────── جسر المساعد الذكي: بينفّذ على السلة والدفع بنفس دوال الشاشة (راجع lib/assistantBridge.ts) ─────────
+  const assistantAutoConfirmRef = useRef(false)
+  const assistantRef = useRef<PosBridge>(null as unknown as PosBridge)
+  assistantRef.current = {
+    cartCount: () => cart.length,
+    setCustomer: (id) => selectCustomer(id),
+    addByQuery: async (query, qty, price) => {
+      const term = query.trim()
+      if (!warehouseId) return { ok: false, message: '⚠️ المخزن لسه بيتحمّل — جرّب تاني' }
+      const list = await window.api.catalog.listProducts(term, warehouseId)
+      const exact = list.find((p) => p.barcode === term)
+      const m = exact ? { item: exact, ties: 1 } : bestMatch(list.filter((p) => p.showInPos), term, (p) => p.name)
+      const product = m?.item
+      if (!product) return { ok: false, message: `⚠️ ما لقيتش صنف «${term}»` }
+      if (product.isService && product.commissionEnabled) return { ok: false, message: `⚠️ «${product.name}» خدمة بعمولة — ضيفها يدوي من الشاشة` }
+      const available = sellableQty(product)
+      if (!product.isService && available <= 0 && !posUiSettings?.allowNegativeStock) return { ok: false, message: `⚠️ «${product.name}» مفيش منه رصيد` }
+      const useCustomPrice = price != null && canEditPrice
+      const unitPrice = useCustomPrice ? (price as number) : priceForTier(product, priceTier)
+      setCart((prev) => {
+        const existing = prev.find((l) => l.productId === product.id)
+        if (existing) {
+          return prev.map((l) => (l.productId === product.id ? withDiscount({ ...l, qty: l.qty + qty, ...(useCustomPrice ? { unitPrice } : {}) }) : l))
+        }
+        return [
+          ...prev,
+          { productId: product.id, name: product.name, barcode: product.barcode, unitPrice, qty, discount: 0, ...(product.isService ? { isService: true } : {}) }
+        ]
+      })
+      playSound('save')
+      const notes: string[] = []
+      if (m && m.ties > 1) notes.push(`فيه ${m.ties} أصناف مشابهة — راجع الاختيار`)
+      if (price != null && !canEditPrice) notes.push('السعر ما اتغيّرش — مفيش صلاحية تعديل سعر')
+      if (!product.isService && qty > available && !posUiSettings?.allowNegativeStock) notes.push(`المتاح ${formatQty(available)} بس`)
+      return { ok: true, message: `✅ ${product.name} × ${formatQty(qty)} بسعر ${currency(unitPrice)}${notes.length ? ` (${notes.join('، ')})` : ''}` }
+    },
+    startPayment: (method, autoConfirm) => {
+      // بعد ما React يرسم السلة الجديدة (الأصناف اتضافت بـsetCart) نفتح الدفع بالقيم المحدّثة
+      setTimeout(() => {
+        setUnpostedPay(false)
+        if (autoConfirm) assistantAutoConfirmRef.current = true
+        openPaymentRef.current(method)
+      }, 80)
+      return { ok: true, message: '💳 فتحت شاشة الدفع' }
+    }
+  }
+  const openPaymentRef = useRef<(method: string | null) => void>(() => {})
+  openPaymentRef.current = (method) => {
+    openPayment()
+    if (method) setPaymentMethod(method as PaymentMethod)
+  }
+  useEffect(() => registerPosBridge({
+    cartCount: () => assistantRef.current.cartCount(),
+    setCustomer: (id) => assistantRef.current.setCustomer(id),
+    addByQuery: (q, qty, price) => assistantRef.current.addByQuery(q, qty, price),
+    startPayment: (method, auto) => assistantRef.current.startPayment(method, auto)
+  }), [])
+  // لو المساعد طلب «حفظ نهائي» من غير تأكيد: بعد ما شاشة الدفع تفتح (وبعد حارس الـ600ms) نأكّد الحفظ
+  const confirmPaymentRef = useRef<() => void>(() => {})
+  confirmPaymentRef.current = confirmPayment
+  useEffect(() => {
+    if (!showPayment || !assistantAutoConfirmRef.current) return
+    assistantAutoConfirmRef.current = false
+    const id = setTimeout(() => confirmPaymentRef.current(), 750)
+    return () => clearTimeout(id)
+  }, [showPayment])
+
   async function handleCheckout(): Promise<void> {
     if (!user || !warehouseId || checkingOut) return
     setError(null)
@@ -1679,12 +1748,13 @@ export function PosPage(): JSX.Element {
                   )}
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700 }}>
-                      #{h.id} · {formatQty(h.itemsCount)} صنف · {currency(h.total)}
+                      #{h.id}
+                      {h.customerName || h.customerLabel ? ` · ${h.customerName || h.customerLabel}` : ''} · {formatQty(h.itemsCount)} صنف · {currency(h.total)}
                     </div>
                     <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)' }}>
                       {h.createdAt}
                       {h.userName ? ` · ${h.userName}` : ''}
-                      {h.customerLabel ? ` · ${h.customerLabel}` : ''}
+                      {h.customerName && h.customerLabel ? ` · ${h.customerLabel}` : ''}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>

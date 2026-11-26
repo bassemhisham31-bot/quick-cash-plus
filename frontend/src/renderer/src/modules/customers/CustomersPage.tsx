@@ -6,7 +6,7 @@ import { StatementLinkModal } from '../../components/StatementLinkModal'
 import { alertDialog } from '../../components/ConfirmDialogHost'
 import { formatCurrency as currency } from '../../lib/currency'
 import { playSound } from '../../lib/sounds'
-import type { CustomerView, PaymentMethod, StatementView, VendorView } from '../../../../shared/types'
+import type { CustomerView, PaymentMethod, StatementView, Treasury, VendorView } from '../../../../shared/types'
 
 const emptyForm = { name: '', phone: '', address: '', notes: '', openingBalance: '0', loyaltyEnabled: true }
 /** عدد الكروت اللي بتترسم في المرة — آلاف العملاء مرة واحدة بيتقّلوا فتح الشاشة */
@@ -33,6 +33,7 @@ export function CustomersPage(): JSX.Element {
   const [vendors, setVendors] = useState<VendorView[]>([])
   const [linkChoice, setLinkChoice] = useState<Record<number, string>>({})
   const [allCustomers, setAllCustomers] = useState<CustomerView[]>([])
+  const [treasuries, setTreasuries] = useState<Treasury[] | undefined>(undefined)
 
   // تحميلة واحدة لكل العملاء، والبحث بيتفلتر محليًا (من غير نداء سيرفر مع كل حرف)
   async function refresh(): Promise<void> {
@@ -46,6 +47,7 @@ export function CustomersPage(): JSX.Element {
   useEffect(() => {
     refresh()
     window.api.vendors.list('').then(setVendors)
+    window.api.treasury.list().then(setTreasuries).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -165,9 +167,9 @@ export function CustomersPage(): JSX.Element {
     if (!r.ok && r.error) await alertDialog(r.error)
   }
 
-  async function handleRecordPayment(amount: number, method: PaymentMethod, note: string): Promise<void> {
+  async function handleRecordPayment(amount: number, method: PaymentMethod, note: string, _invoiceId?: number | null, treasuryId?: number | null): Promise<void> {
     if (!statementFor || !user) return
-    const updated = await window.api.customers.recordPayment(statementFor.id, amount, method, note, user.id)
+    const updated = await window.api.customers.recordPayment(statementFor.id, amount, method, note, user.id, treasuryId ?? null)
     setStatementFor(updated)
     setStatement(await window.api.customers.getLedger(updated.id, ledgerFilter(statementFilter)))
     refresh()
@@ -466,6 +468,7 @@ export function CustomersPage(): JSX.Element {
             setStatement(null)
           }}
           onRecordPayment={handleRecordPayment}
+          treasuries={treasuries && treasuries.some((x) => x.active) ? treasuries : undefined}
           filter={statementFilter}
           onFilterChange={changeStatementFilter}
           onPrint={printStatement}

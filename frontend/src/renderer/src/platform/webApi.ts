@@ -873,9 +873,10 @@ const api = {
       amount: number,
       method: PaymentMethod,
       note: string,
-      userId: number
+      userId: number,
+      treasuryId: number | null = null
     ): Promise<CustomerView> =>
-      invoke('customers:recordPayment', customerId, amount, method, note, userId),
+      invoke('customers:recordPayment', customerId, amount, method, note, userId, treasuryId),
     updateLoyaltyEnabled: (customerId: number, enabled: boolean): Promise<CustomerView> =>
       invoke('customers:updateLoyaltyEnabled', customerId, enabled),
     linkVendor: (customerId: number, vendorId: number): Promise<CustomerView> =>
@@ -1120,6 +1121,7 @@ const api = {
     sendMessage: (userId: number, message: string): Promise<AssistantSendMessageResult> =>
       invoke('assistant:sendMessage', userId, message),
     getHistory: (userId: number): Promise<AssistantChatMessage[]> => invoke('assistant:getHistory', userId),
+    logNote: (userId: number, text: string): Promise<void> => invoke('assistant:logNote', userId, text),
     clearHistory: (userId: number): Promise<void> => invoke('assistant:clearHistory', userId)
   },
   whatsapp: {

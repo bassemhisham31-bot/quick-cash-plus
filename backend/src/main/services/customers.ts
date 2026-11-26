@@ -1,5 +1,7 @@
 import { getDb } from '../db'
 import { utcToLocal } from './timezone'
+import { assertBranchAccess } from './branchScope'
+import { loadTreasuryRows } from './treasuries'
 import type { CustomerInput, CustomerView, PaymentMethod, StatementEntry, StatementFilter, StatementView } from '../../shared/types'
 
 const CUSTOMER_SELECT = `
@@ -185,7 +187,9 @@ export async function getCustomerLedger(customerId: number, filter: StatementFil
     })
   }
   const paymentsRs = await db.execute({
-    sql: `SELECT id, amount, method, note, created_at AS createdAt FROM payments WHERE party_type = 'customer' AND party_id = ?`,
+    sql: `SELECT p.id, p.amount, p.method, p.note, p.created_at AS createdAt, t.name AS treasuryName
+          FROM payments p LEFT JOIN treasuries t ON t.id = p.treasury_id
+          WHERE p.party_type = 'customer' AND p.party_id = ?`,
     args: [customerId]
   })
   for (const r of paymentsRs.rows as any[]) {
@@ -193,7 +197,7 @@ export async function getCustomerLedger(customerId: number, filter: StatementFil
       type: 'payment',
       id: Number(r.id),
       date: r.createdAt,
-      description: `سداد (${paymentMethodLabel(r.method)})${r.note ? ' — ' + r.note : ''}`,
+      description: `سداد (${r.treasuryName ?? paymentMethodLabel(r.method)})${r.note ? ' — ' + r.note : ''}`,
       debit: 0,
       credit: Number(r.amount)
     })
@@ -257,8 +261,9 @@ export async function getCustomerStatement(customerId: number): Promise<Statemen
     args: [customerId]
   })
   const paymentsRs = await db.execute({
-    sql: `SELECT id, amount, method, note, created_at AS createdAt
-          FROM payments WHERE party_type = 'customer' AND party_id = ? ORDER BY created_at`,
+    sql: `SELECT p.id, p.amount, p.method, p.note, p.created_at AS createdAt, t.name AS treasuryName
+          FROM payments p LEFT JOIN treasuries t ON t.id = p.treasury_id
+          WHERE p.party_type = 'customer' AND p.party_id = ? ORDER BY p.created_at`,
     args: [customerId]
   })
 
@@ -278,7 +283,7 @@ export async function getCustomerStatement(customerId: number): Promise<Statemen
       type: 'payment',
       id: Number(r.id),
       date: r.createdAt,
-      description: `سداد (${paymentMethodLabel(r.method)})${r.note ? ' — ' + r.note : ''}`,
+      description: `سداد (${r.treasuryName ?? paymentMethodLabel(r.method)})${r.note ? ' — ' + r.note : ''}`,
       debit: 0,
       credit: Number(r.amount)
     })
@@ -308,14 +313,29 @@ export async function recordCustomerPayment(
   amount: number,
   method: PaymentMethod,
   note: string,
-  userId: number
+  userId: number,
+  treasuryId?: number | null
 ): Promise<CustomerView> {
   const db = getDb()
-  await db.execute({
-    sql: `INSERT INTO payments (party_type, party_id, amount, method, note, user_id)
-          VALUES ('customer', ?, ?, ?, ?, ?)`,
-    args: [customerId, amount, method, note || null, userId]
-  })
+  if (!(amount > 0)) throw new Error('المبلغ لازم يكون أكبر من صفر')
+  if (treasuryId) {
+    // السداد على خزينة محددة: وسيلة الدفع بتتحدد من الخزينة، والحركة بتدخل رصيدها وفرعها
+    const treasury = (await loadTreasuryRows()).find((t) => t.id === treasuryId && t.active)
+    if (!treasury) throw new Error('الخزينة غير موجودة أو مقفولة')
+    assertBranchAccess(treasury.branchId, 'الخزينة')
+    const treasuryMethod = treasury.methods[0] ?? (treasury.kind === 'cash' ? 'cash' : treasury.kind === 'bank' ? 'card' : 'wallet')
+    await db.execute({
+      sql: `INSERT INTO payments (party_type, party_id, amount, method, note, user_id, treasury_id, branch_id)
+            VALUES ('customer', ?, ?, ?, ?, ?, ?, ?)`,
+      args: [customerId, amount, treasuryMethod, note || null, userId, treasury.id, treasury.branchId]
+    })
+  } else {
+    await db.execute({
+      sql: `INSERT INTO payments (party_type, party_id, amount, method, note, user_id)
+            VALUES ('customer', ?, ?, ?, ?, ?)`,
+      args: [customerId, amount, method, note || null, userId]
+    })
+  }
   await db.execute({
     sql: 'UPDATE customers SET balance = balance - ? WHERE id = ?',
     args: [amount, customerId]

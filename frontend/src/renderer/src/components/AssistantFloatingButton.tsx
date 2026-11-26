@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../store/appStore'
 import type { AssistantChatMessage, AssistantSettings } from '../../../shared/types'
 import { confirmDialog } from './ConfirmDialogHost'
+import { executeAssistantActions } from '../lib/assistantActions'
 
 const BTN_SIZE = 54
 const POS_STORAGE_KEY = 'qcp_assistant_btn_pos'
@@ -27,11 +28,17 @@ export function AssistantFloatingButton(): JSX.Element | null {
   const { t } = useTranslation()
   const user = useAppStore((s) => s.user)
   const dataVersion = useAppStore((s) => s.dataVersion)
+  const disabledFeatures = useAppStore((s) => s.disabledFeatures)
   const [settings, setSettings] = useState<AssistantSettings | null>(null)
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<AssistantChatMessage[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [executing, setExecuting] = useState(false)
+  const [listening, setListening] = useState(false)
+  const [speakOn, setSpeakOn] = useState(false)
+  const recRef = useRef<any>(null)
+  const speakInitRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [pos, setPos] = useState(loadPos)
   const [dragging, setDragging] = useState(false)
@@ -54,8 +61,27 @@ export function AssistantFloatingButton(): JSX.Element | null {
   }, [])
 
   useEffect(() => {
-    window.api.settings.getAssistant().then(setSettings)
+    window.api.settings.getAssistant().then((s) => {
+      setSettings(s)
+      // حالة زرار الصوت بتتظبط من الإعداد أول مرة بس (مش مع كل تحديث بيانات)
+      if (!speakInitRef.current) {
+        speakInitRef.current = true
+        setSpeakOn(s.voiceReplyEnabled)
+      }
+    })
   }, [dataVersion])
+
+  // قفل المايك والصوت لو النافذة اتقفلت أو المكوّن اتشال
+  useEffect(() => {
+    if (open) return
+    recRef.current?.abort?.()
+    try {
+      window.speechSynthesis?.cancel()
+    } catch {
+      // مفيش صوت — عادي
+    }
+  }, [open])
+  useEffect(() => () => recRef.current?.abort?.(), [])
 
   useEffect(() => {
     if (open && user) window.api.assistant.getHistory(user.id).then(setMessages)
@@ -82,22 +108,101 @@ export function AssistantFloatingButton(): JSX.Element | null {
     setError(null)
   }
 
-  async function handleSend(): Promise<void> {
-    const text = input.trim()
-    if (!text || sending) return
+  function speak(text: string): void {
+    try {
+      const synth = window.speechSynthesis
+      if (!synth) return
+      synth.cancel()
+      const u = new SpeechSynthesisUtterance(text)
+      u.lang = 'ar-EG'
+      synth.speak(u)
+    } catch {
+      // مفيش صوت — الرد مكتوب برضه
+    }
+  }
+
+  async function sendText(raw: string): Promise<void> {
+    const text = raw.trim()
+    if (!text || sending || !user) return
     setInput('')
     setError(null)
     setMessages((prev) => [...prev, { id: -Date.now(), role: 'user', content: text, createdAt: new Date().toISOString() }])
     setSending(true)
     try {
       const result = await window.api.assistant.sendMessage(userId, text)
-      if (result.ok) {
-        setMessages(await window.api.assistant.getHistory(userId))
-      } else {
+      if (!result.ok) {
         setError(result.error ?? 'تعذر الوصول للمساعد الذكي')
+        return
       }
+      if (speakOn && result.reply) speak(result.reply)
+      if (settings?.actionsEnabled && result.actions?.length) {
+        setExecuting(true)
+        const lines = await executeAssistantActions(result.actions, { user, settings, disabledFeatures })
+        if (lines.length) await window.api.assistant.logNote(userId, lines.join('\n'))
+      }
+      setMessages(await window.api.assistant.getHistory(userId))
+    } catch (err: any) {
+      setError(err?.message ?? 'تعذر تنفيذ الأوامر')
     } finally {
       setSending(false)
+      setExecuting(false)
+    }
+  }
+
+  function handleSend(): Promise<void> {
+    return sendText(input)
+  }
+
+  /** المايك: التعرّف على الكلام بتاع المتصفح (Chrome / Edge) بالعربي المصري — لما تخلّص كلام بيتبعت لوحده */
+  function toggleMic(): void {
+    if (listening) {
+      recRef.current?.stop()
+      return
+    }
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SR) {
+      setError(t('assistantChat.micUnsupported'))
+      return
+    }
+    setError(null)
+    try {
+      window.speechSynthesis?.cancel()
+    } catch {
+      // مفيش صوت — عادي
+    }
+    const rec = new SR()
+    rec.lang = 'ar-EG'
+    rec.interimResults = true
+    rec.continuous = false
+    rec.maxAlternatives = 1
+    let finalText = ''
+    rec.onresult = (e: any) => {
+      let interim = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i]
+        if (r.isFinal) finalText += r[0].transcript
+        else interim += r[0].transcript
+      }
+      setInput((finalText + interim).trim())
+    }
+    rec.onerror = (e: any) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') setError(t('assistantChat.micDenied'))
+      else if (e.error === 'no-speech') setError(t('assistantChat.micNoSpeech'))
+      else if (e.error !== 'aborted') setError(`المايك: ${e.error}`)
+    }
+    rec.onend = () => {
+      setListening(false)
+      recRef.current = null
+      const said = finalText.trim()
+      if (said) void sendText(said)
+    }
+    recRef.current = rec
+    setListening(true)
+    try {
+      rec.start()
+    } catch {
+      setListening(false)
+      recRef.current = null
     }
   }
 
@@ -176,9 +281,31 @@ export function AssistantFloatingButton(): JSX.Element | null {
           >
             <div>
               <div style={{ fontWeight: 800, fontSize: 13.5 }}>🤖 {t('assistantChat.title')}</div>
-              <div style={{ fontSize: 10.5, color: 'var(--qcp-ink-faint)' }}>🛡️ {t('assistantChat.readOnlyBadge')}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--qcp-ink-faint)' }}>
+                🛡️ {settings?.actionsEnabled ? t('assistantChat.actionsBadge') : t('assistantChat.readOnlyBadge')}
+              </div>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
+              {settings?.voiceEnabled && (
+                <button
+                  type="button"
+                  className="qcp-btn qcp-btn-secondary"
+                  style={{ padding: '4px 10px' }}
+                  title={(speakOn ? t('assistantChat.speakOn') : t('assistantChat.speakOff')) ?? ''}
+                  onClick={() => {
+                    if (speakOn) {
+                      try {
+                        window.speechSynthesis?.cancel()
+                      } catch {
+                        // مفيش صوت — عادي
+                      }
+                    }
+                    setSpeakOn((v) => !v)
+                  }}
+                >
+                  {speakOn ? '🔊' : '🔇'}
+                </button>
+              )}
               <button
                 type="button"
                 className="qcp-btn qcp-btn-secondary"
@@ -223,7 +350,12 @@ export function AssistantFloatingButton(): JSX.Element | null {
                 {m.content}
               </div>
             ))}
-            {sending && <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)' }}>{t('assistantChat.thinking')}</div>}
+            {sending && (
+              <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)' }}>
+                {executing ? t('assistantChat.executing') : t('assistantChat.thinking')}
+              </div>
+            )}
+            {listening && <div style={{ fontSize: 11.5, color: 'var(--qcp-critical)' }}>🎤 {t('assistantChat.listening')}</div>}
           </div>
 
           {error && (
@@ -233,10 +365,26 @@ export function AssistantFloatingButton(): JSX.Element | null {
           )}
 
           <div style={{ display: 'flex', gap: 6, padding: 10, borderTop: '1px solid var(--qcp-border)' }}>
+            {settings?.voiceEnabled && (
+              <button
+                type="button"
+                className="qcp-btn qcp-btn-secondary"
+                style={{
+                  padding: '4px 10px',
+                  fontSize: 16,
+                  ...(listening ? { background: 'var(--qcp-critical)', color: 'white', borderColor: 'var(--qcp-critical)' } : {})
+                }}
+                disabled={sending}
+                title={(listening ? t('assistantChat.micStop') : t('assistantChat.mic')) ?? ''}
+                onClick={toggleMic}
+              >
+                🎤
+              </button>
+            )}
             <input
               className="qcp-input"
               style={{ flex: 1 }}
-              placeholder={t('assistantChat.placeholder') ?? ''}
+              placeholder={(settings?.actionsEnabled ? t('assistantChat.placeholderActions') : t('assistantChat.placeholder')) ?? ''}
               value={input}
               disabled={sending}
               onChange={(e) => setInput(e.target.value)}

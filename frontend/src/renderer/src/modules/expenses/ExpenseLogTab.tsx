@@ -27,6 +27,8 @@ export function ExpenseLogTab(): JSX.Element {
   const [newCategoryName, setNewCategoryName] = useState('')
   const [newCategoryFixed, setNewCategoryFixed] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [logSearch, setLogSearch] = useState('')
+  const [categorySearch, setCategorySearch] = useState('')
 
   async function refresh(): Promise<void> {
     const [e, c, m] = await Promise.all([
@@ -100,6 +102,17 @@ export function ExpenseLogTab(): JSX.Element {
   const total = paidOut - assetsTotal
   const selectedCategory = categories.find((c) => c.id === form.categoryId)
 
+  const logQuery = logSearch.trim().toLowerCase()
+  const visibleExpenses = logQuery
+    ? expenses.filter((e) =>
+        [e.categoryName, e.note ?? '', e.cashierName ?? '', e.method, String(e.amount), e.createdAt].some((v) => String(v ?? '').toLowerCase().includes(logQuery))
+      )
+    : expenses
+  const categoryQuery = categorySearch.trim().toLowerCase()
+  const visibleCategories = categoryQuery
+    ? categories.filter((c) => c.name.toLowerCase().includes(categoryQuery) || c.id === form.categoryId)
+    : categories
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
@@ -142,6 +155,17 @@ export function ExpenseLogTab(): JSX.Element {
         </div>
       )}
 
+      <div style={{ position: 'relative', marginBottom: 10, maxWidth: 420 }}>
+        <span style={{ position: 'absolute', insetInlineStart: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>🔍</span>
+        <input
+          className="qcp-input"
+          style={{ width: '100%', paddingInlineStart: 34 }}
+          placeholder="بحث في المصروفات (البند، الملاحظة، المبلغ، الكاشير)..."
+          value={logSearch}
+          onChange={(e) => setLogSearch(e.target.value)}
+        />
+      </div>
+
       <div className="qcp-table-wrap">
         <table className="qcp-table">
           <thead>
@@ -158,7 +182,7 @@ export function ExpenseLogTab(): JSX.Element {
             </tr>
           </thead>
           <tbody>
-            {expenses.map((e) => (
+            {visibleExpenses.map((e) => (
               <tr key={e.id}>
                 {showBranch && <td>{e.branchName}</td>}
                 <td>
@@ -195,7 +219,7 @@ export function ExpenseLogTab(): JSX.Element {
                 </td>
               </tr>
             ))}
-            {expenses.length === 0 && (
+            {visibleExpenses.length === 0 && (
               <tr>
                 <td colSpan={showBranch ? 9 : 8} style={{ textAlign: 'center', color: 'var(--qcp-ink-faint)' }}>
                   —
@@ -220,13 +244,27 @@ export function ExpenseLogTab(): JSX.Element {
 
             <div className="qcp-field">
               <label>{t('expenses.category')}</label>
+              <div style={{ position: 'relative', marginBottom: 6 }}>
+                <span style={{ position: 'absolute', insetInlineStart: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>🔍</span>
+                <input
+                  className="qcp-input"
+                  style={{ width: '100%', paddingInlineStart: 34 }}
+                  placeholder="ابحث عن بند المصروف..."
+                  value={categorySearch}
+                  onChange={(e) => setCategorySearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Enter على نتيجة واحدة بيختارها
+                    if (e.key === 'Enter' && visibleCategories.length === 1) setForm((f) => ({ ...f, categoryId: visibleCategories[0].id }))
+                  }}
+                />
+              </div>
               <select
                 className="qcp-select"
                 value={form.categoryId}
                 onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value ? Number(e.target.value) : '' }))}
               >
                 <option value="">—</option>
-                {categories.map((c) => (
+                {visibleCategories.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
                     {c.isFixedAsset ? ' (أصل ثابت)' : ''}

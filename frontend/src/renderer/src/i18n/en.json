@@ -1,5 +1,7 @@
 {
-  "app": { "name": "{{brand}}" },
+  "app": {
+    "name": "{{brand}}"
+  },
   "nav": {
     "dashboard": "Dashboard",
     "pos": "Sales",
@@ -567,8 +569,8 @@
     "dataResetSection": "Reset app data",
     "posUiSection": "Customize POS screen",
     "restaurantSection": "Restaurant Settings",
-    "assistantSubtitle": "Read-only chat, advice and analysis — never executes actions in the app.",
-    "assistantReadOnlyBadge": "Always read-only",
+    "assistantSubtitle": "Chat by typing or voice (mic), store analysis, and commands: open screens, prepare a sale invoice, a customer payment or an expense.",
+    "assistantReadOnlyBadge": "Asks before saving",
     "assistantProvider": "Choose AI provider",
     "assistantModelName": "Model name",
     "assistantApiKey": "API key",
@@ -605,7 +607,16 @@
     "remoteSupportHint": "If you need live support, open the app installed on your machine and share the code shown with our support team.",
     "openAnyDesk": "Open AnyDesk",
     "openTeamViewer": "Open TeamViewer",
-    "remoteSupportAppNotInstalled": "This app isn't installed on this device. Please install it first."
+    "remoteSupportAppNotInstalled": "This app isn't installed on this device. Please install it first.",
+    "assistantActions": "Run commands",
+    "assistantActionsHint": "The assistant opens screens and prepares a sale / customer payment / expense from what you say (with your own permissions).",
+    "assistantConfirmActions": "Ask me before saving",
+    "assistantConfirmActionsHint": "A sale waits for you to press Confirm on the payment screen; payments and expenses ask for confirmation. Turn off to save immediately.",
+    "assistantVoice": "Microphone (voice input)",
+    "assistantVoiceHint": "A mic button in the assistant window: speak Arabic and it types and answers. Works in Chrome / Edge and needs mic permission.",
+    "assistantVoiceReply": "Speak the replies",
+    "assistantVoiceReplyHint": "Reads each reply aloud (typing still works).",
+    "assistantProviderHelp": "Choosing a provider fills the model and URL — just paste the API key and press “Test connection”."
   },
   "common": {
     "loading": "Loading...",
@@ -807,6 +818,17 @@
     "empty": "Start the conversation — ask about today's sales, low-stock items, or anything else.",
     "openButton": "Open {{brand}} Assistant",
     "clear": "Clear chat",
-    "clearConfirm": "Are you sure you want to clear all messages in this conversation?"
+    "clearConfirm": "Are you sure you want to clear all messages in this conversation?",
+    "actionsBadge": "Runs your commands — asks before saving",
+    "mic": "Speak",
+    "micStop": "Stop microphone",
+    "listening": "Listening... speak now",
+    "micUnsupported": "This browser has no speech input — use Chrome or Edge",
+    "micDenied": "Microphone permission denied — allow it in the browser (lock icon next to the address)",
+    "micNoSpeech": "Did not hear anything — try again",
+    "executing": "Running commands...",
+    "speakOn": "Speak replies: on",
+    "speakOff": "Speak replies: off",
+    "placeholderActions": "Type or speak: “open POS and add 2 cola for Ahmed”..."
   }
 }

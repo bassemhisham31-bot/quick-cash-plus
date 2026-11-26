@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatCurrency as currency } from '../lib/currency'
-import type { PaymentMethod, PurchaseInvoiceListItem, StatementEntry, StatementView } from '../../../shared/types'
+import type { PaymentMethod, PurchaseInvoiceListItem, StatementEntry, StatementView, Treasury } from '../../../shared/types'
 
 interface Props {
   partyName: string
   statement: StatementView
   onClose: () => void
-  onRecordPayment: (amount: number, method: PaymentMethod, note: string, invoiceId?: number | null) => Promise<void>
+  onRecordPayment: (amount: number, method: PaymentMethod, note: string, invoiceId?: number | null, treasuryId?: number | null) => Promise<void>
   unpaidInvoices?: PurchaseInvoiceListItem[]
+  /** لو اتبعتت: السداد بيتسجّل على الخزينة المختارة (بدل وسيلة الدفع) — كشف العميل */
+  treasuries?: Treasury[]
   /** كارت حساب العميل الكامل: فلتر تاريخ + عمود الرصيد + طباعة الكشف */
   filter?: { from: string; to: string }
   onFilterChange?: (filter: { from: string; to: string }) => void
@@ -29,6 +31,7 @@ export function StatementModal({
   onClose,
   onRecordPayment,
   unpaidInvoices,
+  treasuries,
   filter,
   onFilterChange,
   onPrint,
@@ -43,15 +46,18 @@ export function StatementModal({
   const [method, setMethod] = useState<PaymentMethod>('cash')
   const [note, setNote] = useState('')
   const [invoiceId, setInvoiceId] = useState<number | ''>('')
+  const [treasuryChoice, setTreasuryChoice] = useState<number | ''>('')
   const [saving, setSaving] = useState(false)
   const [sendingWa, setSendingWa] = useState(false)
+  const activeTreasuries = (treasuries ?? []).filter((x) => x.active)
+  const treasuryId = treasuryChoice || (activeTreasuries.find((x) => x.isDefault) ?? activeTreasuries[0])?.id || ''
 
   async function handleSubmit(): Promise<void> {
     const value = Number(amount)
     if (!value || value <= 0) return
     setSaving(true)
     try {
-      await onRecordPayment(value, method, note, invoiceId || null)
+      await onRecordPayment(value, method, note, invoiceId || null, treasuries ? treasuryId || null : null)
       setAmount('')
       setNote('')
       setInvoiceId('')
@@ -216,13 +222,24 @@ export function StatementModal({
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
           />
-          <select className="qcp-select" value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)}>
-            <option value="cash">نقدًا</option>
-            <option value="card">بنكي</option>
-            <option value="wallet">محفظة</option>
-            <option value="vodafone_cash">فودافون كاش</option>
-            <option value="instapay">InstaPay</option>
-          </select>
+          {treasuries ? (
+            <select className="qcp-select" value={treasuryId} onChange={(e) => setTreasuryChoice(e.target.value ? Number(e.target.value) : '')} title="الخزينة اللي السداد يدخل عليها">
+              {activeTreasuries.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name}
+                  {x.branchName && activeTreasuries.some((o) => o.branchId !== x.branchId) ? ` — ${x.branchName}` : ''}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select className="qcp-select" value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)}>
+              <option value="cash">نقدًا</option>
+              <option value="card">بنكي</option>
+              <option value="wallet">محفظة</option>
+              <option value="vodafone_cash">فودافون كاش</option>
+              <option value="instapay">InstaPay</option>
+            </select>
+          )}
         </div>
         {unpaidInvoices && unpaidInvoices.length > 0 && (
           <select

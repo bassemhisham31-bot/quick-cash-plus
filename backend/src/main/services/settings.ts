@@ -357,7 +357,11 @@ function mapAssistantRow(r: any): AssistantSettings {
     apiKey: r.api_key,
     apiUrl: r.api_url,
     allowedSections: JSON.parse(r.allowed_sections || '[]'),
-    allowedUserIds: JSON.parse(r.allowed_user_ids || '[]')
+    allowedUserIds: JSON.parse(r.allowed_user_ids || '[]'),
+    actionsEnabled: r.actions_enabled == null ? true : !!r.actions_enabled,
+    confirmActions: r.confirm_actions == null ? true : !!r.confirm_actions,
+    voiceEnabled: r.voice_enabled == null ? true : !!r.voice_enabled,
+    voiceReplyEnabled: !!r.voice_reply_enabled
   }
 }
 
@@ -372,7 +376,8 @@ export async function updateAssistantSettings(input: AssistantSettings): Promise
   await db.execute({
     sql: `UPDATE assistant_settings
           SET enabled = ?, floating_button_enabled = ?, store_analysis_enabled = ?, external_search_enabled = ?,
-              provider = ?, model_name = ?, api_key = ?, api_url = ?, allowed_sections = ?, allowed_user_ids = ?
+              provider = ?, model_name = ?, api_key = ?, api_url = ?, allowed_sections = ?, allowed_user_ids = ?,
+              actions_enabled = ?, confirm_actions = ?, voice_enabled = ?, voice_reply_enabled = ?
           WHERE id = 1`,
     args: [
       input.enabled ? 1 : 0,
@@ -384,7 +389,11 @@ export async function updateAssistantSettings(input: AssistantSettings): Promise
       input.apiKey?.trim() || null,
       input.apiUrl.trim(),
       JSON.stringify(input.allowedSections),
-      JSON.stringify(input.allowedUserIds)
+      JSON.stringify(input.allowedUserIds),
+      input.actionsEnabled === false ? 0 : 1,
+      input.confirmActions === false ? 0 : 1,
+      input.voiceEnabled === false ? 0 : 1,
+      input.voiceReplyEnabled ? 1 : 0
     ]
   })
   return getAssistantSettings()

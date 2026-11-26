@@ -2434,6 +2434,13 @@ const ASSISTANT_PROVIDERS: { key: AssistantProvider; name: string; desc: string 
   { key: 'openai', name: 'OpenAI', desc: 'مع دعم Responses API المدمج عند تفعيله' }
 ]
 
+/** الموديل والرابط الافتراضيين لكل مزود — اختيار المزود بيملاهم تلقائيًا (من غير ما يمسح قيمة مخصّصة كتبها المستخدم) */
+const ASSISTANT_PRESETS: Record<string, { apiUrl: string; modelName: string }> = {
+  openai: { apiUrl: 'https://api.openai.com/v1', modelName: 'gpt-4.1-mini' },
+  groq: { apiUrl: 'https://api.groq.com/openai/v1', modelName: 'llama-3.3-70b-versatile' },
+  gemini: { apiUrl: 'https://generativelanguage.googleapis.com/v1beta', modelName: 'gemini-2.0-flash' }
+}
+
 const ASSISTANT_SECTION_LABELS: Record<string, string> = {
   dashboard: 'لوحة التحكم',
   pos: 'المبيعات',
@@ -2535,7 +2542,17 @@ function AssistantSection(): JSX.Element {
               <button
                 key={p.key}
                 type="button"
-                onClick={() => setSettings({ ...settings, provider: p.key })}
+                onClick={() => {
+                  const preset = ASSISTANT_PRESETS[p.key]
+                  const isDefaultValue = (url: string, model: string): boolean =>
+                    (!url.trim() && !model.trim()) ||
+                    Object.values(ASSISTANT_PRESETS).some((x) => x.apiUrl === url.trim() && x.modelName === model.trim())
+                  setSettings({
+                    ...settings,
+                    provider: p.key,
+                    ...(preset && isDefaultValue(settings.apiUrl, settings.modelName) ? preset : {})
+                  })
+                }}
                 style={{
                   cursor: 'pointer',
                   textAlign: 'start',
@@ -2555,6 +2572,8 @@ function AssistantSection(): JSX.Element {
           })}
         </div>
       </div>
+
+      <p style={{ fontSize: 12, color: 'var(--qcp-ink-faint)', margin: '-6px 0 12px' }}>{t('settings.assistantProviderHelp')}</p>
 
       <div style={{ display: 'flex', gap: 10 }}>
         <div className="qcp-field" style={{ flex: 1 }}>
@@ -2641,6 +2660,58 @@ function AssistantSection(): JSX.Element {
             <div style={{ fontSize: 11, color: 'var(--qcp-ink-faint)' }}>
               {t('settings.assistantExternalSearchHint')}
             </div>
+          </span>
+        </label>
+        <label className="qcp-card" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={settings.actionsEnabled}
+            onChange={(e) => setSettings({ ...settings, actionsEnabled: e.target.checked })}
+          />
+          <span>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>{t('settings.assistantActions')}</div>
+            <div style={{ fontSize: 11, color: 'var(--qcp-ink-faint)' }}>{t('settings.assistantActionsHint')}</div>
+          </span>
+        </label>
+        <label
+          className="qcp-card"
+          style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', opacity: settings.actionsEnabled ? 1 : 0.5 }}
+        >
+          <input
+            type="checkbox"
+            checked={settings.confirmActions}
+            disabled={!settings.actionsEnabled}
+            onChange={(e) => setSettings({ ...settings, confirmActions: e.target.checked })}
+          />
+          <span>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>{t('settings.assistantConfirmActions')}</div>
+            <div style={{ fontSize: 11, color: 'var(--qcp-ink-faint)' }}>{t('settings.assistantConfirmActionsHint')}</div>
+          </span>
+        </label>
+        <label className="qcp-card" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={settings.voiceEnabled}
+            onChange={(e) => setSettings({ ...settings, voiceEnabled: e.target.checked })}
+          />
+          <span>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>🎤 {t('settings.assistantVoice')}</div>
+            <div style={{ fontSize: 11, color: 'var(--qcp-ink-faint)' }}>{t('settings.assistantVoiceHint')}</div>
+          </span>
+        </label>
+        <label
+          className="qcp-card"
+          style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', opacity: settings.voiceEnabled ? 1 : 0.5 }}
+        >
+          <input
+            type="checkbox"
+            checked={settings.voiceReplyEnabled}
+            disabled={!settings.voiceEnabled}
+            onChange={(e) => setSettings({ ...settings, voiceReplyEnabled: e.target.checked })}
+          />
+          <span>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>🔊 {t('settings.assistantVoiceReply')}</div>
+            <div style={{ fontSize: 11, color: 'var(--qcp-ink-faint)' }}>{t('settings.assistantVoiceReplyHint')}</div>
           </span>
         </label>
       </div>

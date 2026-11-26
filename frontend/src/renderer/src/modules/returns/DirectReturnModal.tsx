@@ -31,6 +31,10 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  // الصنف اللي لسه متضاف: المؤشر ينط على خانة كميته (زي شاشة البيع)
+  const focusQtyRef = useRef<number | null>(null)
+  // البحث اللي قايمة matches اتجابت بيه — لو نفس اللي اتكتب لما يدوس Enter بنضيف من غير ما نستنى السيرفر
+  const matchesTermRef = useRef('')
 
   useEffect(() => {
     window.api.catalog.listWarehouses().then((list) => {
@@ -44,13 +48,32 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
     const term = search.trim()
     if (!term || !warehouseId) {
       setMatches([])
+      matchesTermRef.current = ''
       return
     }
     const id = setTimeout(() => {
-      window.api.catalog.listProducts(term, warehouseId).then((list) => setMatches(list.slice(0, 12)))
+      window.api.catalog.listProducts(term, warehouseId).then((list) => {
+        matchesTermRef.current = term
+        setMatches(list.slice(0, 12))
+      })
     }, 200)
     return () => clearTimeout(id)
   }, [search, warehouseId])
+
+  // بعد إضافة صنف: المؤشر على كميته. وبعد اختيار العميل: المؤشر على خانة بحث الصنف
+  useEffect(() => {
+    const id = focusQtyRef.current
+    if (id == null) return
+    focusQtyRef.current = null
+    setTimeout(() => {
+      const input = document.querySelector<HTMLInputElement>(`[data-ret-qty="${id}"]`)
+      input?.focus()
+      input?.select()
+    }, 0)
+  }, [lines])
+  useEffect(() => {
+    if (customer) setTimeout(() => searchRef.current?.focus(), 0)
+  }, [customer])
 
   const customerMatches = useMemo(() => {
     const term = customerSearch.trim().toLowerCase()
@@ -60,19 +83,26 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
 
   const total = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0)
 
+  /** زي شاشة البيع: الصنف بيتضاف بكمية صفر وسعر صفر والمؤشر على الكمية (Enter ← السعر ← Enter ← بحث الصنف اللي بعده) */
   function addProduct(p: Product): void {
+    focusQtyRef.current = p.id
     setLines((prev) => {
-      const idx = prev.findIndex((l) => l.productId === p.id)
-      if (idx >= 0) {
-        const next = [...prev]
-        next[idx] = { ...next[idx], qty: String((Number(next[idx].qty) || 0) + 1) }
-        return next
-      }
-      return [...prev, { productId: p.id, name: p.name, qty: '1', unitPrice: String(p.retailPrice ?? 0) }]
+      if (prev.some((l) => l.productId === p.id)) return [...prev]
+      return [...prev, { productId: p.id, name: p.name, qty: '0', unitPrice: '0' }]
     })
     setSearch('')
     setMatches([])
-    searchRef.current?.focus()
+    matchesTermRef.current = ''
+  }
+
+  async function addFromSearch(): Promise<void> {
+    const term = search.trim()
+    if (!term || !warehouseId) return
+    let list = matches
+    if (matchesTermRef.current !== term) list = await window.api.catalog.listProducts(term, warehouseId)
+    const exact = list.find((p) => p.barcode === term)
+    const pick = exact ?? list[0]
+    if (pick) addProduct(pick)
   }
 
   function updateLine(idx: number, patch: Partial<Line>): void {
@@ -82,13 +112,16 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
   async function save(): Promise<void> {
     if (!user || !warehouseId || saving) return
     setError(null)
-    const clean = lines
-      .map((l) => ({ productId: l.productId, qty: Number(l.qty), unitPrice: Number(l.unitPrice) }))
-      .filter((l) => l.qty > 0)
-    if (!clean.length) {
-      setError('ضيف صنف واحد على الأقل بكمية أكبر من صفر')
+    if (!lines.length) {
+      setError('ضيف صنف واحد على الأقل')
       return
     }
+    const bad = lines.find((l) => !(Number(l.qty) > 0) || !(Number(l.unitPrice) > 0))
+    if (bad) {
+      setError(`الصنف «${bad.name}»: اكتب الكمية والسعر (مينفعش يبقوا صفر)`)
+      return
+    }
+    const clean = lines.map((l) => ({ productId: l.productId, qty: Number(l.qty), unitPrice: Number(l.unitPrice) }))
     if (!customer) {
       setError('اختار العميل الأول — المرتجع بيتخصم من رصيده')
       return
@@ -145,9 +178,19 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
                   style={{ width: '100%' }}
                   placeholder="👤 العميل (مطلوب) — ابحث بالاسم أو الموبايل"
                   value={customerSearch}
+                  autoFocus
                   onChange={(e) => {
                     setCustomerSearch(e.target.value)
                     setCustomerLabel(e.target.value)
+                  }}
+                  onKeyDown={(e) => {
+                    // Enter: اختار أول عميل في النتايج وانقل لبحث الصنف
+                    if (e.key === 'Enter' && customerMatches.length >= 1) {
+                      e.preventDefault()
+                      setCustomer(customerMatches[0])
+                      setCustomerSearch('')
+                      setCustomerLabel('')
+                    }
                   }}
                 />
                 {customerMatches.length > 0 && (
@@ -186,12 +229,14 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
             ref={searchRef}
             className="qcp-input"
             style={{ width: '100%' }}
-            autoFocus
             placeholder="🔍 ابحث عن الصنف بالاسم أو الباركود وضيفه للمرتجع"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && matches.length) addProduct(matches[0])
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                void addFromSearch()
+              }
             }}
           />
           {matches.length > 0 && (
@@ -222,10 +267,44 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
                 <tr key={l.productId}>
                   <td>{l.name}</td>
                   <td>
-                    <input className="qcp-input" style={{ width: '100%' }} type="number" min="0" step="any" value={l.qty} onChange={(e) => updateLine(idx, { qty: e.target.value })} />
+                    <input
+                      className="qcp-input"
+                      style={{ width: '100%' }}
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={l.qty}
+                      data-ret-qty={l.productId}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => updateLine(idx, { qty: e.target.value })}
+                      onKeyDown={(e) => {
+                        // Enter بعد الكمية: السعر
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          document.querySelector<HTMLInputElement>(`[data-ret-price="${l.productId}"]`)?.focus()
+                        }
+                      }}
+                    />
                   </td>
                   <td>
-                    <input className="qcp-input" style={{ width: '100%' }} type="number" min="0" step="any" value={l.unitPrice} onChange={(e) => updateLine(idx, { unitPrice: e.target.value })} />
+                    <input
+                      className="qcp-input"
+                      style={{ width: '100%' }}
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={l.unitPrice}
+                      data-ret-price={l.productId}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) => updateLine(idx, { unitPrice: e.target.value })}
+                      onKeyDown={(e) => {
+                        // Enter بعد السعر: ارجع لبحث الصنف اللي بعده
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          searchRef.current?.focus()
+                        }
+                      }}
+                    />
                   </td>
                   <td>{currency((Number(l.qty) || 0) * (Number(l.unitPrice) || 0))}</td>
                   <td>

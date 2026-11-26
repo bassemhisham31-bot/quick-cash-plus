@@ -14,6 +14,7 @@ function mapRow(r: any): HeldInvoice {
     userId: r.user_id != null ? Number(r.user_id) : null,
     userName: r.userName ?? null,
     customerLabel: r.customer_label ?? '',
+    customerName: r.customerName ?? null,
     itemsCount: Number(r.items_count),
     total: Number(r.total),
     note: r.note ?? null,
@@ -45,7 +46,9 @@ export async function listHeldInvoices(): Promise<HeldInvoice[]> {
   const db = getDb()
   const bf = branchFilter('h.branch_id')
   const rs = await db.execute({
-    sql: `SELECT h.*, u.full_name AS userName FROM held_invoices h LEFT JOIN users u ON u.id = h.user_id WHERE ${bf.sql} ORDER BY h.id DESC`,
+    sql: `SELECT h.*, u.full_name AS userName, CASE WHEN c.is_walk_in = 1 THEN NULL ELSE c.name END AS customerName
+          FROM held_invoices h LEFT JOIN users u ON u.id = h.user_id LEFT JOIN customers c ON c.id = h.customer_id
+          WHERE ${bf.sql} ORDER BY h.id DESC`,
     args: bf.args as any
   })
   return rs.rows.map(mapRow)
@@ -54,7 +57,8 @@ export async function listHeldInvoices(): Promise<HeldInvoice[]> {
 export async function getHeldInvoice(id: number): Promise<HeldInvoice | null> {
   const db = getDb()
   const rs = await db.execute({
-    sql: `SELECT h.*, u.full_name AS userName FROM held_invoices h LEFT JOIN users u ON u.id = h.user_id WHERE h.id = ?`,
+    sql: `SELECT h.*, u.full_name AS userName, CASE WHEN c.is_walk_in = 1 THEN NULL ELSE c.name END AS customerName
+          FROM held_invoices h LEFT JOIN users u ON u.id = h.user_id LEFT JOIN customers c ON c.id = h.customer_id WHERE h.id = ?`,
     args: [id]
   })
   if (rs.rows[0]) assertBranchAccess((rs.rows[0] as any).branch_id, 'الفاتورة المعلّقة')

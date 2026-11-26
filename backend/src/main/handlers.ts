@@ -54,7 +54,7 @@ import {
 } from './services/users'
 import { createCustomShortcut, deleteShortcut, listShortcuts, updateShortcut } from './services/shortcuts'
 import { testAssistantConnection } from './services/assistant'
-import { clearChatHistory, getChatHistory, sendAssistantMessage } from './services/assistantChat'
+import { clearChatHistory, getChatHistory, logAssistantNote, sendAssistantMessage } from './services/assistantChat'
 import { transferStock } from './services/stockTransfer'
 import {
   createPurchaseInvoice,
@@ -459,9 +459,11 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'customers:getStatement': (customerId: number) => getCustomerStatement(customerId),
     'customers:getLedger': (customerId: number, filter?: StatementFilter) => getCustomerLedger(customerId, filter ?? {}),
     'customers:statementHtml': (customerId: number, filter?: StatementFilter) => buildCustomerStatementHtml(customerId, filter ?? {}),
-    'customers:recordPayment': async (customerId: number, amount: number, method: PaymentMethod, note: string, userId: number) => {
-      const result = await recordCustomerPayment(customerId, amount, method, note, userId)
-      notifyCustomerPaymentByWhatsApp(customerId, amount, method, note).catch(() => {})
+    // treasuryId لازم يتبعت دايمًا (null = بوسيلة الدفع): السيرفر بيضيف بيانات المنفّذ كآخر باراميتر
+    'customers:recordPayment': async (customerId: number, amount: number, method: PaymentMethod, note: string, userId: number, treasuryId?: number | null) => {
+      const tId = typeof treasuryId === 'number' ? treasuryId : null
+      const result = await recordCustomerPayment(customerId, amount, method, note, userId, tId)
+      notifyCustomerPaymentByWhatsApp(customerId, amount, tId ? null : method, note).catch(() => {})
       return result
     },
     'customers:updateLoyaltyEnabled': (customerId: number, enabled: boolean) =>
@@ -650,6 +652,7 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'assistant:testConnection': () => testAssistantConnection(),
     'assistant:sendMessage': (userId: number, message: string) => sendAssistantMessage(userId, message),
     'assistant:getHistory': (userId: number) => getChatHistory(userId),
+    'assistant:logNote': (userId: number, text: string) => logAssistantNote(userId, text),
     'assistant:clearHistory': (userId: number) => clearChatHistory(userId),
 
     'settings:getWhatsApp': () => getWhatsAppSettings(),

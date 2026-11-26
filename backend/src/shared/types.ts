@@ -1489,6 +1489,8 @@ export interface HeldInvoice {
   userId: number | null
   userName: string | null
   customerLabel: string
+  /** اسم العميل المسجّل (لو مش عميل نقدي) — للعرض والبحث في قايمة الفواتير غير المرحّلة */
+  customerName?: string | null
   itemsCount: number
   total: number
   note: string | null
@@ -1781,6 +1783,14 @@ export interface AssistantSettings {
   apiUrl: string
   allowedSections: string[]
   allowedUserIds: number[]
+  /** المساعد يقدر يفتح الشاشات ويجهّز فاتورة بيع / سداد / مصروف من الكلام */
+  actionsEnabled: boolean
+  /** أي عملية بتغيّر بيانات بتستنى تأكيد المستخدم قبل التنفيذ */
+  confirmActions: boolean
+  /** زرار المايك (إدخال صوتي) */
+  voiceEnabled: boolean
+  /** المساعد يقرا ردّه بصوت */
+  voiceReplyEnabled: boolean
 }
 
 export interface AssistantConnectionTestResult {
@@ -1815,9 +1825,24 @@ export interface AssistantChatMessage {
   createdAt: string
 }
 
+/** أمر بيطلّعه المساعد وبتنفّذه الواجهة (بنفس صلاحيات المستخدم) */
+export type AssistantAction =
+  | { type: 'navigate'; view: string }
+  | {
+      type: 'pos_sale'
+      customer?: string | null
+      items: { name: string; qty?: number | null; price?: number | null }[]
+      payment?: string | null
+      finalize?: boolean
+    }
+  | { type: 'customer_payment'; customer: string; amount: number; treasury?: string | null; note?: string | null }
+  | { type: 'add_expense'; category: string; amount: number; method?: string | null; note?: string | null }
+
 export interface AssistantSendMessageResult {
   ok: boolean
   reply?: string
+  /** أوامر للتنفيذ (لو «تنفيذ العمليات» مفعّل في إعدادات المساعد) */
+  actions?: AssistantAction[]
   error?: string
 }
 

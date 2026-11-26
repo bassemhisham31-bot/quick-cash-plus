@@ -114,8 +114,8 @@ export async function listInvoices(filter: InvoiceListFilter): Promise<InvoiceLi
 
   conditions.push(filter.includeDeleted ? '1=1' : 'i.deleted_at IS NULL')
   if (filter.search.trim()) {
-    conditions.push('(i.number LIKE ? OR c.name LIKE ?)')
-    args.push(term, term)
+    conditions.push('(i.number LIKE ? OR c.name LIKE ? OR i.customer_label LIKE ?)')
+    args.push(term, term, term)
   }
   if (filter.dateFrom) {
     conditions.push("date(i.created_at, 'localtime') >= date(?)")
@@ -136,7 +136,8 @@ export async function listInvoices(filter: InvoiceListFilter): Promise<InvoiceLi
 
   const rs = await db.execute({
     sql: `SELECT i.id, i.number, i.total, i.paid, i.payment_method AS paymentMethod, i.status,
-                 i.created_at AS createdAt, i.deleted_at AS deletedAt, c.name AS customerName, i.due_date AS dueDate,
+                 i.created_at AS createdAt, i.deleted_at AS deletedAt,
+                 CASE WHEN c.is_walk_in = 1 AND i.customer_label IS NOT NULL AND i.customer_label != '' THEN i.customer_label ELSE c.name END AS customerName, i.due_date AS dueDate,
                  COALESCE(br.name, '') AS branchName
           FROM sales_invoices i
           LEFT JOIN branches br ON br.id = i.branch_id

@@ -82,6 +82,7 @@ import { migration079CustomerStatementLinks } from './migrations/079_customer_st
 import { migration080VendorAccountEntries } from './migrations/080_vendor_account_entries'
 import { migration081VendorStatementLinks } from './migrations/081_vendor_statement_links'
 import { migration082ElnasrRound3 } from './migrations/082_elnasr_round3'
+import { migration083AssistantVoiceActions } from './migrations/083_assistant_voice_actions'
 import { seedDatabase } from './seed'
 
 let db: Client | null = null
@@ -221,7 +222,8 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
   { name: '079_customer_statement_links', sql: migration079CustomerStatementLinks },
   { name: '080_vendor_account_entries', sql: migration080VendorAccountEntries },
   { name: '081_vendor_statement_links', sql: migration081VendorStatementLinks },
-  { name: '082_elnasr_round3', sql: migration082ElnasrRound3 }
+  { name: '082_elnasr_round3', sql: migration082ElnasrRound3 },
+  { name: '083_assistant_voice_actions', sql: migration083AssistantVoiceActions }
 ]
 
 async function runMigrations(client: Client): Promise<void> {
