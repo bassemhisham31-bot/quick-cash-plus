@@ -432,8 +432,16 @@ function mapPosUiRow(r: any): PosUiSettings {
     unpostedMode: r.unposted_mode == null ? true : !!r.unposted_mode,
     bulkPostEnabled: r.bulk_post_enabled == null ? true : !!r.bulk_post_enabled,
     salesRepPosEnabled: r.sales_rep_pos_enabled == null ? true : !!r.sales_rep_pos_enabled,
-    receiptStyle: r.receipt_style === 'document' ? 'document' : 'classic'
+    receiptStyle: r.receipt_style === 'document' ? 'document' : 'classic',
+    creditOnlyPayment: r.credit_only_payment == null ? true : !!r.credit_only_payment,
+    blankLineOnAdd: r.blank_line_on_add == null ? true : !!r.blank_line_on_add,
+    unpostedCopies: clampCopies(r.unposted_copies)
   }
+}
+
+function clampCopies(v: unknown): number {
+  const n = Math.round(Number(v))
+  return Number.isFinite(n) ? Math.min(9, Math.max(1, n)) : 3
 }
 
 export async function getPosUiSettings(): Promise<PosUiSettings> {
@@ -447,7 +455,8 @@ export async function updatePosUiSettings(input: PosUiSettings): Promise<PosUiSe
   await db.execute({
     sql: `UPDATE pos_ui_settings
           SET sound_enabled = ?, sound_volume = ?, allow_temp_item = ?, price_edit_enabled = ?, max_discount_percent = ?,
-              hold_invoices_enabled = ?, auto_hold_on_leave = ?, allow_negative_stock = ?, multi_warehouse_enabled = ?, category_sidebar_enabled = ?, currency_code = ?, currency_symbol = ?, purchase_list_enabled = ?, unposted_mode = ?, receipt_style = ?, sales_rep_pos_enabled = ?, bulk_post_enabled = ?
+              hold_invoices_enabled = ?, auto_hold_on_leave = ?, allow_negative_stock = ?, multi_warehouse_enabled = ?, category_sidebar_enabled = ?, currency_code = ?, currency_symbol = ?, purchase_list_enabled = ?, unposted_mode = ?, receipt_style = ?, sales_rep_pos_enabled = ?, bulk_post_enabled = ?,
+              credit_only_payment = ?, blank_line_on_add = ?, unposted_copies = ?
           WHERE id = 1`,
     args: [
       input.soundEnabled ? 1 : 0,
@@ -466,7 +475,10 @@ export async function updatePosUiSettings(input: PosUiSettings): Promise<PosUiSe
       input.unpostedMode === false ? 0 : 1,
       input.receiptStyle === 'document' ? 'document' : 'classic',
       input.salesRepPosEnabled === false ? 0 : 1,
-      input.bulkPostEnabled === false ? 0 : 1
+      input.bulkPostEnabled === false ? 0 : 1,
+      input.creditOnlyPayment === false ? 0 : 1,
+      input.blankLineOnAdd === false ? 0 : 1,
+      clampCopies(input.unpostedCopies ?? 3)
     ]
   })
   return getPosUiSettings()

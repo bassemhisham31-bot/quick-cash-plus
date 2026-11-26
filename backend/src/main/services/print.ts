@@ -358,7 +358,7 @@ export function buildOrderCheckHtml(data: OrderCheckData, printSettings: PrintSe
 </html>`
 }
 
-export async function printOrderCheck(data: OrderCheckData, preview = false): Promise<PrintResult> {
+export async function printOrderCheck(data: OrderCheckData, preview = false, copies = 1): Promise<PrintResult> {
   const [printSettings, storeSettings, posUiSettings] = await Promise.all([
     getPrintSettings(),
     getStoreSettings(),
@@ -370,7 +370,13 @@ export async function printOrderCheck(data: OrderCheckData, preview = false): Pr
     await openPreviewWindow('orderCheck', 'معاينة الشيك', html)
     return { ok: true }
   }
-  return printHtml(html, { ...printSettings, copies: 1 }, thermalWidthMm(printSettings.paperSize))
+  return printHtml(html, { ...printSettings, copies: clampPrintCopies(copies) }, thermalWidthMm(printSettings.paperSize))
+}
+
+/** عدد نسخ مطلوب من الواجهة (1–9) — أي قيمة غريبة = نسخة واحدة */
+function clampPrintCopies(copies: unknown): number {
+  const n = Math.round(Number(copies))
+  return Number.isFinite(n) ? Math.min(9, Math.max(1, n)) : 1
 }
 
 /** إيصال حجز مناسبة (عيد ميلاد…) — بيانات الحجز + الدفعات + المتبقي */
@@ -492,13 +498,13 @@ export async function printVoucher(id: number, preview = false): Promise<PrintRe
 function logPrintDebug(_message: string): void {}
 
 /** طباعة/معاينة مسودة فاتورة معلّقة (لسه ما اتدفعتش) — بنفس تصميم الشيك */
-export async function printHeldInvoice(id: number, preview = false): Promise<PrintResult> {
+export async function printHeldInvoice(id: number, preview = false, copies = 1): Promise<PrintResult> {
   const held = await getHeldInvoice(id)
   if (!held) return { ok: false, error: 'الفاتورة المعلّقة غير موجودة' }
   const taxSettings = await getTaxSettings()
   const [posUi, printSettingsForStyle] = await Promise.all([getPosUiSettings(), getPrintSettings()])
   if (posUi.receiptStyle === 'document' && thermalWidthMm(printSettingsForStyle.paperSize)) {
-    return printUnpostedDocument(held, taxSettings, preview)
+    return printUnpostedDocument(held, taxSettings, preview, copies)
   }
   const lines = held.payload.lines.map((l) => ({
     name: l.name,
@@ -533,7 +539,8 @@ export async function printHeldInvoice(id: number, preview = false): Promise<Pri
       delivery: 0,
       total: preTax + tax
     },
-    preview
+    preview,
+    copies
   )
 }
 
@@ -1801,7 +1808,7 @@ function buildDocumentReceiptHtml(d: DocReceiptData, printSettings: PrintSetting
 </html>`
 }
 
-async function emitDocumentReceipt(d: DocReceiptData, kind: string, title: string, preview: boolean): Promise<PrintResult> {
+async function emitDocumentReceipt(d: DocReceiptData, kind: string, title: string, preview: boolean, copies = 1): Promise<PrintResult> {
   const [printSettings, storeSettings] = await Promise.all([getPrintSettings(), getStoreSettings()])
   // المستند ده حراري بس — لو إعداد الورق A4/A5 بنطبعه بعرض 80مم
   const thermalSettings: PrintSettings = thermalWidthMm(printSettings.paperSize) ? printSettings : { ...printSettings, paperSize: '80mm' }
@@ -1810,14 +1817,15 @@ async function emitDocumentReceipt(d: DocReceiptData, kind: string, title: strin
     await openPreviewWindow(kind, title, html)
     return { ok: true }
   }
-  return printHtml(html, { ...thermalSettings, copies: 1 }, thermalWidthMm(thermalSettings.paperSize))
+  return printHtml(html, { ...thermalSettings, copies: clampPrintCopies(copies) }, thermalWidthMm(thermalSettings.paperSize))
 }
 
 /** فاتورة «غير مرحّلة» (محفوظة بدون ترحيل) بتصميم المستند — مابتأثرش على المخزون ولا الرصيد */
 async function printUnpostedDocument(
   held: NonNullable<Awaited<ReturnType<typeof getHeldInvoice>>>,
   taxSettings: TaxSettings,
-  preview: boolean
+  preview: boolean,
+  copies = 1
 ): Promise<PrintResult> {
   const lines = held.payload.lines.map((l) => ({
     name: l.name,
@@ -1868,7 +1876,8 @@ async function printUnpostedDocument(
     },
     'orderCheck',
     'معاينة فاتورة غير مرحّلة',
-    preview
+    preview,
+    copies
   )
 }
 

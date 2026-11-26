@@ -103,8 +103,11 @@ export function PosPage(): JSX.Element {
   const [products, setProducts] = useState<Product[]>([])
   // آخر قائمة كاملة (من غير بحث) — بنطابق منها الكود فورًا وإحنا بنكتب، من غير ما نستنى رد السيرفر
   const catalogRef = useRef<Product[]>([])
+  // البحث اللي القائمة المعروضة (products) اتجابت بيه — لو نفس اللي اتكتب لما الكاشير يدوس Enter بنضيف من غير ما نستنى السيرفر
+  const productsTermRef = useRef('')
   function applyProducts(term: string, list: Product[]): void {
     if (!term.trim()) catalogRef.current = list
+    productsTermRef.current = term.trim()
     setProducts(list)
   }
   const [search, setSearch] = useState('')
@@ -359,6 +362,25 @@ export function PosPage(): JSX.Element {
   const bulkPostEnabled = unpostedMode && posUiSettings?.bulkPostEnabled !== false
   // اختيار «المحل المسوّق» في شاشة البيع (بيتقفل من الإعدادات)
   const salesRepPosEnabled = posUiSettings?.salesRepPosEnabled !== false
+  // شاشة الدفع على «آجل» بس (وسائل الدفع التانية مخفية) — اختياري من الإعدادات
+  const creditOnlyPay = !!posUiSettings && posUiSettings.creditOnlyPayment !== false
+  const defaultPaymentMethod: PaymentMethod = creditOnlyPay ? 'credit' : 'cash'
+  // الصنف بيتضاف بكمية صفر وسعر صفر والمؤشر على الكمية — بيشتغل بس لو تعديل السعر مسموح
+  const blankLineMode = !!posUiSettings && posUiSettings.blankLineOnAdd !== false && canEditPrice
+  // بعد إضافة صنف في الوضع ده: المؤشر ينط على خانة كميته
+  const focusLineRef = useRef<number | null>(null)
+  // وقت فتح شاشة الدفع — الـEnter اللي فتحها ممكن «يكبس» زرار التأكيد (بياخد الفوكس أوتوماتيك)، فبنتجاهل أي تأكيد في أول نص ثانية
+  const paymentOpenedAtRef = useRef(0)
+  useEffect(() => {
+    const id = focusLineRef.current
+    if (id == null) return
+    focusLineRef.current = null
+    setTimeout(() => {
+      const input = document.querySelector<HTMLInputElement>(`[data-qty-input="${id}"]`)
+      input?.focus()
+      input?.select()
+    }, 0)
+  }, [cart])
   // الفاتورة غير المرحّلة اللي اتفتحت للحفظ النهائي — بتفضل محفوظة لحد ما الدفع ينجح (عشان ما تضيعش لو اتقفلت الشاشة)
   const [finalizingHeldId, setFinalizingHeldId] = useState<number | null>(null)
   const finalizingHeldRef = useRef<number | null>(null)
@@ -448,14 +470,14 @@ export function PosPage(): JSX.Element {
       setPaid('')
       setSplitRows([])
       setDueDate('')
-      setPaymentMethod('cash')
+      setPaymentMethod(defaultPaymentMethod)
       setHeldMessage(`💾 الفاتورة اتحفظت بدون ترحيل (رقم ${newId}) — بعد التحصيل افتح «غير مرحّلة» واعمل حفظ نهائي`)
       refreshHeld()
       // رسالة واتساب للعميل زي البيع بالظبط (لو واتساب مفعّل والعميل له رقم) — فشلها مابيأثرش على الحفظ
       void window.api.held.sendWhatsApp(newId).catch(() => {})
       // الطباعة في الخلفية — ما تقفلش شاشة البيع لو الطابعة/QZ Tray اتأخروا
       void window.api.held
-        .print(newId, false)
+        .print(newId, false, posUiSettings?.unpostedCopies ?? 3)
         .then((pr) => {
           if (pr && !pr.ok && pr.error) setHeldMessage(`💾 اتحفظت بدون ترحيل (رقم ${newId}) — الطباعة فشلت: ${pr.error}`)
         })
@@ -713,9 +735,14 @@ export function PosPage(): JSX.Element {
       return
     }
     if (!product.isService && sellableQty(product) <= 0 && !posUiSettings?.allowNegativeStock) return
+    // وضع الكتابة اليدوية: صنف جديد بكمية صفر وسعر صفر (وباركود الميزان بوزنه بيفضل زي ما هو)
+    const blank = blankLineMode && qty === 1 && !product.isService
+    if (blank) focusLineRef.current = product.id
     setCart((prev) => {
       const existing = prev.find((l) => l.productId === product.id)
       if (existing) {
+        // الصنف موجود: في الوضع اليدوي مابنزوّدش 1 — بس المؤشر بيروح على كميته
+        if (blank) return [...prev]
         return prev.map((l) => (l.productId === product.id ? withDiscount({ ...l, qty: l.qty + qty }) : l))
       }
       return [
@@ -724,8 +751,8 @@ export function PosPage(): JSX.Element {
           productId: product.id,
           name: product.name,
           barcode: product.barcode,
-          unitPrice: priceForTier(product, priceTier),
-          qty,
+          unitPrice: blank ? 0 : priceForTier(product, priceTier),
+          qty: blank ? 0 : qty,
           discount: 0,
           ...(product.isService ? { isService: true } : {})
         }
@@ -831,7 +858,14 @@ export function PosPage(): JSX.Element {
 
     // القائمة المعروضة بتتحدّث بعد 200ms من الكتابة — الباركود سكانر بيكتب ويدوس Enter أسرع من كده،
     // فبنجيب نتيجة البحث طازة هنا بدل ما نطابق على قائمة قديمة (ممكن تضيف صنف غلط)
-    const fresh = warehouseId ? await window.api.catalog.listProducts(term, warehouseId) : products
+    // وضع الكتابة اليدوية: لو القائمة المعروضة هي نتيجة نفس البحث نضيف فورًا — الكاشير بيبدأ يكتب الكمية على طول بعد Enter
+    // وأي تأخير في رد السيرفر كان هيخلّي الأرقام تقع في خانة البحث
+    const fresh =
+      blankLineMode && productsTermRef.current === term
+        ? products
+        : warehouseId
+          ? await window.api.catalog.listProducts(term, warehouseId)
+          : products
     const exact = fresh.find((p) => p.barcode === term)
     if (exact) {
       addToCart(exact)
@@ -880,6 +914,18 @@ export function PosPage(): JSX.Element {
   function openPayment(): void {
     if (!cart.length) return
     setError(null)
+    // وضع الكتابة اليدوية: ماينفعش الفاتورة تتدفع وفيها صنف كميته أو سعره صفر
+    if (blankLineMode) {
+      const incomplete = cart.find((l) => !l.isCommission && (!(l.qty > 0) || !(l.unitPrice > 0)))
+      if (incomplete) {
+        setError(`اكتب الكمية والسعر لصنف "${incomplete.name}" قبل الدفع`)
+        const field = incomplete.qty > 0 ? 'data-price-input' : 'data-qty-input'
+        document.querySelector<HTMLInputElement>(`[${field}="${incomplete.productId}"]`)?.focus()
+        return
+      }
+    }
+    paymentOpenedAtRef.current = Date.now()
+    if (creditOnlyPay) setPaymentMethod('credit')
     setPaid('')
     setSplitRows([])
     setDueDate(datePlusDays(30))
@@ -930,6 +976,7 @@ export function PosPage(): JSX.Element {
 
   /** زرار التأكيد في شاشة الدفع (و Enter): ترحيل عادي أو حفظ بدون ترحيل حسب اللي فتح الشاشة */
   function confirmPayment(): void {
+    if (Date.now() - paymentOpenedAtRef.current < 600) return
     if (unpostedPay) void saveUnposted()
     else void handleCheckout()
   }
@@ -1009,7 +1056,7 @@ export function PosPage(): JSX.Element {
       setPaid('')
       setSplitRows([])
       setDueDate('')
-      setPaymentMethod('cash')
+      setPaymentMethod(defaultPaymentMethod)
       setCustomerId(null)
       setRedeemPoints('0')
       setSalesRepId(null)
@@ -1039,7 +1086,7 @@ export function PosPage(): JSX.Element {
     { value: 'instapay', label: t('pos.instapay') },
     { value: 'mixed', label: 'تقسيم الدفع' },
     { value: 'credit', label: t('pos.credit') }
-  ]
+  ].filter((m) => !creditOnlyPay || m.value === 'credit' || m.value === paymentMethod) as { value: PaymentMethod; label: string }[]
 
   return (
     <div
@@ -1361,6 +1408,15 @@ export function PosPage(): JSX.Element {
                       type="number"
                       title="سعر الوحدة"
                       value={line.unitPrice}
+                      data-price-input={line.productId}
+                      onFocus={(e) => e.target.select()}
+                      onKeyDown={(e) => {
+                        // Enter بعد كتابة السعر: ارجع لخانة البحث عشان الصنف اللي بعده
+                        if (blankLineMode && e.key === 'Enter') {
+                          e.preventDefault()
+                          searchRef.current?.focus()
+                        }
+                      }}
                       onChange={(e) => updateLinePrice(line.productId, Number(e.target.value))}
                     />
                   ) : (
@@ -1374,7 +1430,16 @@ export function PosPage(): JSX.Element {
                     <button type="button" onClick={() => updateQty(line.productId, line.qty + 1)}>
                       +
                     </button>
-                    <QtyInput qty={line.qty} onCommit={(v) => updateQty(line.productId, v)} />
+                    <QtyInput
+                      qty={line.qty}
+                      lineId={line.productId}
+                      onCommit={(v) => updateQty(line.productId, v)}
+                      onEnterNext={
+                        blankLineMode
+                          ? () => document.querySelector<HTMLInputElement>(`[data-price-input="${line.productId}"]`)?.focus()
+                          : undefined
+                      }
+                    />
                     <button type="button" onClick={() => updateQty(line.productId, line.qty - 1)}>
                       −
                     </button>
@@ -1786,7 +1851,7 @@ export function PosPage(): JSX.Element {
               </div>
             </div>
 
-            <div className="rst-methods" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+            <div className="rst-methods" style={{ gridTemplateColumns: `repeat(${Math.min(4, Math.max(1, paymentMethods.length))}, 1fr)` }}>
               {paymentMethods.map((m) => (
                 <button key={m.value} type="button" className={paymentMethod === m.value ? 'active' : ''} onClick={() => selectPaymentMethod(m.value)}>
                   {PAYMENT_ICONS[m.value]} {m.label}
@@ -1802,6 +1867,7 @@ export function PosPage(): JSX.Element {
                     className="qcp-select"
                     style={{ flex: 1, minWidth: 0 }}
                     value={customerId ?? ''}
+                    autoFocus={creditOnlyPay && customerId === null}
                     onChange={(e) => selectCustomer(e.target.value ? Number(e.target.value) : null)}
                   >
                     <option value="">{t('pos.walkInCustomer')}</option>
@@ -2009,7 +2075,7 @@ export function PosPage(): JSX.Element {
                 type="button"
                 className="rst-big-btn pay"
                 style={{ flex: 2 }}
-                autoFocus={paymentMethod !== 'cash'}
+                autoFocus={paymentMethod !== 'cash' && !(creditOnlyPay && customerId === null)}
                 disabled={checkingOut}
                 onClick={confirmPayment}
               >
@@ -2095,7 +2161,18 @@ export function PosPage(): JSX.Element {
  * خانة الكمية: الرقم بيتسجل لما تدوس Enter أو تسيب الخانة — مش مع كل حرف. كده تعديل 5 لـ 12 مش بيعدّي
  * على "1" (تقليل = يطلب موافقة الأدمن)، ومسح الرقم أثناء الكتابة مش بيحذف الصنف.
  */
-function QtyInput({ qty, onCommit }: { qty: number; onCommit: (qty: number) => Promise<void> }): JSX.Element {
+function QtyInput({
+  qty,
+  lineId,
+  onCommit,
+  onEnterNext
+}: {
+  qty: number
+  lineId: number
+  onCommit: (qty: number) => Promise<void>
+  /** بعد Enter: ينقل المؤشر لخانة تانية (السعر) — بيتبعت بس في وضع الكتابة اليدوية */
+  onEnterNext?: () => void
+}): JSX.Element {
   const [text, setText] = useState(String(qty))
   const skipCommit = useRef(false)
   // أحدث كمية فعلية — بعد الحفظ أو الرفض الخانة بترجع تعرضها (مش القيمة القديمة وقت الدوسة)
@@ -2123,6 +2200,7 @@ function QtyInput({ qty, onCommit }: { qty: number; onCommit: (qty: number) => P
       type="text"
       inputMode="decimal"
       value={text}
+      data-qty-input={lineId}
       onChange={(e) => setText(e.target.value)}
       onFocus={(e) => e.target.select()}
       onBlur={commit}
@@ -2130,6 +2208,7 @@ function QtyInput({ qty, onCommit }: { qty: number; onCommit: (qty: number) => P
         if (e.key === 'Enter') {
           e.preventDefault()
           ;(e.target as HTMLInputElement).blur()
+          onEnterNext?.()
         }
         if (e.key === 'Escape') {
           skipCommit.current = true

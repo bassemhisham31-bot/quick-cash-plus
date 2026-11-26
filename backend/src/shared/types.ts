@@ -1519,6 +1519,12 @@ export interface PosUiSettings {
   salesRepPosEnabled?: boolean
   /** (ويب) تصميم الإيصال الحراري: classic الافتراضي، document = شكل المستند (جدول كمية/سعر/قيمة/خصم + رصيد العميل) */
   receiptStyle?: 'classic' | 'document'
+  /** (ويب) شاشة الدفع بتفتح على «آجل» ووسائل الدفع التانية مخفية — الافتراضي مفعّل (لو اتقفل: كل الوسائل والافتراضي نقدي) */
+  creditOnlyPayment?: boolean
+  /** (ويب) الصنف بيتضاف بكمية صفر وسعر صفر والمؤشر على الكمية (الكاشير بيكتبهم) — الافتراضي مفعّل، وبيشتغل بس لو تعديل السعر مسموح */
+  blankLineOnAdd?: boolean
+  /** (ويب) عدد نسخ الطباعة بعد «حفظ بدون ترحيل» (1–9) — الافتراضي 3 */
+  unpostedCopies?: number
 }
 
 export interface DataResetResult {

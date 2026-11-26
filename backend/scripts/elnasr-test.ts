@@ -7,14 +7,14 @@ import { join } from 'path'
 import { getDb, initDatabaseAtPath } from '../src/main/db'
 import { createProduct } from '../src/main/services/catalog'
 import { createCustomer, getCustomerLedger, getCustomerStatement, recordCustomerPayment } from '../src/main/services/customers'
-import { getOpenSession, getShiftSummaryReport, openDay } from '../src/main/services/cashSession'
+import { closeDay, getCurrentSessionSummary, getOpenSession, getShiftSummaryReport, listCloseTreasuries, openDay } from '../src/main/services/cashSession'
 import { checkout } from '../src/main/services/pos'
 import { listSalesReturns, returnInvoiceLines, getInvoiceView } from '../src/main/services/invoices'
 import { deleteHeldInvoice, holdInvoice, listHeldInvoices } from '../src/main/services/heldInvoices'
 import { createDirectReturn, getDirectReturn } from '../src/main/services/directReturns'
 import { buildCustomerStatementHtml, buildInvoiceHtml, printDirectReturn, printHeldInvoice } from '../src/main/services/print'
 import { getPosUiSettings, getPrintSettings, updatePosUiSettings, updatePrintSettings, updateStoreSettings, getStoreSettings } from '../src/main/services/settings'
-import { listTreasuries } from '../src/main/services/treasuries'
+import { createTransfer, createTreasury, createVoucher, deleteVoucher, listCashDifferences, listTreasuries } from '../src/main/services/treasuries'
 import { buildLedger } from '../src/main/services/ledger'
 import { runAccountingReport } from '../src/main/services/accountingReports'
 import { printCapture } from '../src/main/services/printContext'
@@ -197,6 +197,101 @@ async function main(): Promise<void> {
   writeFileSync(join(DATA_DIR, 'statement.html'), st.html ?? '')
   assert(st.ok && !!st.html && st.html.includes('كشف حساب عميل') && st.html.includes('عميل قطاعى') && st.html.includes('10,846.21'), 'HTML الكشف فيه العميل والرصيد النهائي')
   assert(st.html!.includes('رصيد سابق') && st.html!.includes('مرتجع بدون فاتورة'), 'الكشف فيه الرصيد السابق والمرتجعات')
+
+  console.log('\n10) خيارات شاشة البيع الجديدة (آجل فقط / سطر فاضي / نسخ غير المرحّلة)')
+  const uiNew = await getPosUiSettings()
+  assert(uiNew.creditOnlyPayment === true && uiNew.blankLineOnAdd === true && uiNew.unpostedCopies === 3, 'الافتراضي: آجل فقط + سطر فاضي + 3 نسخ')
+  await updatePosUiSettings({ ...uiNew, creditOnlyPayment: false })
+  assert((await getPosUiSettings()).creditOnlyPayment === false && (await getPosUiSettings()).blankLineOnAdd === true, 'الدفع الآجل فقط بيتقفل لوحده')
+  await updatePosUiSettings({ ...uiNew, blankLineOnAdd: false, unpostedCopies: 20 })
+  const uiClamp = await getPosUiSettings()
+  assert(uiClamp.blankLineOnAdd === false && uiClamp.creditOnlyPayment === true && uiClamp.unpostedCopies === 9, 'السطر الفاضي بيتقفل لوحده وعدد النسخ بيتقصّ على 9')
+  await updatePosUiSettings({ ...uiNew, unpostedCopies: 0 })
+  assert((await getPosUiSettings()).unpostedCopies === 1, 'عدد النسخ مش بيقل عن 1')
+  await updatePosUiSettings({ ...uiNew })
+  assert((await getPosUiSettings()).unpostedCopies === 3, 'رجعنا للإعدادات الأصلية')
+
+  console.log('\n11) طباعة غير المرحّلة: عدد النسخ')
+  const heldCopies = await holdInvoice(
+    { payload: { lines: cart as any, discountType: 'value', discountValue: 0, customerId: cust.id, customerLabel: '', warehouseId }, total: 800 },
+    adminId
+  )
+  const one = await capture(() => printHeldInvoice(heldCopies, false))
+  assert(one.jobs.length === 1 && one.jobs[0].printSettings.copies === 1, 'الطباعة اليدوية (من غير عدد) = نسخة واحدة')
+  const three = await capture(() => printHeldInvoice(heldCopies, false, 3))
+  assert(three.jobs.length === 1 && three.jobs[0].printSettings.copies === 3, 'بعد الحفظ بدون ترحيل = 3 نسخ (مهمة واحدة بعدد النسخ 3)')
+  const wild = await capture(() => printHeldInvoice(heldCopies, false, 99))
+  assert(wild.jobs[0].printSettings.copies === 9, 'أي رقم كبير بيتقصّ على 9')
+  await updatePosUiSettings({ ...(await getPosUiSettings()), receiptStyle: 'classic' })
+  const classic3 = await capture(() => printHeldInvoice(heldCopies, false, 3))
+  assert(classic3.jobs.length === 1 && classic3.jobs[0].printSettings.copies === 3, 'التصميم الكلاسيك كمان بيطبع 3 نسخ')
+  await updatePosUiSettings({ ...(await getPosUiSettings()), receiptStyle: 'document' })
+  await deleteHeldInvoice(heldCopies)
+
+  console.log('\n12) سند صرف لعميل')
+  const treasuriesNow = await listTreasuries()
+  const mainTreasury = treasuriesNow.find((t) => t.isDefault)!
+  const custBalBefore = Number(await scalar('SELECT balance AS v FROM customers WHERE id = ?', [cust.id]))
+  const mainBefore = mainTreasury.balance
+  let zeroErr = ''
+  try {
+    await createVoucher({ type: 'payment', treasuryId: mainTreasury.id, amount: 0, partyType: 'customer', partyId: cust.id }, adminId)
+  } catch (e: any) {
+    zeroErr = e.message
+  }
+  assert(zeroErr.length > 0, 'مبلغ صفر اترفض')
+  let noCustErr = ''
+  try {
+    await createVoucher({ type: 'payment', treasuryId: mainTreasury.id, amount: 50, partyType: 'customer', partyId: null }, adminId)
+  } catch (e: any) {
+    noCustErr = e.message
+  }
+  assert(noCustErr.includes('اختار العميل'), 'من غير عميل اترفض')
+  const pv = await createVoucher({ type: 'payment', treasuryId: mainTreasury.id, amount: 100, partyType: 'customer', partyId: cust.id, note: 'رد دفعة غلط' }, adminId)
+  assert(pv.partyType === 'customer' && pv.partyName === 'عميل قطاعى' && pv.number.startsWith('PV-'), 'السند اتسجل باسم العميل')
+  assert(near(Number(await scalar('SELECT balance AS v FROM customers WHERE id = ?', [cust.id])), custBalBefore + 100), 'رصيد العميل زاد 100 (عكس سند القبض)')
+  assert(near((await listTreasuries()).find((t) => t.id === mainTreasury.id)!.balance, mainBefore - 100), 'الخزينة نقصت 100')
+  const ledPv = await getCustomerLedger(cust.id, {})
+  const pvEntry = ledPv.entries.find((e) => e.description.includes(pv.number))
+  assert(!!pvEntry && near(pvEntry.debit, 100) && near(pvEntry.credit, 0), 'السند ظاهر في كارت حساب العميل (مدين 100)')
+  assert(near(ledPv.entries[ledPv.entries.length - 1].balance ?? 0, custBalBefore + 100), 'آخر رصيد جاري في الكارت = رصيد العميل')
+  const ledAfterPv = await buildLedger()
+  const pvJournal = ledAfterPv.find((e) => e.ref === pv.number)
+  assert(!!pvJournal && near(pvJournal.lines.reduce((s, l) => s + l.debit, 0), 100), 'قيد السند في دفتر اليومية')
+  assert(ledAfterPv.every((e) => near(e.lines.reduce((s, l) => s + l.debit - l.credit, 0), 0)), 'كل قيود الدفتر لسه متوازنة')
+  const stOld = await getCustomerStatement(cust.id)
+  assert(stOld.entries.some((e) => e.description.includes(pv.number)), 'الكشف القديم فيه السند كمان')
+  await deleteVoucher(pv.id)
+  assert(near(Number(await scalar('SELECT balance AS v FROM customers WHERE id = ?', [cust.id])), custBalBefore), 'إلغاء السند رجّع رصيد العميل')
+  assert(near((await listTreasuries()).find((t) => t.id === mainTreasury.id)!.balance, mainBefore), 'وإلغاؤه رجّع الخزينة')
+
+  console.log('\n13) قفل الوردية على خزينة مختارة')
+  await createTreasury({ name: 'خزينة الكاشير', kind: 'cash', openingBalance: 500, methods: [], active: true })
+  const myTreasury = (await listTreasuries()).find((t) => t.name === 'خزينة الكاشير')!
+  const choices = await listCloseTreasuries()
+  assert(choices.length >= 2 && choices.some((c) => c.id === myTreasury.id) && choices.filter((c) => c.isDefaultChoice).length === 1, 'قايمة الخزائن فيها خزينتي والافتراضية متعلّم عليها')
+  assert(choices.find((c) => c.isDefaultChoice)!.id === mainTreasury.id, 'الاختيار الأولي = الخزينة النقدية الافتراضية')
+  await createTransfer({ fromTreasuryId: mainTreasury.id, toTreasuryId: myTreasury.id, amount: 200 }, adminId)
+  const sumDefault = (await getCurrentSessionSummary())!
+  const sumMine = (await getCurrentSessionSummary(myTreasury.id))!
+  assert(near(sumMine.expectedCash, 200), `المتوقع على خزينتي = 200 (التحويل) ${sumMine.expectedCash}`)
+  assert(!near(sumDefault.expectedCash, sumMine.expectedCash), 'المتوقع على الافتراضية مختلف')
+  let badTreasury = ''
+  try {
+    await closeDay(adminId, 0, 99999)
+  } catch (e: any) {
+    badTreasury = e.message
+  }
+  assert(badTreasury.includes('الخزينة'), 'خزينة مش موجودة اترفضت')
+  assert((await getOpenSession()) != null, 'الرفض ما قفلش الوردية')
+  const closed = (await closeDay(adminId, 150, myTreasury.id))!
+  assert(near(closed.expectedCash ?? -1, 200) && near(closed.actualCash ?? -1, 150) && near(closed.cashDifference ?? 0, -50), 'الوردية اتقفلت: متوقع 200 / فعلي 150 / عجز 50')
+  assert((await getOpenSession()) == null, 'مفيش وردية مفتوحة بعد القفل')
+  const diffs = await listCashDifferences({})
+  const mine = diffs.find((d) => d.treasuryName === 'خزينة الكاشير')
+  assert(!!mine && near(mine.difference, -50), 'فرق الجرد اتسجّل على الخزينة المختارة (مش الافتراضية)')
+  assert(!diffs.some((d) => d.treasuryName === mainTreasury.name), 'ومفيش فرق اتسجل على الافتراضية')
+  assert(near((await listTreasuries()).find((t) => t.id === myTreasury.id)!.balance, 500 + 200 - 50), 'رصيد خزينتي = 500 + 200 − 50')
 
   console.log(`\nالنتيجة: ${passed} نجح / ${failed} فشل`)
   process.exit(failed ? 1 : 0)

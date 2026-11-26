@@ -165,7 +165,7 @@ import {
   resetSales,
   resetVendors
 } from './services/dataReset'
-import { closeDay, getCurrentSessionSummary, getOpenSession, listShifts, openDay } from './services/cashSession'
+import { closeDay, getCurrentSessionSummary, getOpenSession, listCloseTreasuries, listShifts, openDay } from './services/cashSession'
 import {
   getDashboardSummary,
   getExpiringProducts,
@@ -424,8 +424,11 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
 
     'cash:getOpenSession': () => getOpenSession(),
     'cash:openDay': (userId: number, openingBalance: number) => openDay(userId, openingBalance),
-    'cash:closeDay': (userId: number, actualCash: number) => closeDay(userId, actualCash),
-    'cash:getSummary': () => getCurrentSessionSummary(),
+    // treasuryId: الخزينة اللي الوردية بتتقفل عليها (null = الخزينة النقدية الافتراضية) — الواجهة بتبعتها دايمًا عشان الـactor بيتضاف في الآخر
+    'cash:closeDay': (userId: number, actualCash: number, treasuryId?: unknown) =>
+      closeDay(userId, actualCash, typeof treasuryId === 'number' ? treasuryId : null),
+    'cash:getSummary': (treasuryId?: unknown) => getCurrentSessionSummary(typeof treasuryId === 'number' ? treasuryId : null),
+    'cash:listCloseTreasuries': () => listCloseTreasuries(),
     'cash:listShifts': (filter?: { from?: string; to?: string }) => listShifts(filter ?? {}),
 
     'dashboard:getSummary': () => getDashboardSummary(),
@@ -722,7 +725,7 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
     'held:delete': (id: number) => deleteHeldInvoice(id),
     'held:sendWhatsApp': (id: number) => sendHeldInvoiceByWhatsApp(id),
     'print:voucher': (id: number, preview?: boolean) => printVoucher(id, preview === true),
-    'print:heldInvoice': (id: number, preview?: boolean) => printHeldInvoice(id, preview === true),
+    'print:heldInvoice': (id: number, preview?: boolean, copies?: number) => printHeldInvoice(id, preview === true, copies ?? 1),
     'print:receipt': (invoiceId: number) => printReceipt(invoiceId),
     'print:previewReceipt': (invoiceId: number) => previewReceipt(invoiceId),
     'print:labels': (items: { barcode: string; name: string; price: number }[]) => printBarcodeLabels(items),

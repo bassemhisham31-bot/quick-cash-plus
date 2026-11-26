@@ -328,6 +328,21 @@ export async function buildLedger(): Promise<LedgerEntry[]> {
     })
   }
 
+  // سندات صرف لعملاء: مدين ذمم العملاء / دائن الخزينة
+  const customerPayouts = await db.execute(
+    `SELECT id, created_at, amount, treasury_id, branch_id, party_name, note FROM vouchers
+     WHERE deleted_at IS NULL AND type = 'payment' AND party_type = 'customer' AND payment_id IS NULL`
+  )
+  for (const r of customerPayouts.rows as any[]) {
+    entries.push({ branchId: branchOf(r),
+      date: r.created_at,
+      ref: `PV-${String(r.id).padStart(6, '0')}`,
+      description: `صرف لـ ${r.party_name ?? 'عميل'}${r.note ? ` — ${r.note}` : ''}`,
+      source: 'سند صرف',
+      lines: [L('ar', Number(r.amount), 0, r.party_name ?? undefined), TL(Number(r.treasury_id), 0, Number(r.amount))]
+    })
+  }
+
   const transfers = await db.execute(
     'SELECT id, created_at, amount, from_treasury_id, to_treasury_id FROM treasury_transfers WHERE deleted_at IS NULL'
   )

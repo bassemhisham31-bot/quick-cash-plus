@@ -1,6 +1,6 @@
 import { getDb } from '../db'
 import { assertBranchAccess, branchesEnabled, branchFilter, currentBranchId, requireBranchId } from './branchScope'
-import { computeExpectedCash, recordCashDifference } from './treasuries'
+import { computeExpectedCash, loadTreasuryRows, recordCashDifference, resolveTreasury } from './treasuries'
 import { getSessionEventTotals } from './events'
 import { SALE_PAY_LINES_SQL } from './salePayments'
 import type { CashSessionSummary, ExpenseMethod, PaymentMethod, ShiftListRow, ShiftSummaryReport } from '../../shared/types'
@@ -84,9 +84,38 @@ async function computeCashTotals(
   }
 }
 
-export async function getCurrentSessionSummary(): Promise<CashSessionSummary | null> {
+export interface CloseTreasuryOption {
+  id: number
+  name: string
+  kind: string
+  /** الخزينة النقدية الافتراضية لفرع الوردية — الاختيار الأوّلي في شاشة قفل الوردية */
+  isDefaultChoice: boolean
+}
+
+/** الخزائن النشطة اللي الوردية تقدر تتقفل عليها (خزائن فرع الوردية المفتوحة) */
+export async function listCloseTreasuries(): Promise<CloseTreasuryOption[]> {
+  const session = await getOpenSession()
+  if (!session) return []
+  const rows = await loadTreasuryRows(false)
+  const scoped = branchesEnabled() ? rows.filter((t) => t.branchId === session.branchId) : rows
+  const defaultId = resolveTreasury(rows, 'cash', null, session.branchId)
+  return scoped.map((t) => ({ id: t.id, name: t.name, kind: t.kind, isDefaultChoice: t.id === defaultId }))
+}
+
+/** بيتأكد إن الخزينة المختارة نشطة وتابعة لفرع الوردية — بيرجّع null لو مفيش اختيار (= الافتراضية) */
+async function validateCloseTreasury(treasuryId: number | null | undefined, branchId: number): Promise<number | null> {
+  if (treasuryId == null) return null
+  const rows = await loadTreasuryRows(false)
+  const t = rows.find((x) => x.id === treasuryId)
+  if (!t) throw new Error('الخزينة المختارة غير موجودة أو غير نشطة')
+  if (branchesEnabled() && t.branchId !== branchId) throw new Error('الخزينة دي تابعة لفرع تاني')
+  return t.id
+}
+
+export async function getCurrentSessionSummary(treasuryId?: number | null): Promise<CashSessionSummary | null> {
   const session = await getOpenSession()
   if (!session) return null
+  const chosen = await validateCloseTreasury(treasuryId, session.branchId)
 
   const { cashSales, cashExpenses, tips, eventPayments, eventCashPayments } = await computeCashTotals(session.id)
 
@@ -99,16 +128,18 @@ export async function getCurrentSessionSummary(): Promise<CashSessionSummary | n
     tips,
     eventPayments,
     eventCashPayments,
-    expectedCash: await computeExpectedCash(session.openedAt, session.openingBalance, session.branchId)
+    expectedCash: await computeExpectedCash(session.openedAt, session.openingBalance, session.branchId, chosen)
   }
 }
 
-export async function closeDay(userId: number, actualCash: number): Promise<ShiftSummaryReport | null> {
+/** treasuryId: الخزينة اللي الوردية بتتقفل عليها (المتوقع بيتحسب من حركاتها وفرق الجرد بيتسجّل عليها) — فاضي = النقدية الافتراضية */
+export async function closeDay(userId: number, actualCash: number, treasuryId?: number | null): Promise<ShiftSummaryReport | null> {
   const db = getDb()
   const session = await getOpenSession()
   if (!session) return null
+  const chosen = await validateCloseTreasury(treasuryId, session.branchId)
 
-  const expected = await computeExpectedCash(session.openedAt, session.openingBalance, session.branchId)
+  const expected = await computeExpectedCash(session.openedAt, session.openingBalance, session.branchId, chosen)
 
   await db.execute({
     sql: `UPDATE cash_sessions
@@ -118,7 +149,7 @@ export async function closeDay(userId: number, actualCash: number): Promise<Shif
   })
 
   // فرق الجرد (عجز/زيادة) بيتسجّل على الخزينة الافتراضية وبيظهر في فروقات الخزينة
-  await recordCashDifference(session.id, expected, actualCash, userId).catch((err) => console.error('[cash difference]', err))
+  await recordCashDifference(session.id, expected, actualCash, userId, chosen).catch((err) => console.error('[cash difference]', err))
 
   return getShiftSummaryReport(session.id)
 }

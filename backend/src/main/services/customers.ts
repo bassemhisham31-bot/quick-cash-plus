@@ -197,6 +197,22 @@ export async function getCustomerLedger(customerId: number, filter: StatementFil
       credit: Number(r.amount)
     })
   }
+  // سندات صرف للعميل: بتزوّد اللي عليه (مدين) — عكس السداد
+  const payoutsRs = await db.execute({
+    sql: `SELECT id, amount, note, created_at AS createdAt FROM vouchers
+          WHERE deleted_at IS NULL AND type = 'payment' AND party_type = 'customer' AND payment_id IS NULL AND party_id = ?`,
+    args: [customerId]
+  })
+  for (const r of payoutsRs.rows as any[]) {
+    all.push({
+      type: 'payment',
+      id: -1000000 - Number(r.id),
+      date: r.createdAt,
+      description: `سند صرف للعميل PV-${String(r.id).padStart(6, '0')}${r.note ? ' — ' + r.note : ''}`,
+      debit: Number(r.amount),
+      credit: 0
+    })
+  }
   all.sort((a, b) => a.date.localeCompare(b.date))
 
   const balance = Number(customer.balance)
@@ -266,6 +282,21 @@ export async function getCustomerStatement(customerId: number): Promise<Statemen
       credit: Number(r.amount)
     })
   })
+  const payoutsRs = await db.execute({
+    sql: `SELECT id, amount, note, created_at AS createdAt FROM vouchers
+          WHERE deleted_at IS NULL AND type = 'payment' AND party_type = 'customer' AND payment_id IS NULL AND party_id = ?`,
+    args: [customerId]
+  })
+  for (const r of payoutsRs.rows as any[]) {
+    entries.push({
+      type: 'payment',
+      id: -1000000 - Number(r.id),
+      date: r.createdAt,
+      description: `سند صرف للعميل PV-${String(r.id).padStart(6, '0')}${r.note ? ' — ' + r.note : ''}`,
+      debit: Number(r.amount),
+      credit: 0
+    })
+  }
   entries.sort((a, b) => a.date.localeCompare(b.date))
 
   return { balance: Number(customer.balance), entries }

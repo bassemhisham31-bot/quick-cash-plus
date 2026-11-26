@@ -3034,6 +3034,42 @@ function PosUiSection(): JSX.Element {
         onChange={(v) => handleSave({ ...settings, salesRepPosEnabled: v })}
       />
       <ToggleRow
+        title="الدفع الآجل فقط في شاشة الدفع"
+        hint="شاشة الدفع بتفتح على «آجل» على طول ووسائل الدفع التانية (نقدي / بنكي / محفظة / تقسيم...) مخفية. اقفل الخيار ده لو عايز كل وسائل الدفع ترجع والافتراضي نقدي. البيع الآجل لازم له عميل مسجّل."
+        checked={settings.creditOnlyPayment !== false}
+        onChange={(v) => handleSave({ ...settings, creditOnlyPayment: v })}
+      />
+      <ToggleRow
+        title="الصنف يتضاف بكمية صفر وسعر صفر"
+        hint="لما تختار صنف وتدوس Enter بيتضاف في الفاتورة بكمية صفر وسعر صفر والمؤشر على الكمية، فتكتب الكمية والسعر بنفسك من غير ما تمسح القديم (Enter بعد الكمية بينقلك للسعر، وEnter بعد السعر بيرجعك للبحث). بيشتغل بس لو تعديل السعر مفعّل ومسموح للمستخدم، والفاتورة ماتتدفعش وفيها كمية أو سعر صفر."
+        checked={settings.blankLineOnAdd !== false}
+        onChange={(v) => handleSave({ ...settings, blankLineOnAdd: v })}
+      />
+      <div
+        className="qcp-card"
+        style={{ marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}
+      >
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 13.5 }}>عدد نسخ طباعة «حفظ بدون ترحيل»</div>
+          <div style={{ fontSize: 11.5, color: 'var(--qcp-ink-faint)', marginTop: 4 }}>
+            الفاتورة اللي بتتحفظ بدون ترحيل بتتطبع بالعدد ده من النسخ (من 1 لـ 9). زرار الطباعة اليدوي في قايمة «غير مرحّلة» بيطبع نسخة واحدة.
+          </div>
+        </div>
+        <input
+          className="qcp-input"
+          type="number"
+          min={1}
+          max={9}
+          style={{ width: 90 }}
+          defaultValue={settings.unpostedCopies ?? 3}
+          key={settings.unpostedCopies ?? 3}
+          onBlur={(e) => {
+            const v = Math.min(9, Math.max(1, Math.round(Number(e.target.value)) || 1))
+            if (v !== (settings.unpostedCopies ?? 3)) handleSave({ ...settings, unpostedCopies: v })
+          }}
+        />
+      </div>
+      <ToggleRow
         title="تصميم الإيصال الحراري: شكل المستند"
         hint="إيصال برقم المستند والحالة (تم ترحيله / لم يتم الترحيل) وجدول كمية/سعر/قيمة/خصم ورصيد العميل السابق والإجمالي. لو مقفول بيتطبع التصميم العادي."
         checked={settings.receiptStyle === 'document'}

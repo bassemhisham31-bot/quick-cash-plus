@@ -233,12 +233,29 @@ function CloseDayModal({ onClose, onClosed }: { onClose: () => void; onClosed: (
   const [printing, setPrinting] = useState(false)
   const [closeError, setCloseError] = useState<string | null>(null)
 
+  // الخزينة اللي الوردية هتتقفل عليها: المتوقع بيتحسب من حركاتها وفرق الجرد بيتسجّل عليها
+  const [treasuries, setTreasuries] = useState<{ id: number; name: string; kind: string; isDefaultChoice: boolean }[]>([])
+  const [treasuryId, setTreasuryId] = useState<number | null>(null)
+  const [treasuriesLoaded, setTreasuriesLoaded] = useState(false)
+
   useEffect(() => {
-    window.api.cash.getSummary().then((s) => {
+    window.api.cash
+      .listCloseTreasuries()
+      .then((list) => {
+        setTreasuries(list)
+        setTreasuryId(list.find((x) => x.isDefaultChoice)?.id ?? list[0]?.id ?? null)
+      })
+      .catch(() => setTreasuryId(null))
+      .finally(() => setTreasuriesLoaded(true))
+  }, [])
+
+  useEffect(() => {
+    if (!treasuriesLoaded) return
+    window.api.cash.getSummary(treasuryId).then((s) => {
       setSummary(s)
       if (s) setActualCash(String(s.expectedCash))
     })
-  }, [])
+  }, [treasuriesLoaded, treasuryId])
 
   const difference = summary ? (Number(actualCash) || 0) - summary.expectedCash : 0
 
@@ -247,7 +264,7 @@ function CloseDayModal({ onClose, onClosed }: { onClose: () => void; onClosed: (
     setSaving(true)
     setCloseError(null)
     try {
-      const report = await window.api.cash.closeDay(user.id, Number(actualCash) || 0)
+      const report = await window.api.cash.closeDay(user.id, Number(actualCash) || 0, treasuryId)
       if (!report) {
         setCloseError(t('dashboard.closeDayFailed') ?? 'تعذر إقفال الوردية — لا توجد وردية مفتوحة')
         return
@@ -353,6 +370,23 @@ function CloseDayModal({ onClose, onClosed }: { onClose: () => void; onClosed: (
 
         {summary ? (
           <>
+            {treasuries.length > 0 && (
+              <div className="qcp-field" style={{ marginBottom: 12 }}>
+                <label>🗄️ اقفل الوردية على خزينة</label>
+                <select
+                  className="qcp-select"
+                  value={treasuryId ?? ''}
+                  disabled={saving}
+                  onChange={(e) => setTreasuryId(e.target.value ? Number(e.target.value) : null)}
+                >
+                  {treasuries.map((tr) => (
+                    <option key={tr.id} value={tr.id}>
+                      {tr.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16, fontSize: 14 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>{t('dashboard.openingBalanceLabel')}</span>

@@ -255,6 +255,19 @@ async function collectMovements(treasuries: TreasuryRow[]): Promise<TreasuryMove
     )
   }
 
+  // سندات صرف لعملاء (الفلوس بتطلع من الخزينة المختارة)
+  const customerPayouts = await db.execute(
+    `SELECT id, created_at, amount, treasury_id, party_name, note FROM vouchers
+     WHERE deleted_at IS NULL AND type = 'payment' AND party_type = 'customer' AND payment_id IS NULL`
+  )
+  for (const r of customerPayouts.rows as any[]) {
+    push(
+      { ts: r.created_at, kind: 'سند صرف', ref: `PV-${String(r.id).padStart(6, '0')}`, description: `صرف لـ ${r.party_name ?? 'عميل'}${r.note ? ` — ${r.note}` : ''}`, inAmount: 0, outAmount: Number(r.amount) },
+      null,
+      Number(r.treasury_id)
+    )
+  }
+
   const transfers = await db.execute(
     `SELECT t.id, t.created_at, t.amount, t.from_treasury_id, t.to_treasury_id, f.name AS fromName, tt.name AS toName
      FROM treasury_transfers t JOIN treasuries f ON f.id = t.from_treasury_id JOIN treasuries tt ON tt.id = t.to_treasury_id
@@ -370,6 +383,14 @@ export async function createVoucher(input: VoucherInput, userId: number): Promis
       })
       paymentId = Number(p.lastInsertRowid)
       await tx.execute({ sql: 'UPDATE vendors SET balance = balance - ? WHERE id = ?', args: [amount, input.partyId] })
+    } else if (input.type === 'payment' && input.partyType === 'customer') {
+      // سند صرف لعميل (مثلاً رد فلوس دفعها بالغلط أو رصيد دائن له): الفلوس بتطلع من الخزينة ورصيد العميل بيزيد بنفس المبلغ
+      // (عكس سند القبض) — يعني اللي عليه بيزيد أو اللي له بيقل
+      if (!input.partyId) throw new Error('اختار العميل')
+      const c = await tx.execute({ sql: 'SELECT name FROM customers WHERE id = ? AND deleted_at IS NULL', args: [input.partyId] })
+      if (!c.rows[0]) throw new Error('العميل غير موجود')
+      partyName = (c.rows[0] as any).name
+      await tx.execute({ sql: 'UPDATE customers SET balance = balance + ? WHERE id = ?', args: [amount, input.partyId] })
     } else if (input.type === 'payment' && input.partyType === 'other') {
       // سند صرف "أخرى" = مصروف عادي (بيظهر في شاشة المصروفات والتقارير)
       const session = await tx.execute({
@@ -477,6 +498,10 @@ export async function deleteVoucher(id: number): Promise<void> {
     if (v.expense_id) {
       await tx.execute({ sql: "UPDATE expenses SET deleted_at = datetime('now') WHERE id = ?", args: [v.expense_id] })
     }
+    // سند صرف لعميل (من غير payments): إلغاؤه بيرجّع رصيد العميل زي ما كان
+    if (!v.payment_id && v.type === 'payment' && v.party_type === 'customer' && v.party_id) {
+      await tx.execute({ sql: 'UPDATE customers SET balance = balance - ? WHERE id = ?', args: [Number(v.amount), Number(v.party_id)] })
+    }
     await tx.execute({ sql: "UPDATE vouchers SET deleted_at = datetime('now') WHERE id = ?", args: [id] })
     await tx.commit()
   } catch (err) {
@@ -532,12 +557,18 @@ export async function deleteTransfer(id: number): Promise<void> {
 /* ------------------------------- فروقات الخزينة ------------------------------- */
 
 /** بيتنادى عند قفل اليوم: فرق الجرد (الفعلي − المتوقع) بيتسجّل على الخزينة الافتراضية كعجز/زيادة */
-export async function recordCashDifference(sessionId: number, expected: number, actual: number, userId: number): Promise<void> {
+export async function recordCashDifference(
+  sessionId: number,
+  expected: number,
+  actual: number,
+  userId: number,
+  chosenTreasuryId?: number | null
+): Promise<void> {
   const difference = Math.round((actual - expected) * 100) / 100
   if (difference === 0) return
   const treasuries = await loadTreasuryRows(false)
   const sessionRs = await getDb().execute({ sql: 'SELECT branch_id FROM cash_sessions WHERE id = ?', args: [sessionId] })
-  const treasuryId = resolveTreasury(treasuries, 'cash', null, Number((sessionRs.rows[0] as any)?.branch_id) || 1)
+  const treasuryId = resolveTreasury(treasuries, 'cash', chosenTreasuryId ?? null, Number((sessionRs.rows[0] as any)?.branch_id) || 1)
   if (treasuryId == null) return
   await getDb().execute({
     sql: `INSERT OR REPLACE INTO cash_differences (session_id, treasury_id, expected, actual, difference, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -579,9 +610,15 @@ export async function listCashDifferences(filter: { from?: string; to?: string }
  * الرصيد المتوقع في درج الخزينة النقدية الافتراضية لوردية: الافتتاحي + كل حركة نقدية من وقت فتح الوردية
  * (مبيعات، تحصيلات، سندات، مصروفات، مدفوعات موردين، مشتريات، مرتجعات، تحويلات) — مش بس المبيعات والمصروفات.
  */
-export async function computeExpectedCash(openedAt: string, openingBalance: number, branchId?: number | null): Promise<number> {
+export async function computeExpectedCash(
+  openedAt: string,
+  openingBalance: number,
+  branchId?: number | null,
+  chosenTreasuryId?: number | null
+): Promise<number> {
   const treasuries = await loadTreasuryRows(false)
-  const cashId = resolveTreasury(treasuries, 'cash', null, branchId)
+  // الخزينة اللي اختارها المستخدم وقت قفل الوردية (لو موجودة ونشطة) بدل النقدية الافتراضية
+  const cashId = resolveTreasury(treasuries, 'cash', chosenTreasuryId ?? null, branchId)
   const movements = await collectMovements(treasuries)
   const net = movements
     .filter((m) => m.treasuryId === cashId && m.ts >= openedAt && !m.kind.includes('خزينة'))

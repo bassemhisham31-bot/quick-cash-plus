@@ -81,6 +81,7 @@ import { migration077BulkPostOption } from './migrations/077_bulk_post_option'
 import { migration079CustomerStatementLinks } from './migrations/079_customer_statement_links'
 import { migration080VendorAccountEntries } from './migrations/080_vendor_account_entries'
 import { migration081VendorStatementLinks } from './migrations/081_vendor_statement_links'
+import { migration082ElnasrRound3 } from './migrations/082_elnasr_round3'
 import { seedDatabase } from './seed'
 
 let db: Client | null = null
@@ -219,7 +220,8 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
   { name: '077_bulk_post_option', sql: migration077BulkPostOption },
   { name: '079_customer_statement_links', sql: migration079CustomerStatementLinks },
   { name: '080_vendor_account_entries', sql: migration080VendorAccountEntries },
-  { name: '081_vendor_statement_links', sql: migration081VendorStatementLinks }
+  { name: '081_vendor_statement_links', sql: migration081VendorStatementLinks },
+  { name: '082_elnasr_round3', sql: migration082ElnasrRound3 }
 ]
 
 async function runMigrations(client: Client): Promise<void> {

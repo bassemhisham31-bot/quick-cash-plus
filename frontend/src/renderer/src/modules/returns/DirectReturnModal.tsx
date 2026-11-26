@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '../../store/appStore'
 import { formatCurrency as currency } from '../../lib/currency'
-import { alertDialog } from '../../components/ConfirmDialogHost'
 import type { CustomerView, Product, Warehouse } from '../../../../shared/types'
 
 interface Line {
@@ -16,7 +15,7 @@ interface Props {
   onSaved: () => void
 }
 
-/** مرتجع مبيعات بدون فاتورة: أصناف + عميل اختياري، رد نقدي أو خصم من رصيد العميل، وبيتطبع بعد الحفظ. */
+/** مرتجع مبيعات بدون فاتورة: أصناف + عميل (مطلوب)، والمرتجع بيتخصم من رصيد العميل دايمًا (مفيش رد نقدي من الخزينة) — حفظ بس من غير طباعة. */
 export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
   const user = useAppStore((s) => s.user)
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
@@ -28,9 +27,7 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
   const [search, setSearch] = useState('')
   const [matches, setMatches] = useState<Product[]>([])
   const [lines, setLines] = useState<Line[]>([])
-  const [refundMethod, setRefundMethod] = useState<'cash' | 'credit'>('cash')
   const [note, setNote] = useState('')
-  const [printAfter, setPrintAfter] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -92,18 +89,17 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
       setError('ضيف صنف واحد على الأقل بكمية أكبر من صفر')
       return
     }
-    if (refundMethod === 'credit' && !customer) {
-      setError('الخصم من الرصيد محتاج عميل مسجّل — اختار العميل الأول')
+    if (!customer) {
+      setError('اختار العميل الأول — المرتجع بيتخصم من رصيده')
       return
     }
     setSaving(true)
     try {
       const result = await window.api.invoices.createDirectReturn(
         {
-          customerId: customer?.id ?? null,
-          customerLabel: customer ? undefined : customerLabel,
+          customerId: customer.id,
           warehouseId,
-          refundMethod,
+          refundMethod: 'credit',
           note,
           lines: clean
         },
@@ -112,10 +108,6 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
       if (!result.ok || !result.returnId) {
         setError(result.error ?? 'تعذر تسجيل المرتجع')
         return
-      }
-      if (printAfter) {
-        const pr = await window.api.invoices.printDirectReturn(result.returnId, false)
-        if (pr && !pr.ok && pr.error) await alertDialog(`المرتجع اتسجل (${result.number}) لكن الطباعة فشلت: ${pr.error}`)
       }
       onSaved()
       onClose()
@@ -141,10 +133,7 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
                 <button
                   type="button"
                   className="qcp-btn qcp-btn-secondary"
-                  onClick={() => {
-                    setCustomer(null)
-                    setRefundMethod('cash')
-                  }}
+                  onClick={() => setCustomer(null)}
                 >
                   تغيير
                 </button>
@@ -154,7 +143,7 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
                 <input
                   className="qcp-input"
                   style={{ width: '100%' }}
-                  placeholder="👤 العميل (اختياري) — ابحث بالاسم أو الموبايل"
+                  placeholder="👤 العميل (مطلوب) — ابحث بالاسم أو الموبايل"
                   value={customerSearch}
                   onChange={(e) => {
                     setCustomerSearch(e.target.value)
@@ -258,27 +247,17 @@ export function DirectReturnModal({ onClose, onSaved }: Props): JSX.Element {
         </div>
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 12 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-            طريقة الرد
-            <select className="qcp-select" value={refundMethod} onChange={(e) => setRefundMethod(e.target.value as 'cash' | 'credit')}>
-              <option value="cash">رد نقدي من الخزينة</option>
-              <option value="credit" disabled={!customer}>
-                خصم من رصيد العميل
-              </option>
-            </select>
-          </label>
+          <span className="qcp-pill accent" style={{ fontSize: 13 }}>
+            ↩️ بيتخصم من رصيد العميل
+          </span>
           <input className="qcp-input" style={{ flex: 1, minWidth: 160 }} placeholder="ملاحظات / سبب المرتجع" value={note} onChange={(e) => setNote(e.target.value)} />
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-            <input type="checkbox" checked={printAfter} onChange={(e) => setPrintAfter(e.target.checked)} />
-            طباعة بعد الحفظ
-          </label>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
           <strong style={{ fontSize: 18, color: 'var(--qcp-critical)' }}>إجمالي المرتجع: {currency(total)}</strong>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" className="qcp-btn qcp-btn-primary" disabled={saving || !lines.length} onClick={save}>
-              {saving ? '...جاري الحفظ' : printAfter ? '✓ حفظ وطباعة' : '✓ حفظ'}
+            <button type="button" className="qcp-btn qcp-btn-primary" disabled={saving || !lines.length || !customer} onClick={save}>
+              {saving ? '...جاري الحفظ' : '✓ حفظ'}
             </button>
             <button type="button" className="qcp-btn qcp-btn-secondary" onClick={onClose}>
               إلغاء

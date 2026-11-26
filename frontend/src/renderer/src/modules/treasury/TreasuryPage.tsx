@@ -413,8 +413,10 @@ function VoucherForm({
         ]
       : [
           { value: 'vendor', label: 'سداد لمورد' },
+          { value: 'customer', label: 'صرف لعميل' },
           { value: 'other', label: 'مصروف' }
         ]
+  const pickedCustomer = partyType === 'customer' && partyId !== '' ? customers.find((c) => c.id === partyId) : undefined
 
   return (
     <div className="qcp-modal-backdrop" onClick={onClose}>
@@ -453,6 +455,14 @@ function VoucherForm({
                 </option>
               ))}
             </select>
+            {type === 'payment' && (
+              <div style={{ fontSize: 12, color: 'var(--qcp-ink-muted)', marginTop: 6 }}>
+                الفلوس بتطلع من الخزينة ورصيد العميل بيزيد بنفس المبلغ (عكس سند القبض)
+                {pickedCustomer && Number(amount) > 0
+                  ? ` — رصيده ${currency(pickedCustomer.balance)} ← ${currency(pickedCustomer.balance + Number(amount))}`
+                  : ''}
+              </div>
+            )}
           </div>
         )}
         {partyType === 'vendor' && (

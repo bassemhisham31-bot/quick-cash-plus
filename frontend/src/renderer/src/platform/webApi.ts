@@ -674,7 +674,7 @@ const api = {
     get: (id: number): Promise<HeldInvoice | null> => invoke('held:get', id),
     delete: (id: number): Promise<void> => invoke('held:delete', id),
     sendWhatsApp: (id: number): Promise<WhatsAppSendResult> => invoke('held:sendWhatsApp', id),
-    print: (id: number, preview = false): Promise<{ ok: boolean; error?: string }> => invoke('print:heldInvoice', id, preview)
+    print: (id: number, preview = false, copies = 1): Promise<{ ok: boolean; error?: string }> => invoke('print:heldInvoice', id, preview, copies)
   },
   session: {
     setActiveUser: (_id?: number, _username?: string): void => {
@@ -813,9 +813,12 @@ const api = {
     getOpenSession: (): Promise<CashSessionView | null> => invoke('cash:getOpenSession'),
     openDay: (userId: number, openingBalance: number): Promise<CashSessionView> =>
       invoke('cash:openDay', userId, openingBalance),
-    closeDay: (userId: number, actualCash: number): Promise<ShiftSummaryReport | null> =>
-      invoke('cash:closeDay', userId, actualCash),
-    getSummary: (): Promise<CashSessionSummary | null> => invoke('cash:getSummary'),
+    // treasuryId لازم يتبعت دايمًا (null = الافتراضية): السيرفر بيضيف بيانات المنفّذ كآخر باراميتر في القنوات اللي بتغيّر بيانات
+    closeDay: (userId: number, actualCash: number, treasuryId: number | null = null): Promise<ShiftSummaryReport | null> =>
+      invoke('cash:closeDay', userId, actualCash, treasuryId),
+    getSummary: (treasuryId: number | null = null): Promise<CashSessionSummary | null> => invoke('cash:getSummary', treasuryId),
+    listCloseTreasuries: (): Promise<{ id: number; name: string; kind: string; isDefaultChoice: boolean }[]> =>
+      invoke('cash:listCloseTreasuries'),
     listShifts: (filter?: { from?: string; to?: string }): Promise<ShiftListRow[]> =>
       invoke('cash:listShifts', filter)
   },
