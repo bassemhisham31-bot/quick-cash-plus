@@ -111,7 +111,8 @@ repl("invoke('catalog:exportProducts')", "exportFile('catalog:exportProducts')")
 repl("invoke('catalog:exportProductsTemplate')", "exportFile('catalog:exportProductsTemplate')")
 repl("invoke('catalog:importProducts')", "importProductsFile()")
 repl("invoke('reports:exportExcel', report)", "exportFile('reports:exportExcel', report)")
-repl("invoke('reports:exportPdf', report)", "exportPdf(report)")
+// الـprelude (فوق) فيه الدالة exportPdf نفسها وبتنادي invoke('reports:exportPdf') — الاستبدال لازم يطال سطر الـAPI بس، وإلا الدالة بتنادي نفسها (stack overflow).
+repl("=> invoke('reports:exportPdf', report)", "=> exportPdf(report)")
 
 // ---- tail: network ... relaunchApp  (taken from the previous web implementation)
 const webTail = norm(fs.readFileSync(__dirname + '/web-tail.txt', 'utf8'))
