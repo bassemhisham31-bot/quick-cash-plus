@@ -2544,13 +2544,15 @@ function AssistantSection(): JSX.Element {
                 type="button"
                 onClick={() => {
                   const preset = ASSISTANT_PRESETS[p.key]
-                  const isDefaultValue = (url: string, model: string): boolean =>
-                    (!url.trim() && !model.trim()) ||
-                    Object.values(ASSISTANT_PRESETS).some((x) => x.apiUrl === url.trim() && x.modelName === model.trim())
+                  // الرابط والموديل بيتبدّلوا كل واحد لوحده: لو القيمة فاضية أو هي افتراضية لمزود تاني (مش مخصّصة)
+                  const presets = Object.values(ASSISTANT_PRESETS)
+                  const urlIsDefault = !settings.apiUrl.trim() || presets.some((x) => x.apiUrl === settings.apiUrl.trim())
+                  const modelIsDefault = !settings.modelName.trim() || presets.some((x) => x.modelName === settings.modelName.trim())
                   setSettings({
                     ...settings,
                     provider: p.key,
-                    ...(preset && isDefaultValue(settings.apiUrl, settings.modelName) ? preset : {})
+                    ...(preset && urlIsDefault ? { apiUrl: preset.apiUrl } : {}),
+                    ...(preset && modelIsDefault ? { modelName: preset.modelName } : {})
                   })
                 }}
                 style={{
