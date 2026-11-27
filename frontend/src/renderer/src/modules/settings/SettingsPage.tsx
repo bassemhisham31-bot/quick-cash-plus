@@ -2437,7 +2437,7 @@ const ASSISTANT_PROVIDERS: { key: AssistantProvider; name: string; desc: string 
 /** الموديل والرابط الافتراضيين لكل مزود — اختيار المزود بيملاهم تلقائيًا (من غير ما يمسح قيمة مخصّصة كتبها المستخدم) */
 const ASSISTANT_PRESETS: Record<string, { apiUrl: string; modelName: string }> = {
   openai: { apiUrl: 'https://api.openai.com/v1', modelName: 'gpt-4.1-mini' },
-  groq: { apiUrl: 'https://api.groq.com/openai/v1', modelName: 'llama-3.3-70b-versatile' },
+  groq: { apiUrl: 'https://api.groq.com/openai/v1', modelName: 'openai/gpt-oss-120b' },
   gemini: { apiUrl: 'https://generativelanguage.googleapis.com/v1beta', modelName: 'gemini-2.0-flash' }
 }
 
