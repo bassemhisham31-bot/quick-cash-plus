@@ -5,7 +5,7 @@ import { isViewAllowed, VIEW_ORDER } from './permissions'
 import { confirmDialog } from '../components/ConfirmDialogHost'
 import { formatCurrency } from './currency'
 import { waitForPosBridge } from './assistantBridge'
-import type { AssistantAction, AssistantSettings, ExpenseInput, PaymentMethod, SessionUser } from '../../../shared/types'
+import type { AssistantAction, AssistantSettings, ExpenseInput, PaymentMethod, ReportType, SessionUser } from '../../../shared/types'
 
 /** تنظيف عربي للمطابقة: تشكيل، همزات، تاء مربوطة، ياء، مسافات */
 export function normalizeArabic(text: string): string {
@@ -183,6 +183,97 @@ async function addExpense(action: Extract<AssistantAction, { type: 'add_expense'
   return `✅ اتسجّل مصروف ${m.item.name} بمبلغ ${formatCurrency(action.amount)} (${METHOD_LABELS[method]})`
 }
 
+async function addCustomer(action: Extract<AssistantAction, { type: 'add_customer' }>, ctx: ActionContext): Promise<string> {
+  if (!isViewAllowed(ctx.user, 'customers', ctx.disabledFeatures)) return '⛔ مفيش صلاحية لإضافة عملاء'
+  const existing = await window.api.customers.list(action.name)
+  const dup = existing.find((c) => normalizeArabic(c.name) === normalizeArabic(action.name))
+  if (dup) return `⚠️ فيه عميل بنفس الاسم بالفعل («${dup.name}») — ما أضفتوش تاني`
+  const phone = (action.phone ?? '').replace(/\s+/g, '')
+  if (ctx.settings.confirmActions) {
+    const details = [phone && `موبايل ${phone}`, action.openingBalance ? `رصيد ${formatCurrency(action.openingBalance)}` : ''].filter(Boolean).join('، ')
+    const ok = await confirmDialog(`إضافة عميل جديد «${action.name}»${details ? ` (${details})` : ''}؟`)
+    if (!ok) return '↩️ اتلغت إضافة العميل'
+  }
+  const created = await window.api.customers.create({
+    name: action.name,
+    phone,
+    address: action.address ?? '',
+    notes: action.notes ?? '',
+    openingBalance: action.openingBalance ?? 0,
+    loyaltyEnabled: true
+  })
+  return `✅ اتضاف العميل ${created.name}${phone ? ` (${phone})` : ''}`
+}
+
+async function addProduct(action: Extract<AssistantAction, { type: 'add_product' }>, ctx: ActionContext): Promise<string> {
+  if (!isViewAllowed(ctx.user, 'inventory', ctx.disabledFeatures)) return '⛔ مفيش صلاحية لإضافة أصناف'
+  const warehouses = await window.api.catalog.listWarehouses()
+  const warehouse = warehouses.find((w) => w.isDefault) ?? warehouses[0]
+  if (!warehouse) return '⚠️ مفيش مخزن'
+  const same = (await window.api.catalog.listProducts(action.name, warehouse.id)).find((p) => normalizeArabic(p.name) === normalizeArabic(action.name))
+  if (same) return `⚠️ فيه صنف بنفس الاسم بالفعل («${same.name}») — ما أضفتوش تاني`
+  const notes: string[] = []
+  let categoryId: number | null = null
+  if (action.category) {
+    const m = bestMatch(await window.api.catalog.listCategories(), action.category, (c) => c.name)
+    if (m) categoryId = m.item.id
+    else notes.push(`التصنيف «${action.category}» مش موجود — اتحط من غير تصنيف`)
+  }
+  let unitId: number | null = null
+  if (action.unit) {
+    const m = bestMatch(await window.api.catalog.listUnits(), action.unit, (u) => u.name)
+    if (m) unitId = m.item.id
+    else notes.push(`الوحدة «${action.unit}» مش موجودة — اتحط من غير وحدة`)
+  }
+  const retail = action.retailPrice ?? 0
+  const cost = action.costPrice ?? 0
+  const qty = action.quantity ?? 0
+  if (ctx.settings.confirmActions) {
+    const ok = await confirmDialog(`إضافة صنف جديد «${action.name}» — بيع ${formatCurrency(retail)}، شراء ${formatCurrency(cost)}، كمية ${qty}؟`)
+    if (!ok) return '↩️ اتلغت إضافة الصنف'
+  }
+  const p = await window.api.catalog.createProduct({
+    name: action.name,
+    barcode: action.barcode ?? '',
+    categoryId,
+    unitId,
+    vendorId: null,
+    costPrice: cost,
+    retailPrice: retail,
+    wholesalePrice: 0,
+    wholesale2Price: 0,
+    packPrice: 0,
+    openingQuantity: qty,
+    reorderPoint: 0,
+    warehouseId: warehouse.id,
+    expiryDate: null,
+    serialNumber: null,
+    showInPos: true,
+    serialTrackingEnabled: false,
+    imageDataUrl: null
+  })
+  return `✅ اتضاف الصنف ${p.name} (باركود ${p.barcode}) — بيع ${formatCurrency(retail)}، شراء ${formatCurrency(cost)}، كمية ${qty}${notes.length ? ` (${notes.join('، ')})` : ''}`
+}
+
+/** عرض تقرير في المحادثة: العنوان + الإجماليات + أول الصفوف */
+async function showReport(action: Extract<AssistantAction, { type: 'show_report' }>, ctx: ActionContext): Promise<string> {
+  if (!isViewAllowed(ctx.user, 'reports', ctx.disabledFeatures)) return '⛔ مفيش صلاحية للتقارير'
+  const today = new Date().toISOString().slice(0, 10)
+  const from = action.from ?? today
+  const to = action.to ?? action.from ?? today
+  const r = await window.api.reports.run(action.report as ReportType, { dateFrom: from, dateTo: to, warehouseId: null })
+  const label = (key: string): string => r.columns.find((c) => c.key === key)?.label ?? key
+  const lines = [`📊 ${r.title} (${from}${to !== from ? ` ← ${to}` : ''})`]
+  if (r.totals) {
+    for (const [k, v] of Object.entries(r.totals)) lines.push(`• ${label(k)}: ${typeof v === 'number' ? v.toLocaleString('en-US', { maximumFractionDigits: 2 }) : v}`)
+  }
+  const rows = r.rows.filter((row) => !row._subtotal)
+  for (const row of rows.slice(0, 8)) lines.push('– ' + r.columns.slice(0, 4).map((c) => String(row[c.key] ?? '')).join(' | '))
+  if (rows.length > 8) lines.push(`… و${rows.length - 8} صف كمان — التفاصيل الكاملة من شاشة التقارير`)
+  if (!r.totals && !rows.length) lines.push('مفيش بيانات في الفترة دي')
+  return lines.join('\n')
+}
+
 /** بينفّذ الأوامر بالترتيب وبيرجّع سطور النتيجة (نجاح/تحذير) اللي هتتعرض للمستخدم */
 export async function executeAssistantActions(actions: AssistantAction[], ctx: ActionContext): Promise<string[]> {
   const out: string[] = []
@@ -192,6 +283,9 @@ export async function executeAssistantActions(actions: AssistantAction[], ctx: A
       else if (action.type === 'pos_sale') out.push(...(await posSale(action, ctx)))
       else if (action.type === 'customer_payment') out.push(await customerPayment(action, ctx))
       else if (action.type === 'add_expense') out.push(await addExpense(action, ctx))
+      else if (action.type === 'add_customer') out.push(await addCustomer(action, ctx))
+      else if (action.type === 'add_product') out.push(await addProduct(action, ctx))
+      else if (action.type === 'show_report') out.push(await showReport(action, ctx))
     } catch (err: any) {
       out.push(`⚠️ تعذر تنفيذ الأمر: ${err?.message ?? 'خطأ غير معروف'}`)
     }

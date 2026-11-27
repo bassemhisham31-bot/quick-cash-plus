@@ -85,6 +85,12 @@ const ACTIONS_PROMPT = `
    بيفتح شاشة البيع ويضيف الأصناف (والعميل لو مذكور) ويفتح شاشة الدفع. "finalize":true معناها يحفظ الفاتورة نهائيًا.
 3) سداد من عميل: {"type":"customer_payment","customer":"اسم العميل","amount":رقم,"treasury":"اسم الخزينة أو null","note":"ملاحظة أو null"}
 4) تسجيل مصروف: {"type":"add_expense","category":"اسم بند المصروف","amount":رقم,"method":"cash|card|wallet|transfer","note":"ملاحظة أو null"}
+5) إضافة عميل جديد: {"type":"add_customer","name":"اسم العميل","phone":"رقم الموبايل أو null","address":"العنوان أو null","notes":"ملاحظات أو null","openingBalance":رقم أو null}
+   openingBalance = رصيد أول المدة (اللي عليه) ويبقى null إلا لو المستخدم ذكره.
+6) إضافة صنف جديد: {"type":"add_product","name":"اسم الصنف","barcode":"الباركود أو null","category":"التصنيف أو null","unit":"الوحدة أو null","costPrice":سعر الشراء أو null,"retailPrice":سعر البيع أو null,"quantity":الكمية الافتتاحية أو null}
+7) عرض تقرير في المحادثة: {"type":"show_report","report":"<نوع التقرير>","from":"YYYY-MM-DD أو null","to":"YYYY-MM-DD أو null"}
+   أنواع التقارير: sales_summary (ملخص المبيعات), profit_loss (الأرباح والخسائر), monthly_expenses (المصروفات الشهرية), product_performance (أداء المنتجات), payment_methods (طرق الدفع), financial_summary (الملخص المالي), receivables_payables (مديونيات العملاء والموردين), top_customers (أفضل العملاء), inventory_status (حالة المخزون), customer_daily_debts (مديونيات العملاء خلال اليوم), sales_by_employee (المبيعات حسب الكاشير), customers_analysis (تحليل العملاء), vendors_report (الموردين), cash_drawer_sessions (جلسات الخزنة), purchases_detailed (المشتريات).
+   لو التاريخ مش مذكور خلّيه null (= النهاردة). استخدم تاريخ النهاردة المذكور تحت لحساب «الشهر ده» و«أمس» وغيرهم.
 
 قواعد صارمة:
 - ما تخترعش أسماء أصناف أو عملاء أو مبالغ: استخدم اللي المستخدم قاله بالظبط. لو الكمية مش مذكورة خليها 1. "price" يبقى null إلا لو المستخدم حدد سعر.
@@ -93,10 +99,16 @@ const ACTIONS_PROMPT = `
 - ممنوع تنفّذ حذف أو تعديل بيانات أو أي حاجة مش في القايمة دي — اعتذر ووجّهه للشاشة المناسبة.
 `
 
+export const ASSISTANT_REPORTS = [
+  'sales_summary', 'profit_loss', 'monthly_expenses', 'product_performance', 'payment_methods', 'financial_summary',
+  'receivables_payables', 'top_customers', 'inventory_status', 'customer_daily_debts', 'sales_by_employee',
+  'customers_analysis', 'vendors_report', 'cash_drawer_sessions', 'purchases_detailed'
+]
+
 function buildSystemPrompt(storeContext: string, actionsEnabled = false): string {
   const brand = `إنت "مساعد ${brandName()}" — ` + 'مساعد ذكاء اصطناعي جوه نظام ERP/POS لإدارة متجر. جاوب بالعربية دايمًا، باختصار ووضوح ومباشر. '
   const base = actionsEnabled
-    ? brand + 'بتحلّل بيانات المتجر وبتنفّذ العمليات اللي المستخدم يطلبها بالأوامر الموضّحة تحت.\n' + ACTIONS_PROMPT
+    ? brand + `بتحلّل بيانات المتجر وبتنفّذ العمليات اللي المستخدم يطلبها بالأوامر الموضّحة تحت. تاريخ النهاردة: ${new Date().toISOString().slice(0, 10)}.\n` + ACTIONS_PROMPT
     : brand +
       'دورك استشاري وتحليلي بس (قراءة وشرح وتحليل) — مفيش عندك أي صلاحية لتنفيذ أي عملية فعلية جوه النظام (بيع، حذف، تعديل سعر أو بيانات...). ' +
       'لو حد طلب منك تنفّذ حاجة فعليًا، اعتذر بوضوح ووجّهه للشاشة المناسبة عشان ينفّذها بنفسه.'
@@ -192,6 +204,23 @@ export function sanitizeAssistantActions(raw: unknown): AssistantAction[] {
       const customer = str(a.customer)
       const amount = num(a.amount)
       if (customer && amount != null && amount > 0) out.push({ type: 'customer_payment', customer, amount, treasury: str(a.treasury), note: str(a.note) })
+    } else if (a.type === 'add_product') {
+      const name = str(a.name)
+      const nn = (v: unknown): number | null => {
+        const n = num(v)
+        return n != null && n >= 0 ? n : null
+      }
+      if (name) {
+        out.push({ type: 'add_product', name, barcode: str(a.barcode), category: str(a.category), unit: str(a.unit), costPrice: nn(a.costPrice), retailPrice: nn(a.retailPrice), quantity: nn(a.quantity) })
+      }
+    } else if (a.type === 'show_report') {
+      const report = str(a.report)
+      const date = (v: unknown): string | null => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? v.trim() : null)
+      if (report && ASSISTANT_REPORTS.includes(report)) out.push({ type: 'show_report', report, from: date(a.from), to: date(a.to) })
+    } else if (a.type === 'add_customer') {
+      const name = str(a.name)
+      const opening = num(a.openingBalance)
+      if (name) out.push({ type: 'add_customer', name, phone: str(a.phone), address: str(a.address), notes: str(a.notes), openingBalance: opening != null && opening !== 0 ? opening : null })
     } else if (a.type === 'add_expense') {
       const category = str(a.category)
       const amount = num(a.amount)

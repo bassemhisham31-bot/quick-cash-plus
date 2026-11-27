@@ -131,6 +131,15 @@ async function main(): Promise<void> {
   const p5 = parseAssistantOutput('{ "reply": "ده مش JSON سليم", ')
   assert(p5.actions.length === 0 && p5.reply.includes('مش JSON'), 'JSON مكسور = نص عادي')
   assert(sanitizeAssistantActions(Array.from({ length: 20 }, () => ({ type: 'navigate', view: 'pos' }))).length === 8, 'أقصى 8 أوامر في الرد الواحد')
+  const pc = sanitizeAssistantActions([{ type: 'add_customer', name: ' أحمد علي ', phone: '01012345678', openingBalance: '150' }, { type: 'add_customer', name: '' }]) as any[]
+  assert(pc.length === 1 && pc[0].name === 'أحمد علي' && pc[0].phone === '01012345678' && pc[0].openingBalance === 150, 'أمر إضافة عميل بيتفلتر ويتحوّل صح (واسم فاضي بيتشال)')
+  const pr = sanitizeAssistantActions([
+    { type: 'add_product', name: 'كولا', retailPrice: '12', costPrice: -3, quantity: 5 },
+    { type: 'show_report', report: 'sales_summary', from: '2026-11-01', to: 'غلط' },
+    { type: 'show_report', report: 'drop_tables' }
+  ]) as any[]
+  assert(pr.length === 2 && pr[0].retailPrice === 12 && pr[0].costPrice === null && pr[0].quantity === 5, 'أمر إضافة صنف: سعر نصّي بيتحوّل وسالب بيتشال')
+  assert(pr[1].report === 'sales_summary' && pr[1].from === '2026-11-01' && pr[1].to === null, 'أمر تقرير: نوع مسموح وتاريخ سليم بس (والنوع الغريب بيتشال)')
   assert((sanitizeAssistantActions([{ type: 'pos_sale', items: [{ name: 'س', qty: 0 }, { name: '' }] }])[0] as any).items.length === 1, 'صنف بكمية صفر = كمية 1، واسم فاضي بيتشال')
 
   await logAssistantNote(adminId, '✅ فتحت الشاشة (pos)')

@@ -1837,6 +1837,18 @@ export type AssistantAction =
     }
   | { type: 'customer_payment'; customer: string; amount: number; treasury?: string | null; note?: string | null }
   | { type: 'add_expense'; category: string; amount: number; method?: string | null; note?: string | null }
+  | {
+      type: 'add_product'
+      name: string
+      barcode?: string | null
+      category?: string | null
+      unit?: string | null
+      costPrice?: number | null
+      retailPrice?: number | null
+      quantity?: number | null
+    }
+  | { type: 'show_report'; report: string; from?: string | null; to?: string | null }
+  | { type: 'add_customer'; name: string; phone?: string | null; address?: string | null; notes?: string | null; openingBalance?: number | null }
 
 export interface AssistantSendMessageResult {
   ok: boolean
