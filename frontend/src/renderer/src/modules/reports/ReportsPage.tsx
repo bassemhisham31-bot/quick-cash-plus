@@ -28,6 +28,7 @@ const REPORT_OPTIONS: { type: ReportType; icon: string; label: string }[] = [
   { type: 'sales_rep_commission', icon: '🧾', label: 'عمولات المحلات المسوّقة / المناديب' },
   { type: 'sales_rep_commission_detail', icon: '🏪', label: 'تفصيل عمولات المحلات (فاتورة بفاتورة)' },
   { type: 'customers_consolidated', icon: '📚', label: 'كشف حساب مجمّع لكل العملاء (مدين/دائن)' },
+  { type: 'vendors_consolidated', icon: '🚚', label: 'كشف حساب مجمّع لكل الموردين (مدين/دائن)' },
   { type: 'customer_daily_debts', icon: '💸', label: 'مديونيات العملاء خلال اليوم (إجمالي/مدفوع/باقي)' },
   { type: 'customer_due_dates', icon: '📅', label: 'مواعيد استحقاق العملاء (الآجل بالشهر)' },
   { type: 'vendor_due_dates', icon: '🗓️', label: 'مواعيد سداد الموردين (بالشهر)' },
@@ -212,8 +213,8 @@ function ReportBuilderTab({ warehouses }: { warehouses: Warehouse[] }): JSX.Elem
         {(selectedType === 'customer_due_dates' || selectedType === 'vendor_due_dates') && (
           <span style={{ fontSize: 12, color: 'var(--qcp-ink-faint)' }}>الفترة هنا = تاريخ الاستحقاق (سيبها فاضية لعرض الكل)</span>
         )}
-        {selectedType === 'customers_consolidated' && (
-          <span style={{ fontSize: 12, color: 'var(--qcp-ink-faint)' }}>بدون فترة — بيعرض الأرصدة الحالية لكل العملاء</span>
+        {(selectedType === 'customers_consolidated' || selectedType === 'vendors_consolidated') && (
+          <span style={{ fontSize: 12, color: 'var(--qcp-ink-faint)' }}>بدون فترة — بيعرض الأرصدة الحالية للكل</span>
         )}
         {selectedType === 'customer_daily_debts' && (
           <span style={{ fontSize: 12, color: 'var(--qcp-ink-faint)' }}>سيب التاريخين فاضيين = النهارده بس</span>

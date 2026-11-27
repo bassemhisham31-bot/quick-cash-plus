@@ -887,7 +887,7 @@ const api = {
   vendors: {
     list: (search = ''): Promise<VendorView[]> => invoke('vendors:list', search),
     create: (input: VendorInput): Promise<VendorView> => invoke('vendors:create', input),
-    update: (vendorId: number, input: { name: string; phone: string; address?: string; notes?: string }): Promise<VendorView> =>
+    update: (vendorId: number, input: { name: string; phone: string; address?: string; notes?: string; vendorType?: string; creditLimit?: number }): Promise<VendorView> =>
       invoke('vendors:update', vendorId, input),
     /** حركة يدوية على حساب المورد (مبلغ وتاريخ وبيان — من غير فاتورة/مخزون/خزنة) وحذفها (للأدمن بس) — ويب فقط، مضاف يدويًا */
     addAccountEntry: (vendorId: number, input: { date: string; kind: 'purchase' | 'payment' | 'return'; amount: number; description?: string }): Promise<VendorView> =>

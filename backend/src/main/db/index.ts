@@ -84,6 +84,7 @@ import { migration081VendorStatementLinks } from './migrations/081_vendor_statem
 import { migration082ElnasrRound3 } from './migrations/082_elnasr_round3'
 import { migration083AssistantVoiceActions } from './migrations/083_assistant_voice_actions'
 import { migration084CustomerTypeCreditLimit } from './migrations/084_customer_type_credit_limit'
+import { migration085VendorTypeCreditLimit } from './migrations/085_vendor_type_credit_limit'
 import { seedDatabase } from './seed'
 
 let db: Client | null = null
@@ -225,7 +226,8 @@ const MIGRATIONS: Array<{ name: string; sql: string }> = [
   { name: '081_vendor_statement_links', sql: migration081VendorStatementLinks },
   { name: '082_elnasr_round3', sql: migration082ElnasrRound3 },
   { name: '083_assistant_voice_actions', sql: migration083AssistantVoiceActions },
-  { name: '084_customer_type_credit_limit', sql: migration084CustomerTypeCreditLimit }
+  { name: '084_customer_type_credit_limit', sql: migration084CustomerTypeCreditLimit },
+  { name: '085_vendor_type_credit_limit', sql: migration085VendorTypeCreditLimit }
 ]
 
 async function runMigrations(client: Client): Promise<void> {

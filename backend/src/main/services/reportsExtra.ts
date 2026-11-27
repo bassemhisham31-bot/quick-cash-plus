@@ -354,3 +354,38 @@ export async function customersConsolidatedReport(): Promise<ReportResult> {
     totals: { creditLimit: r2(rows.reduce((s, r) => s + r.creditLimit, 0)), debit, credit }
   }
 }
+
+/** كشف حساب مجمّع لكل الموردين — بدون فترة، بالأرصدة الحالية (مدين = علينا للمورد، دائن = ليا عند المورد — نفس اصطلاح كشف المورد). */
+export async function vendorsConsolidatedReport(): Promise<ReportResult> {
+  const db = getDb()
+  const rs = await db.execute({
+    sql: `SELECT name, vendor_type, credit_limit, balance FROM vendors WHERE deleted_at IS NULL ORDER BY name`,
+    args: []
+  })
+  const rows = (rs.rows as any[]).map((r) => {
+    const bal = r2(r.balance)
+    return {
+      vendor: r.name,
+      type: r.vendor_type ?? '',
+      creditLimit: r2(r.credit_limit),
+      debit: bal > 0 ? bal : 0,
+      credit: bal < 0 ? -bal : 0
+    }
+  })
+  return {
+    title: 'كشف حساب مجمّع لكل الموردين',
+    columns: [
+      { key: 'vendor', label: 'اسم المورد' },
+      { key: 'type', label: 'نوع المورد' },
+      { key: 'creditLimit', label: 'حد الائتمان', align: 'end', format: 'currency' },
+      { key: 'debit', label: 'رصيد مدين', align: 'end', format: 'currency' },
+      { key: 'credit', label: 'رصيد دائن', align: 'end', format: 'currency' }
+    ],
+    rows,
+    totals: {
+      creditLimit: r2(rows.reduce((s, r) => s + r.creditLimit, 0)),
+      debit: r2(rows.reduce((s, r) => s + r.debit, 0)),
+      credit: r2(rows.reduce((s, r) => s + r.credit, 0))
+    }
+  }
+}

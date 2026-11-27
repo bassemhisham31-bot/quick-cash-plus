@@ -8,7 +8,7 @@ import { assertReportInEdition } from './edition'
 import { SALE_PAY_LINES_SQL } from './salePayments'
 import { todayLocal } from './timezone'
 import { notFixedAssetSql } from './accountsChart'
-import { customersConsolidatedReport, customerDailyDebtsReport, customerDueDatesReport, salesRepCommissionDetailReport, serviceSalesReport, vendorDueDatesReport } from './reportsExtra'
+import { customersConsolidatedReport, vendorsConsolidatedReport, customerDailyDebtsReport, customerDueDatesReport, salesRepCommissionDetailReport, serviceSalesReport, vendorDueDatesReport } from './reportsExtra'
 import type { OverviewMetric, OverviewSummary, ReportFilter, ReportResult, ReportType } from '../../shared/types'
 
 /**
@@ -104,6 +104,8 @@ export async function runReport(type: ReportType, filter: ReportFilter): Promise
       return salesRepCommission(filter)
     case 'sales_rep_commission_detail':
       return salesRepCommissionDetailReport(filter)
+    case 'vendors_consolidated':
+      return vendorsConsolidatedReport()
     case 'customers_consolidated':
       return customersConsolidatedReport()
     case 'customer_daily_debts':

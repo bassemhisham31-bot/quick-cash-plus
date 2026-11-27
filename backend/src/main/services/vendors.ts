@@ -27,7 +27,9 @@ function mapRow(r: any): VendorView {
     notes: r.notes,
     createdAt: r.created_at,
     linkedCustomerId: r.linkedCustomerId != null ? Number(r.linkedCustomerId) : null,
-    linkedCustomerName: r.linkedCustomerName ?? null
+    linkedCustomerName: r.linkedCustomerName ?? null,
+    vendorType: r.vendor_type ?? null,
+    creditLimit: Number(r.credit_limit ?? 0)
   }
 }
 
@@ -46,13 +48,15 @@ export async function listVendors(search = ''): Promise<VendorView[]> {
 export async function createVendor(input: VendorInput): Promise<VendorView> {
   const db = getDb()
   const rs = await db.execute({
-    sql: `INSERT INTO vendors (name, phone, address, balance, notes) VALUES (?, ?, ?, ?, ?)`,
+    sql: `INSERT INTO vendors (name, phone, address, balance, notes, vendor_type, credit_limit) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     args: [
       input.name.trim(),
       input.phone.trim() || null,
       input.address.trim() || null,
       input.openingBalance || 0,
-      input.notes.trim() || null
+      input.notes.trim() || null,
+      input.vendorType?.trim() || null,
+      Math.max(0, Number(input.creditLimit) || 0)
     ]
   })
   const created = await db.execute({ sql: `${VENDOR_SELECT} WHERE v.id = ?`, args: [rs.lastInsertRowid] })
@@ -64,7 +68,7 @@ const r2 = (n: number): number => Math.round(n * 100) / 100
 /** تعديل بيانات المورد الأساسية (الاسم/الموبايل/العنوان/الملاحظات) — الرصيد والحركات مابتتأثرش. */
 export async function updateVendor(
   vendorId: number,
-  input: { name: string; phone: string; address?: string; notes?: string }
+  input: { name: string; phone: string; address?: string; notes?: string; vendorType?: string; creditLimit?: number }
 ): Promise<VendorView> {
   const db = getDb()
   const name = (input?.name ?? '').trim()
@@ -72,8 +76,8 @@ export async function updateVendor(
   const exists = await db.execute({ sql: 'SELECT id FROM vendors WHERE id = ? AND deleted_at IS NULL', args: [vendorId] })
   if (!exists.rows[0]) throw new Error('المورد غير موجود')
   await db.execute({
-    sql: 'UPDATE vendors SET name = ?, phone = ?, address = ?, notes = ? WHERE id = ?',
-    args: [name, (input.phone ?? '').trim() || null, (input.address ?? '').trim() || null, (input.notes ?? '').trim() || null, vendorId]
+    sql: 'UPDATE vendors SET name = ?, phone = ?, address = ?, notes = ?, vendor_type = ?, credit_limit = ? WHERE id = ?',
+    args: [name, (input.phone ?? '').trim() || null, (input.address ?? '').trim() || null, (input.notes ?? '').trim() || null, (input.vendorType ?? '').trim() || null, Math.max(0, Number(input.creditLimit) || 0), vendorId]
   })
   const rs = await db.execute({ sql: `${VENDOR_SELECT} WHERE v.id = ?`, args: [vendorId] })
   return mapRow(rs.rows[0])

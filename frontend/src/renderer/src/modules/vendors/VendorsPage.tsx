@@ -8,7 +8,7 @@ import { alertDialog, confirmDialog } from '../../components/ConfirmDialogHost'
 import { formatCurrency as currency } from '../../lib/currency'
 import type { PaymentMethod, PurchaseInvoiceListItem, StatementEntry, StatementView, VendorView } from '../../../../shared/types'
 
-const emptyForm = { name: '', phone: '', address: '', notes: '', openingBalance: '0' }
+const emptyForm = { name: '', phone: '', address: '', notes: '', openingBalance: '0', vendorType: '', creditLimit: '0' }
 
 export function VendorsPage(): JSX.Element {
   const { t } = useTranslation()
@@ -21,7 +21,7 @@ export function VendorsPage(): JSX.Element {
   const [statementLinkFor, setStatementLinkFor] = useState<VendorView | null>(null)
   const [entryFor, setEntryFor] = useState<VendorView | null>(null)
   const [editing, setEditing] = useState<VendorView | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', phone: '', address: '', notes: '' })
+  const [editForm, setEditForm] = useState({ name: '', phone: '', address: '', notes: '', vendorType: '', creditLimit: '0' })
   const [savingEdit, setSavingEdit] = useState(false)
   const [statement, setStatement] = useState<StatementView | null>(null)
   const [unpaidInvoices, setUnpaidInvoices] = useState<PurchaseInvoiceListItem[]>([])
@@ -66,7 +66,9 @@ export function VendorsPage(): JSX.Element {
       phone: form.phone.trim(),
       address: form.address.trim(),
       notes: form.notes.trim(),
-      openingBalance: Number(form.openingBalance) || 0
+      openingBalance: Number(form.openingBalance) || 0,
+      vendorType: form.vendorType.trim(),
+      creditLimit: Number(form.creditLimit) || 0
     })
     setForm(emptyForm)
     setShowForm(false)
@@ -98,7 +100,7 @@ export function VendorsPage(): JSX.Element {
 
   function openEdit(vendor: VendorView): void {
     setEditing(vendor)
-    setEditForm({ name: vendor.name, phone: vendor.phone ?? '', address: vendor.address ?? '', notes: vendor.notes ?? '' })
+    setEditForm({ name: vendor.name, phone: vendor.phone ?? '', address: vendor.address ?? '', notes: vendor.notes ?? '', vendorType: vendor.vendorType ?? '', creditLimit: String(vendor.creditLimit ?? 0) })
   }
 
   async function saveEdit(e: FormEvent): Promise<void> {
@@ -106,7 +108,7 @@ export function VendorsPage(): JSX.Element {
     if (!editing || savingEdit) return
     setSavingEdit(true)
     try {
-      await window.api.vendors.update(editing.id, editForm)
+      await window.api.vendors.update(editing.id, { ...editForm, creditLimit: Number(editForm.creditLimit) || 0 })
       setEditing(null)
       refresh()
     } catch (err: any) {
@@ -254,6 +256,14 @@ export function VendorsPage(): JSX.Element {
               />
             </div>
             <div className="qcp-field">
+              <label>نوع المورد</label>
+              <input className="qcp-input" list="qcp-vendor-types" value={form.vendorType} onChange={(e) => setForm((f) => ({ ...f, vendorType: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
+              <label>حد الائتمان</label>
+              <input className="qcp-input" type="number" min="0" value={form.creditLimit} onChange={(e) => setForm((f) => ({ ...f, creditLimit: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
               <label>{t('parties.notes')}</label>
               <input
                 className="qcp-input"
@@ -331,6 +341,15 @@ export function VendorsPage(): JSX.Element {
             <div className="qcp-field">
               <label>{t('parties.address')}</label>
               <input className="qcp-input" value={editForm.address} onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
+              <label>نوع المورد</label>
+              <input className="qcp-input" list="qcp-vendor-types" value={editForm.vendorType} onChange={(e) => setEditForm((f) => ({ ...f, vendorType: e.target.value }))} />
+              <datalist id="qcp-vendor-types"><option value="مصنع" /><option value="تاجر جملة" /><option value="موزع" /><option value="مستورد" /></datalist>
+            </div>
+            <div className="qcp-field">
+              <label>حد الائتمان</label>
+              <input className="qcp-input" type="number" min="0" value={editForm.creditLimit} onChange={(e) => setEditForm((f) => ({ ...f, creditLimit: e.target.value }))} />
             </div>
             <div className="qcp-field">
               <label>{t('parties.notes')}</label>

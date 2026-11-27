@@ -848,6 +848,8 @@ export interface VendorView {
   createdAt: string
   linkedCustomerId: number | null
   linkedCustomerName: string | null
+  vendorType: string | null
+  creditLimit: number
 }
 
 export interface VendorInput {
@@ -856,6 +858,8 @@ export interface VendorInput {
   address: string
   notes: string
   openingBalance: number
+  vendorType?: string
+  creditLimit?: number
 }
 
 export type PartyType = 'customer' | 'vendor'
@@ -1210,6 +1214,7 @@ export const REPORT_TYPES = [
   'customer_due_dates',
   'customer_daily_debts',
   'customers_consolidated',
+  'vendors_consolidated',
   'vendor_due_dates',
   'service_sales',
   'purchases_last_price',

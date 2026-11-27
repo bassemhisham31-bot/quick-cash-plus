@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { initDatabaseAtPath } from '../src/main/db'
 import { createCustomer, updateCustomer } from '../src/main/services/customers'
+import { createVendor, updateVendor } from '../src/main/services/vendors'
 import { runReport } from '../src/main/services/reports'
 import { exportReportToPdf } from '../src/main/services/exportReport'
 
@@ -26,6 +27,15 @@ async function main(): Promise<void> {
   assert(rb.type === 'قطاعي' && rb.creditLimit === 300 && rb.debit === 0 && rb.credit === 200, 'دائن بعد التعديل')
   assert(rep.rows.length === 2, 'العميل النقدي مستبعد')
   assert((rep.totals as any).debit === 500 && (rep.totals as any).credit === 200, 'الإجماليات')
+  await createVendor({ name: 'مورد1', phone: '', address: '', notes: '', openingBalance: 700, vendorType: 'مصنع', creditLimit: 5000 })
+  const v2 = await createVendor({ name: 'مورد2', phone: '', address: '', notes: '', openingBalance: -50 })
+  await updateVendor(v2.id, { name: 'مورد2', phone: '', vendorType: 'موزع', creditLimit: 10 })
+  const vr = await runReport('vendors_consolidated', { dateFrom: '', dateTo: '', warehouseId: null } as any)
+  const x1 = vr.rows.find((r: any) => r.vendor === 'مورد1') as any
+  const x2 = vr.rows.find((r: any) => r.vendor === 'مورد2') as any
+  assert(x1.type === 'مصنع' && x1.creditLimit === 5000 && x1.debit === 700 && x1.credit === 0, 'مورد: مدين + نوع + حد')
+  assert(x2.type === 'موزع' && x2.creditLimit === 10 && x2.debit === 0 && x2.credit === 50, 'مورد: دائن بعد التعديل')
+  assert((vr.totals as any).debit === 700 && (vr.totals as any).credit === 50, 'إجماليات الموردين')
   const pdf: any = await exportReportToPdf(rep)
   assert(pdf.ok && String(pdf.html).includes('أحمد'), 'PDF html')
   console.log(`\n${passed} passed, ${failed} failed`)
