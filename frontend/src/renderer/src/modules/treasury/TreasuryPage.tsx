@@ -4,6 +4,7 @@ import { formatCurrency as currency } from '../../lib/currency'
 import { localIsoDate } from '../../lib/dates'
 import { confirmDialog } from '../../components/ConfirmDialogHost'
 import { ReportView } from '../../components/ReportView'
+import { SearchableSelect } from '../../components/SearchableSelect'
 import type {
   CashDifferenceRow,
   CustomerView,
@@ -448,14 +449,12 @@ function VoucherForm({
         {partyType === 'customer' && (
           <div className="qcp-field">
             <label>العميل</label>
-            <select className="qcp-select" value={partyId} onChange={(e) => setPartyId(e.target.value ? Number(e.target.value) : '')}>
-              <option value="">— اختار —</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} (عليه {currency(c.balance)})
-                </option>
-              ))}
-            </select>
+            <SearchableSelect
+              options={customers.map((c) => ({ id: c.id, label: `${c.name} (عليه ${currency(c.balance)})` }))}
+              value={partyId}
+              onChange={setPartyId}
+              placeholder="ابحث عن العميل بالاسم..."
+            />
             {type === 'payment' && (
               <div style={{ fontSize: 12, color: 'var(--qcp-ink-muted)', marginTop: 6 }}>
                 الفلوس بتطلع من الخزينة ورصيد العميل بيزيد بنفس المبلغ (عكس سند القبض)
@@ -469,14 +468,12 @@ function VoucherForm({
         {partyType === 'vendor' && (
           <div className="qcp-field">
             <label>المورد</label>
-            <select className="qcp-select" value={partyId} onChange={(e) => setPartyId(e.target.value ? Number(e.target.value) : '')}>
-              <option value="">— اختار —</option>
-              {vendors.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name} (له {currency(v.balance)})
-                </option>
-              ))}
-            </select>
+            <SearchableSelect
+              options={vendors.map((v) => ({ id: v.id, label: `${v.name} (له ${currency(v.balance)})` }))}
+              value={partyId}
+              onChange={setPartyId}
+              placeholder="ابحث عن المورد بالاسم..."
+            />
           </div>
         )}
         {partyType === 'other' && (
@@ -488,15 +485,13 @@ function VoucherForm({
             {type === 'payment' && (
               <div className="qcp-field">
                 <label>تصنيف المصروف (أو "شراء أصول ثابتة" لو بتشتري أصل)</label>
-                <select className="qcp-select" value={categoryId} onChange={(e) => setCategoryId(e.target.value ? Number(e.target.value) : '')}>
-                  <option value="">— بدون —</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                      {c.isFixedAsset ? ' (أصل ثابت)' : ''}
-                    </option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  options={categories.map((c) => ({ id: c.id, label: `${c.name}${c.isFixedAsset ? ' (أصل ثابت)' : ''}` }))}
+                  value={categoryId}
+                  onChange={setCategoryId}
+                  placeholder="ابحث عن بند المصروف..."
+                  emptyLabel="— بدون —"
+                />
               </div>
             )}
           </div>
