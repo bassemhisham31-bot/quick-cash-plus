@@ -91,6 +91,12 @@ const ACTIONS_PROMPT = `
 7) عرض تقرير في المحادثة: {"type":"show_report","report":"<نوع التقرير>","from":"YYYY-MM-DD أو null","to":"YYYY-MM-DD أو null"}
    أنواع التقارير: sales_summary (ملخص المبيعات), profit_loss (الأرباح والخسائر), monthly_expenses (المصروفات الشهرية), product_performance (أداء المنتجات), payment_methods (طرق الدفع), financial_summary (الملخص المالي), receivables_payables (مديونيات العملاء والموردين), top_customers (أفضل العملاء), inventory_status (حالة المخزون), customer_daily_debts (مديونيات العملاء خلال اليوم), sales_by_employee (المبيعات حسب الكاشير), customers_analysis (تحليل العملاء), vendors_report (الموردين), cash_drawer_sessions (جلسات الخزنة), purchases_detailed (المشتريات).
    لو التاريخ مش مذكور خلّيه null (= النهاردة). استخدم تاريخ النهاردة المذكور تحت لحساب «الشهر ده» و«أمس» وغيرهم.
+8) استعلام عن عميل (رصيده وموبايله): {"type":"lookup_customer","name":"اسم العميل"}
+9) استعلام عن صنف (أسعاره ورصيده): {"type":"lookup_product","name":"اسم الصنف أو الباركود"}
+10) إضافة مورد جديد: {"type":"add_vendor","name":"اسم المورد","phone":"موبايل أو null","address":"عنوان أو null","notes":"ملاحظات أو null","openingBalance":رقم أو null}
+11) سداد لمورد: {"type":"vendor_payment","vendor":"اسم المورد","amount":رقم,"method":"cash|card|wallet","note":"ملاحظة أو null"}
+12) تعديل سعر صنف: {"type":"update_price","product":"اسم الصنف أو الباركود","retailPrice":سعر البيع الجديد أو null,"costPrice":سعر الشراء الجديد أو null}
+13) تعديل رصيد صنف في المخزن: {"type":"stock_adjust","product":"اسم الصنف أو الباركود","qty":رقم,"mode":"add|set"} — add = زوّد/انقص بالكمية (سالب للنقص)، set = خلّي الرصيد = الكمية (جرد).
 
 قواعد صارمة:
 - ما تخترعش أسماء أصناف أو عملاء أو مبالغ: استخدم اللي المستخدم قاله بالظبط. لو الكمية مش مذكورة خليها 1. "price" يبقى null إلا لو المستخدم حدد سعر.
@@ -204,6 +210,32 @@ export function sanitizeAssistantActions(raw: unknown): AssistantAction[] {
       const customer = str(a.customer)
       const amount = num(a.amount)
       if (customer && amount != null && amount > 0) out.push({ type: 'customer_payment', customer, amount, treasury: str(a.treasury), note: str(a.note) })
+    } else if (a.type === 'lookup_customer') {
+      const name = str(a.name)
+      if (name) out.push({ type: 'lookup_customer', name })
+    } else if (a.type === 'lookup_product') {
+      const name = str(a.name)
+      if (name) out.push({ type: 'lookup_product', name })
+    } else if (a.type === 'add_vendor') {
+      const name = str(a.name)
+      const opening = num(a.openingBalance)
+      if (name) out.push({ type: 'add_vendor', name, phone: str(a.phone), address: str(a.address), notes: str(a.notes), openingBalance: opening != null && opening !== 0 ? opening : null })
+    } else if (a.type === 'vendor_payment') {
+      const vendor = str(a.vendor)
+      const amount = num(a.amount)
+      if (vendor && amount != null && amount > 0) out.push({ type: 'vendor_payment', vendor, amount, method: str(a.method), note: str(a.note) })
+    } else if (a.type === 'update_price') {
+      const product = str(a.product)
+      const retail = num(a.retailPrice)
+      const cost = num(a.costPrice)
+      const r = retail != null && retail > 0 ? retail : null
+      const c = cost != null && cost > 0 ? cost : null
+      if (product && (r != null || c != null)) out.push({ type: 'update_price', product, retailPrice: r, costPrice: c })
+    } else if (a.type === 'stock_adjust') {
+      const product = str(a.product)
+      const qty = num(a.qty)
+      const mode = a.mode === 'set' ? 'set' : 'add'
+      if (product && qty != null && (mode === 'add' ? qty !== 0 : qty >= 0)) out.push({ type: 'stock_adjust', product, qty, mode })
     } else if (a.type === 'add_product') {
       const name = str(a.name)
       const nn = (v: unknown): number | null => {

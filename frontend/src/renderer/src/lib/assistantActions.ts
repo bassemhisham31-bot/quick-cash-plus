@@ -5,7 +5,7 @@ import { isViewAllowed, VIEW_ORDER } from './permissions'
 import { confirmDialog } from '../components/ConfirmDialogHost'
 import { formatCurrency } from './currency'
 import { waitForPosBridge } from './assistantBridge'
-import type { AssistantAction, AssistantSettings, ExpenseInput, PaymentMethod, ReportType, SessionUser } from '../../../shared/types'
+import type { AssistantAction, AssistantSettings, ExpenseInput, PaymentMethod, Product, ReportType, SessionUser } from '../../../shared/types'
 
 /** تنظيف عربي للمطابقة: تشكيل، همزات، تاء مربوطة، ياء، مسافات */
 export function normalizeArabic(text: string): string {
@@ -274,6 +274,93 @@ async function showReport(action: Extract<AssistantAction, { type: 'show_report'
   return lines.join('\n')
 }
 
+/** صنف واحد من الاسم/الباركود (من مخزن البيع الافتراضي) */
+async function findProduct(query: string): Promise<{ product: Product; ties: number; warehouseId: number } | string> {
+  const warehouses = await window.api.catalog.listWarehouses()
+  const warehouse = warehouses.find((w) => w.isDefault) ?? warehouses[0]
+  if (!warehouse) return '⚠️ مفيش مخزن'
+  const list = await window.api.catalog.listProducts(query.trim(), warehouse.id)
+  const exact = list.find((p) => p.barcode === query.trim())
+  const m = exact ? { item: exact, ties: 1 } : bestMatch(list, query, (p) => p.name)
+  if (!m) return `⚠️ ما لقيتش صنف «${query}»`
+  return { product: m.item, ties: m.ties, warehouseId: warehouse.id }
+}
+
+async function lookupCustomer(action: Extract<AssistantAction, { type: 'lookup_customer' }>, ctx: ActionContext): Promise<string> {
+  if (!isViewAllowed(ctx.user, 'customers', ctx.disabledFeatures)) return '⛔ مفيش صلاحية لبيانات العملاء'
+  const m = bestMatch((await window.api.customers.list(action.name)).filter((c) => !c.isWalkIn), action.name, (c) => c.name)
+  if (!m) return `⚠️ مفيش عميل باسم «${action.name}»`
+  const c = m.item
+  return `👤 ${c.name}${c.phone ? ` — ${c.phone}` : ''}\nالرصيد: ${formatCurrency(c.balance)}${c.balance > 0 ? ' (عليه)' : c.balance < 0 ? ' (له)' : ''}${m.ties > 1 ? `\n(فيه ${m.ties} عملاء بنفس الاسم تقريبًا)` : ''}`
+}
+
+async function lookupProduct(action: Extract<AssistantAction, { type: 'lookup_product' }>, ctx: ActionContext): Promise<string> {
+  if (!isViewAllowed(ctx.user, 'inventory', ctx.disabledFeatures) && !isViewAllowed(ctx.user, 'pos', ctx.disabledFeatures)) return '⛔ مفيش صلاحية لبيانات الأصناف'
+  const f = await findProduct(action.name)
+  if (typeof f === 'string') return f
+  const p = f.product
+  const showCost = isViewAllowed(ctx.user, 'inventory', ctx.disabledFeatures)
+  return `📦 ${p.name} (باركود ${p.barcode})\nسعر البيع: ${formatCurrency(p.retailPrice)}${showCost ? ` — سعر الشراء: ${formatCurrency(p.costPrice)}` : ''}\nالرصيد: ${p.quantity}${f.ties > 1 ? `\n(فيه ${f.ties} أصناف مشابهة)` : ''}`
+}
+
+async function addVendor(action: Extract<AssistantAction, { type: 'add_vendor' }>, ctx: ActionContext): Promise<string> {
+  if (!isViewAllowed(ctx.user, 'vendors', ctx.disabledFeatures)) return '⛔ مفيش صلاحية لإضافة موردين'
+  const dup = (await window.api.vendors.list(action.name)).find((v) => normalizeArabic(v.name) === normalizeArabic(action.name))
+  if (dup) return `⚠️ فيه مورد بنفس الاسم بالفعل («${dup.name}») — ما أضفتوش تاني`
+  const phone = (action.phone ?? '').replace(/\s+/g, '')
+  if (ctx.settings.confirmActions) {
+    const ok = await confirmDialog(`إضافة مورد جديد «${action.name}»${phone ? ` (موبايل ${phone})` : ''}${action.openingBalance ? ` برصيد ${formatCurrency(action.openingBalance)}` : ''}؟`)
+    if (!ok) return '↩️ اتلغت إضافة المورد'
+  }
+  const v = await window.api.vendors.create({ name: action.name, phone, address: action.address ?? '', notes: action.notes ?? '', openingBalance: action.openingBalance ?? 0 })
+  return `✅ اتضاف المورد ${v.name}${phone ? ` (${phone})` : ''}`
+}
+
+async function vendorPayment(action: Extract<AssistantAction, { type: 'vendor_payment' }>, ctx: ActionContext): Promise<string> {
+  if (!isViewAllowed(ctx.user, 'vendors', ctx.disabledFeatures)) return '⛔ مفيش صلاحية لسداد الموردين'
+  const m = bestMatch(await window.api.vendors.list(action.vendor), action.vendor, (v) => v.name)
+  if (!m) return `⚠️ مفيش مورد باسم «${action.vendor}»`
+  if (m.ties > 1) return `⚠️ فيه ${m.ties} موردين بنفس الاسم تقريبًا («${action.vendor}») — اكتب الاسم أدق`
+  const method = (['cash', 'card', 'wallet'] as const).find((x) => x === action.method) ?? 'cash'
+  if (ctx.settings.confirmActions) {
+    const ok = await confirmDialog(`تسجيل سداد ${formatCurrency(action.amount)} للمورد «${m.item.name}» (${METHOD_LABELS[method]})؟`)
+    if (!ok) return '↩️ اتلغ سداد المورد'
+  }
+  const updated = await window.api.vendors.recordPayment(m.item.id, action.amount, method as PaymentMethod, action.note ?? '', ctx.user.id, null)
+  return `✅ اتسجّل سداد ${formatCurrency(action.amount)} للمورد ${m.item.name} — رصيده دلوقتي ${formatCurrency(updated.balance)}`
+}
+
+async function updatePrice(action: Extract<AssistantAction, { type: 'update_price' }>, ctx: ActionContext): Promise<string> {
+  if (!isViewAllowed(ctx.user, 'priceEditing', ctx.disabledFeatures)) return '⛔ مفيش صلاحية لتعديل الأسعار'
+  const f = await findProduct(action.product)
+  if (typeof f === 'string') return f
+  if (f.ties > 1) return `⚠️ فيه ${f.ties} أصناف مشابهة لـ«${action.product}» — اكتب الاسم أدق أو الباركود`
+  const p = f.product
+  const retail = action.retailPrice ?? p.retailPrice
+  const cost = action.costPrice ?? p.costPrice
+  if (ctx.settings.confirmActions) {
+    const ok = await confirmDialog(`تعديل أسعار «${p.name}»: بيع ${formatCurrency(p.retailPrice)} ← ${formatCurrency(retail)}، شراء ${formatCurrency(p.costPrice)} ← ${formatCurrency(cost)}؟`)
+    if (!ok) return '↩️ اتلغ تعديل السعر'
+  }
+  await window.api.catalog.bulkUpdatePricesAndImages([{ id: p.id, costPrice: cost, retailPrice: retail, imageDataUrl: p.imageDataUrl }])
+  return `✅ سعر ${p.name}: بيع ${formatCurrency(retail)}، شراء ${formatCurrency(cost)}`
+}
+
+async function stockAdjust(action: Extract<AssistantAction, { type: 'stock_adjust' }>, ctx: ActionContext): Promise<string> {
+  if (!isViewAllowed(ctx.user, 'inventory', ctx.disabledFeatures)) return '⛔ مفيش صلاحية لتعديل المخزون'
+  const f = await findProduct(action.product)
+  if (typeof f === 'string') return f
+  if (f.ties > 1) return `⚠️ فيه ${f.ties} أصناف مشابهة لـ«${action.product}» — اكتب الاسم أدق أو الباركود`
+  const p = f.product
+  const target = action.mode === 'set' ? action.qty : p.quantity + action.qty
+  if (ctx.settings.confirmActions) {
+    const ok = await confirmDialog(`تعديل رصيد «${p.name}»: ${p.quantity} ← ${target}؟`)
+    if (!ok) return '↩️ اتلغ تعديل الرصيد'
+  }
+  const now = await window.api.catalog.adjustStock(p.id, f.warehouseId, action.mode, action.qty, ctx.user.id)
+  return `✅ رصيد ${p.name} بقى ${now}`
+}
+
 /** بينفّذ الأوامر بالترتيب وبيرجّع سطور النتيجة (نجاح/تحذير) اللي هتتعرض للمستخدم */
 export async function executeAssistantActions(actions: AssistantAction[], ctx: ActionContext): Promise<string[]> {
   const out: string[] = []
@@ -285,6 +372,12 @@ export async function executeAssistantActions(actions: AssistantAction[], ctx: A
       else if (action.type === 'add_expense') out.push(await addExpense(action, ctx))
       else if (action.type === 'add_customer') out.push(await addCustomer(action, ctx))
       else if (action.type === 'add_product') out.push(await addProduct(action, ctx))
+      else if (action.type === 'lookup_customer') out.push(await lookupCustomer(action, ctx))
+      else if (action.type === 'lookup_product') out.push(await lookupProduct(action, ctx))
+      else if (action.type === 'add_vendor') out.push(await addVendor(action, ctx))
+      else if (action.type === 'vendor_payment') out.push(await vendorPayment(action, ctx))
+      else if (action.type === 'update_price') out.push(await updatePrice(action, ctx))
+      else if (action.type === 'stock_adjust') out.push(await stockAdjust(action, ctx))
       else if (action.type === 'show_report') out.push(await showReport(action, ctx))
     } catch (err: any) {
       out.push(`⚠️ تعذر تنفيذ الأمر: ${err?.message ?? 'خطأ غير معروف'}`)

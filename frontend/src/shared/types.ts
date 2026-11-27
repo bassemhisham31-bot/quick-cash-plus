@@ -1848,6 +1848,12 @@ export type AssistantAction =
       quantity?: number | null
     }
   | { type: 'show_report'; report: string; from?: string | null; to?: string | null }
+  | { type: 'lookup_customer'; name: string }
+  | { type: 'lookup_product'; name: string }
+  | { type: 'add_vendor'; name: string; phone?: string | null; address?: string | null; notes?: string | null; openingBalance?: number | null }
+  | { type: 'vendor_payment'; vendor: string; amount: number; method?: string | null; note?: string | null }
+  | { type: 'update_price'; product: string; retailPrice?: number | null; costPrice?: number | null }
+  | { type: 'stock_adjust'; product: string; qty: number; mode: 'add' | 'set' }
   | { type: 'add_customer'; name: string; phone?: string | null; address?: string | null; notes?: string | null; openingBalance?: number | null }
 
 export interface AssistantSendMessageResult {

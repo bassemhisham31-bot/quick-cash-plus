@@ -140,6 +140,18 @@ async function main(): Promise<void> {
   ]) as any[]
   assert(pr.length === 2 && pr[0].retailPrice === 12 && pr[0].costPrice === null && pr[0].quantity === 5, 'أمر إضافة صنف: سعر نصّي بيتحوّل وسالب بيتشال')
   assert(pr[1].report === 'sales_summary' && pr[1].from === '2026-11-01' && pr[1].to === null, 'أمر تقرير: نوع مسموح وتاريخ سليم بس (والنوع الغريب بيتشال)')
+  const more = sanitizeAssistantActions([
+    { type: 'lookup_customer', name: 'أحمد' },
+    { type: 'add_vendor', name: 'مورد جديد', phone: '0111' },
+    { type: 'vendor_payment', vendor: 'مورد', amount: '500', method: 'card' },
+    { type: 'vendor_payment', vendor: 'مورد', amount: 0 },
+    { type: 'update_price', product: 'كولا', retailPrice: '15' },
+    { type: 'stock_adjust', product: 'كولا', qty: -3 },
+    { type: 'stock_adjust', product: 'كولا', qty: 0, mode: 'add' },
+    { type: 'stock_adjust', product: 'كولا', qty: 20, mode: 'set' }
+  ]) as any[]
+  assert(more.length === 6 && more.map((a) => a.type).join() === 'lookup_customer,add_vendor,vendor_payment,update_price,stock_adjust,stock_adjust', 'الأوامر الجديدة: الصالح بس بيعدّي (فاضي/صفر/بدون سعر بيتشال)')
+  assert(more[2].amount === 500 && more[3].retailPrice === 15 && more[3].costPrice === null && more[4].mode === 'add' && more[4].qty === -3 && more[5].mode === 'set', 'القيم النصّية بتتحوّل، والنقص بالسالب، والجرد set')
   assert((sanitizeAssistantActions([{ type: 'pos_sale', items: [{ name: 'س', qty: 0 }, { name: '' }] }])[0] as any).items.length === 1, 'صنف بكمية صفر = كمية 1، واسم فاضي بيتشال')
 
   await logAssistantNote(adminId, '✅ فتحت الشاشة (pos)')
