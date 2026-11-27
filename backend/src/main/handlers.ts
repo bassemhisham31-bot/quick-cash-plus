@@ -441,7 +441,7 @@ export function buildHandlerMap(): Record<string, ChannelHandler> {
 
     'customers:list': (search: string) => listCustomers(search),
     'customers:create': (input: CustomerInput) => createCustomer(input),
-    'customers:update': (customerId: number, input: { name: string; phone: string; address?: string; notes?: string }) =>
+    'customers:update': (customerId: number, input: { name: string; phone: string; address?: string; notes?: string; customerType?: string; creditLimit?: number }) =>
       updateCustomer(customerId, input),
     'customers:exportExcel': () => exportCustomersToExcel(),
     'customers:importExcel': (dataBase64: string) => importCustomersFromExcel(dataBase64),

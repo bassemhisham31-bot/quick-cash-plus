@@ -823,6 +823,8 @@ export interface CustomerView {
   linkedVendorId: number | null
   linkedVendorName: string | null
   linkedVendorBalance: number | null
+  customerType: string | null
+  creditLimit: number
 }
 
 export interface CustomerInput {
@@ -832,6 +834,8 @@ export interface CustomerInput {
   notes: string
   openingBalance: number
   loyaltyEnabled?: boolean
+  customerType?: string
+  creditLimit?: number
 }
 
 export interface VendorView {
@@ -1205,6 +1209,7 @@ export const REPORT_TYPES = [
   'sales_rep_commission_detail',
   'customer_due_dates',
   'customer_daily_debts',
+  'customers_consolidated',
   'vendor_due_dates',
   'service_sales',
   'purchases_last_price',

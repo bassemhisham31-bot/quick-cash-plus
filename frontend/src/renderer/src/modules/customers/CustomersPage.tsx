@@ -8,7 +8,7 @@ import { formatCurrency as currency } from '../../lib/currency'
 import { playSound } from '../../lib/sounds'
 import type { CustomerView, PaymentMethod, StatementView, Treasury, VendorView } from '../../../../shared/types'
 
-const emptyForm = { name: '', phone: '', address: '', notes: '', openingBalance: '0', loyaltyEnabled: true }
+const emptyForm = { name: '', phone: '', address: '', notes: '', openingBalance: '0', loyaltyEnabled: true, customerType: '', creditLimit: '0' }
 /** عدد الكروت اللي بتترسم في المرة — آلاف العملاء مرة واحدة بيتقّلوا فتح الشاشة */
 const PAGE_SIZE = 60
 
@@ -19,7 +19,7 @@ export function CustomersPage(): JSX.Element {
   const [loading, setLoading] = useState(true)
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const [editing, setEditing] = useState<CustomerView | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', phone: '', address: '', notes: '' })
+  const [editForm, setEditForm] = useState({ name: '', phone: '', address: '', notes: '', customerType: '', creditLimit: '0' })
   const [editError, setEditError] = useState<string | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
   const [linkOpenFor, setLinkOpenFor] = useState<number | null>(null)
@@ -69,7 +69,7 @@ export function CustomersPage(): JSX.Element {
 
   function openEdit(customer: CustomerView): void {
     setEditError(null)
-    setEditForm({ name: customer.name, phone: customer.phone ?? '', address: customer.address ?? '', notes: customer.notes ?? '' })
+    setEditForm({ name: customer.name, phone: customer.phone ?? '', address: customer.address ?? '', notes: customer.notes ?? '', customerType: customer.customerType ?? '', creditLimit: String(customer.creditLimit ?? 0) })
     setEditing(customer)
   }
 
@@ -83,7 +83,9 @@ export function CustomersPage(): JSX.Element {
         name: editForm.name.trim(),
         phone: editForm.phone.trim(),
         address: editForm.address.trim(),
-        notes: editForm.notes.trim()
+        notes: editForm.notes.trim(),
+        customerType: editForm.customerType.trim(),
+        creditLimit: Number(editForm.creditLimit) || 0
       })
       playSound('save')
       setEditing(null)
@@ -140,7 +142,9 @@ export function CustomersPage(): JSX.Element {
       address: form.address.trim(),
       notes: form.notes.trim(),
       openingBalance: Number(form.openingBalance) || 0,
-      loyaltyEnabled: form.loyaltyEnabled
+      loyaltyEnabled: form.loyaltyEnabled,
+      customerType: form.customerType.trim(),
+      creditLimit: Number(form.creditLimit) || 0
     })
     playSound('save')
     setForm(emptyForm)
@@ -370,6 +374,15 @@ export function CustomersPage(): JSX.Element {
               <input className="qcp-input" value={editForm.address} onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))} />
             </div>
             <div className="qcp-field">
+              <label>نوع العميل</label>
+              <input className="qcp-input" list="qcp-customer-types" value={editForm.customerType} onChange={(e) => setEditForm((f) => ({ ...f, customerType: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
+              <label>حد الائتمان</label>
+              <input className="qcp-input" type="number" min="0" value={editForm.creditLimit} onChange={(e) => setEditForm((f) => ({ ...f, creditLimit: e.target.value }))} />
+              <datalist id="qcp-customer-types"><option value="جملة" /><option value="قطاعي" /><option value="تاجر" /><option value="شركة" /></datalist>
+            </div>
+            <div className="qcp-field">
               <label>{t('parties.notes')}</label>
               <input className="qcp-input" value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} />
             </div>
@@ -430,6 +443,14 @@ export function CustomersPage(): JSX.Element {
                 value={form.openingBalance}
                 onChange={(e) => setForm((f) => ({ ...f, openingBalance: e.target.value }))}
               />
+            </div>
+            <div className="qcp-field">
+              <label>نوع العميل</label>
+              <input className="qcp-input" list="qcp-customer-types" value={form.customerType} onChange={(e) => setForm((f) => ({ ...f, customerType: e.target.value }))} />
+            </div>
+            <div className="qcp-field">
+              <label>حد الائتمان</label>
+              <input className="qcp-input" type="number" min="0" value={form.creditLimit} onChange={(e) => setForm((f) => ({ ...f, creditLimit: e.target.value }))} />
             </div>
             <div className="qcp-field">
               <label>{t('parties.notes')}</label>

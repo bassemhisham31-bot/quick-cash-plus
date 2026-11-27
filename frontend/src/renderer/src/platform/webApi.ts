@@ -494,7 +494,7 @@ async function exportFile(channel: string, ...args: unknown[]): Promise<ExportRe
 /** PDF: بنفتح التقرير في تاب جديد وبنشغّل نافذة الطباعة — اختار "حفظ كـPDF" كطابعة. */
 async function exportPdf(report: ReportResult): Promise<ExportResult> {
   try {
-    const r = await exportPdf(report)
+    const r = await invoke('reports:exportPdf', report)
     if (!r?.ok) return { ok: false, error: r?.error ?? 'تعذر التصدير' }
     const html = String((r as any).html).replace('</body>', "<script>window.addEventListener('load',function(){setTimeout(function(){window.print()},300)})</script></body>")
     openPreviewTab(html)
@@ -838,7 +838,7 @@ const api = {
   customers: {
     list: (search = ''): Promise<CustomerView[]> => invoke('customers:list', search),
     create: (input: CustomerInput): Promise<CustomerView> => invoke('customers:create', input),
-    update: (customerId: number, input: { name: string; phone: string; address?: string; notes?: string }): Promise<CustomerView> =>
+    update: (customerId: number, input: { name: string; phone: string; address?: string; notes?: string; customerType?: string; creditLimit?: number }): Promise<CustomerView> =>
       invoke('customers:update', customerId, input),
     exportExcel: (): Promise<ExportResult> => exportFile('customers:exportExcel'),
     importExcel: (): Promise<ProductImportResult> => importCustomersFile(),

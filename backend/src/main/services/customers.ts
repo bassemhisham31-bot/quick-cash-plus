@@ -24,7 +24,9 @@ function mapRow(r: any): CustomerView {
     createdAt: r.created_at,
     linkedVendorId: r.linked_vendor_id != null ? Number(r.linked_vendor_id) : null,
     linkedVendorName: r.linkedVendorName ?? null,
-    linkedVendorBalance: r.linkedVendorBalance != null ? Number(r.linkedVendorBalance) : null
+    linkedVendorBalance: r.linkedVendorBalance != null ? Number(r.linkedVendorBalance) : null,
+    customerType: r.customer_type ?? null,
+    creditLimit: Number(r.credit_limit ?? 0)
   }
 }
 
@@ -59,15 +61,17 @@ export async function listCustomers(search = ''): Promise<CustomerView[]> {
 export async function createCustomer(input: CustomerInput): Promise<CustomerView> {
   const db = getDb()
   const rs = await db.execute({
-    sql: `INSERT INTO customers (name, phone, address, balance, loyalty_points, notes, loyalty_enabled)
-          VALUES (?, ?, ?, ?, 0, ?, ?)`,
+    sql: `INSERT INTO customers (name, phone, address, balance, loyalty_points, notes, loyalty_enabled, customer_type, credit_limit)
+          VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`,
     args: [
       input.name.trim(),
       input.phone.trim() || null,
       input.address?.trim() || null,
       input.openingBalance || 0,
       input.notes.trim() || null,
-      input.loyaltyEnabled === false ? 0 : 1
+      input.loyaltyEnabled === false ? 0 : 1,
+      input.customerType?.trim() || null,
+      Math.max(0, Number(input.creditLimit) || 0)
     ]
   })
   return fetchCustomerView(Number(rs.lastInsertRowid))
@@ -76,7 +80,7 @@ export async function createCustomer(input: CustomerInput): Promise<CustomerView
 /** تعديل بيانات العميل الأساسية (الاسم/الموبايل/العنوان/الملاحظات) — الرصيد والحركات مابتتأثرش. */
 export async function updateCustomer(
   customerId: number,
-  input: { name: string; phone: string; address?: string; notes?: string }
+  input: { name: string; phone: string; address?: string; notes?: string; customerType?: string; creditLimit?: number }
 ): Promise<CustomerView> {
   const db = getDb()
   const name = (input?.name ?? '').trim()
@@ -86,8 +90,8 @@ export async function updateCustomer(
   if (!row) throw new Error('العميل غير موجود')
   if (row.is_walk_in) throw new Error('العميل النقدي الافتراضي لا يمكن تعديله')
   await db.execute({
-    sql: 'UPDATE customers SET name = ?, phone = ?, address = ?, notes = ? WHERE id = ?',
-    args: [name, (input.phone ?? '').trim() || null, (input.address ?? '').trim() || null, (input.notes ?? '').trim() || null, customerId]
+    sql: 'UPDATE customers SET name = ?, phone = ?, address = ?, notes = ?, customer_type = ?, credit_limit = ? WHERE id = ?',
+    args: [name, (input.phone ?? '').trim() || null, (input.address ?? '').trim() || null, (input.notes ?? '').trim() || null, (input.customerType ?? '').trim() || null, Math.max(0, Number(input.creditLimit) || 0), customerId]
   })
   return fetchCustomerView(customerId)
 }
