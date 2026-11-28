@@ -1821,6 +1821,8 @@ export interface WhatsAppStatus {
   qrDataUrl: string | null
   phoneNumber: string | null
   lastError: string | null
+  /** حماية الرقم: المرسل النهاردة / الحد اليومي / في الطابور / المتخطّى / وقت انتهاء الإيقاف المؤقت */
+  guard?: { sentToday: number; dailyCap: number; queued: number; skippedToday: number; pausedUntil: number | null }
 }
 
 export interface WhatsAppSendResult {

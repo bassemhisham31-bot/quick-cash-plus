@@ -5,7 +5,7 @@
  *  - إرسال الفاتورة PDF غير مدعوم هنا لسه (توليد الـPDF في الأوفلاين بيعتمد على Electron) — الرسالة النصية بس.
  */
 import { join } from 'path'
-import { existsSync, rmSync } from 'fs'
+import { existsSync, rmSync, readFileSync, writeFileSync } from 'fs'
 import QRCode from 'qrcode'
 import { getDb } from '../db'
 import { getCustomerLedger, getCustomerPhoneAndName } from './customers'
@@ -13,7 +13,7 @@ import { getStoreSettings, getWhatsAppSettings } from './settings'
 import { getInvoiceView } from './invoices'
 import { getHeldInvoice } from './heldInvoices'
 import { createStatementLink, createVendorStatementLink } from './statementLink'
-import { localDay } from './timezone'
+import { localDay, todayLocal } from './timezone'
 import type { StatementFilter, WhatsAppSendResult, WhatsAppStatus } from '../../shared/types'
 
 let sock: any = null
@@ -43,7 +43,7 @@ export async function initWhatsApp(): Promise<void> {
 }
 
 export async function getWhatsAppStatus(): Promise<WhatsAppStatus> {
-  return { connected, connecting, qrDataUrl: currentQr, phoneNumber: connectedPhone, lastError }
+  return { connected, connecting, qrDataUrl: currentQr, phoneNumber: connectedPhone, lastError, guard: getWhatsAppGuardStats() }
 }
 
 /**
@@ -94,6 +94,7 @@ async function connectSocket(): Promise<void> {
         reconnectAttempts = 0
         const jid: string | undefined = client.user?.id
         connectedPhone = jid ? jid.split(':')[0].split('@')[0] : null
+        onGuardConnected(connectedPhone)
       }
       if (connection === 'close') {
         connecting = false
@@ -136,6 +137,7 @@ export async function logoutWhatsApp(): Promise<WhatsAppStatus> {
   connecting = false
   currentQr = null
   connectedPhone = null
+  resetGuard()
   const folder = getAuthFolder()
   if (existsSync(folder)) rmSync(folder, { recursive: true, force: true })
   return getWhatsAppStatus()
@@ -149,12 +151,187 @@ function phoneToJid(phone: string): string {
   return `${digits}@s.whatsapp.net`
 }
 
-export async function sendWhatsAppMessage(phone: string, message: string): Promise<WhatsAppSendResult> {
+/* ───────────────────────── حماية الرقم من التقييد (Baileys غير رسمي) ─────────────────────────
+ * كل الرسائل بتعدّي من هنا. الرسائل التلقائية (بعد بيع/مرتجع/سداد) بتتحط في طابور وبتتبعت واحدة واحدة
+ * بفاصل عشوائي 20–60 ثانية + محاكاة «يكتب…»، بحد أقصى يومي، وبحدّ أصغر في أول أيام الرقم الجديد (تسخين).
+ * الرسائل اليدوية (زرار كشف حساب/رابط) بتتبعت فورًا بفاصل قصير. الإعدادات من env العميل:
+ *   QCP_WA_DAILY_CAP (150) · QCP_WA_MIN_DELAY_S (20) · QCP_WA_MAX_DELAY_S (60)
+ */
+const envInt = (name: string, def: number): number => {
+  const n = Number(process.env[name])
+  return Number.isFinite(n) && n >= 0 ? n : def
+}
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+const randBetween = (a: number, b: number): number => a + Math.random() * Math.max(0, b - a)
+
+interface GuardState {
+  phone: string | null
+  pairedAt: string
+  day: string
+  sent: number
+  skipped: number
+}
+interface QueueItem {
+  jid: string
+  message: string
+  enqueuedAt: number
+}
+const QUEUE_MAX = 300
+const QUEUE_MAX_AGE_MS = 2 * 3600_000
+const queue: QueueItem[] = []
+let draining = false
+let inFlight = 0
+let lastSendAt = 0
+let consecutiveFailures = 0
+let pausedUntil = 0
+let guardState: GuardState | null = null
+
+const isTestMode = (): boolean => process.env.QCP_WA_TEST === '1' && process.env.QCP_WA_GUARD_TEST !== '1'
+const guardFile = (): string => join(process.env.QCP_DATA_DIR ?? join(process.cwd(), 'data'), 'whatsapp-guard.json')
+
+function loadGuard(): GuardState {
+  if (!guardState) {
+    try {
+      guardState = JSON.parse(readFileSync(guardFile(), 'utf8')) as GuardState
+    } catch {
+      guardState = { phone: null, pairedAt: new Date().toISOString(), day: todayLocal(), sent: 0, skipped: 0 }
+    }
+  }
+  if (guardState.day !== todayLocal()) {
+    guardState.day = todayLocal()
+    guardState.sent = 0
+    guardState.skipped = 0
+  }
+  return guardState
+}
+function saveGuard(): void {
+  try {
+    writeFileSync(guardFile(), JSON.stringify(guardState))
+  } catch {
+    // مش حرج
+  }
+}
+
+/** الحد اليومي الحالي: بيزيد تدريجيًا بعد ربط رقم جديد (30 ← 60 ← 100 ← الحد الكامل) */
+function currentDailyCap(): number {
+  const base = envInt('QCP_WA_DAILY_CAP', 150)
+  const days = Math.floor((Date.now() - new Date(loadGuard().pairedAt).getTime()) / 86400_000)
+  const ramp = days < 3 ? 30 : days < 7 ? 60 : days < 14 ? 100 : base
+  return Math.min(base, ramp)
+}
+
+/** بيتنادى لما الاتصال يفتح: رقم جديد = بداية فترة التسخين من الأول */
+function onGuardConnected(phone: string | null): void {
+  const g = loadGuard()
+  if (g.phone !== phone) {
+    g.phone = phone
+    g.pairedAt = new Date().toISOString()
+    g.sent = 0
+    g.skipped = 0
+    saveGuard()
+  }
+  void drainQueue()
+}
+function resetGuard(): void {
+  queue.length = 0
+  guardState = null
+  try {
+    rmSync(guardFile(), { force: true })
+  } catch {
+    // مش حرج
+  }
+}
+
+export function getWhatsAppGuardStats(): { sentToday: number; dailyCap: number; queued: number; skippedToday: number; pausedUntil: number | null } {
+  const g = loadGuard()
+  return { sentToday: g.sent, dailyCap: currentDailyCap(), queued: queue.length, skippedToday: g.skipped, pausedUntil: pausedUntil > Date.now() ? pausedUntil : null }
+}
+
+async function rawSend(jid: string, message: string, typing: boolean): Promise<void> {
+  if (typing && !isTestMode()) {
+    try {
+      await sock.sendPresenceUpdate?.('composing', jid)
+      await sleep(Math.min(6000, 1200 + message.length * 25 + randBetween(0, 1500)))
+      await sock.sendPresenceUpdate?.('paused', jid)
+    } catch {
+      // الإشارة اختيارية
+    }
+  }
+  await sock.sendMessage(jid, { text: message })
+  lastSendAt = Date.now()
+  const g = loadGuard()
+  g.sent++
+  saveGuard()
+}
+
+async function drainQueue(): Promise<void> {
+  if (draining) return
+  draining = true
+  try {
+    while (queue.length > 0 && connected && sock) {
+      if (pausedUntil > Date.now()) {
+        await sleep(Math.min(30_000, pausedUntil - Date.now()))
+        continue
+      }
+      const gap = randBetween(envInt('QCP_WA_MIN_DELAY_S', 20), envInt('QCP_WA_MAX_DELAY_S', 60)) * 1000
+      const wait = lastSendAt + gap - Date.now()
+      if (wait > 0) await sleep(wait)
+      if (!connected || !sock) break
+      const item = queue.shift()!
+      if (Date.now() - item.enqueuedAt > QUEUE_MAX_AGE_MS) continue // رسالة قديمة — مالهاش لازمة
+      if (loadGuard().sent >= currentDailyCap()) {
+        loadGuard().skipped++
+        saveGuard()
+        continue
+      }
+      try {
+        inFlight = 1
+        await rawSend(item.jid, item.message, true)
+        consecutiveFailures = 0
+      } catch (err: any) {
+        consecutiveFailures++
+        lastError = err?.message ?? 'تعذر إرسال رسالة واتساب'
+        // 3 أخطاء ورا بعض = ممكن الرقم متقيّد/الاتصال مشكلة → نوقف الإرسال نص ساعة بدل ما نكمّل نضغط على الرقم
+        if (consecutiveFailures >= 3) {
+          pausedUntil = Date.now() + 30 * 60_000
+          consecutiveFailures = 0
+        }
+      } finally {
+        inFlight = 0
+      }
+    }
+  } finally {
+    draining = false
+  }
+}
+
+export async function sendWhatsAppMessage(phone: string, message: string, opts: { manual?: boolean } = {}): Promise<WhatsAppSendResult> {
   if (!connected || !sock) return { ok: false, error: 'واتساب غير متصل — اربط الجلسة من الإعدادات أولًا' }
   const trimmed = (phone ?? '').trim()
   if (!trimmed) return { ok: false, error: 'رقم الموبايل غير موجود' }
+  const jid = phoneToJid(trimmed)
   try {
-    await sock.sendMessage(phoneToJid(trimmed), { text: message })
+    if (isTestMode()) {
+      await rawSend(jid, message, false)
+      return { ok: true }
+    }
+    if (opts.manual) {
+      // يدوي: فاصل قصير فقط عن آخر رسالة (3–8 ثواني) وبيتحسب في عداد اليوم
+      const wait = lastSendAt + randBetween(3, 8) * 1000 - Date.now()
+      if (wait > 0) await sleep(wait)
+      await rawSend(jid, message, true)
+      return { ok: true }
+    }
+    const g = loadGuard()
+    if (g.sent + queue.length + inFlight >= currentDailyCap()) {
+      g.skipped++
+      saveGuard()
+      return { ok: false, error: `تم الوصول للحد اليومي لرسائل واتساب (${currentDailyCap()}) — حماية للرقم من التقييد` }
+    }
+    if (queue.length >= QUEUE_MAX) return { ok: false, error: 'طابور رسائل واتساب ممتلئ — حماية للرقم' }
+    if (queue.some((q) => q.jid === jid && q.message === message)) return { ok: true }
+    queue.push({ jid, message, enqueuedAt: Date.now() })
+    void drainQueue()
     return { ok: true }
   } catch (err: any) {
     return { ok: false, error: err?.message ?? 'تعذر إرسال رسالة واتساب' }
@@ -391,7 +568,7 @@ export async function sendCustomerStatementByWhatsApp(customerId: number, filter
     ]
       .filter(Boolean)
       .join('\n')
-    return await sendWhatsAppMessage(ledger.customerPhone, message)
+    return await sendWhatsAppMessage(ledger.customerPhone, message, { manual: true })
   } catch (err: any) {
     return { ok: false, error: err?.message ?? 'تعذر إرسال كشف الحساب' }
   }
@@ -425,7 +602,7 @@ export async function sendCustomerStatementLinkByWhatsApp(customerId: number, or
       'تقدر تشوف كشف حسابك بالتفصيل من الرابط ده — بيتحدّث تلقائيًا مع كل حركة جديدة، افتحه تاني في أي وقت:',
       link.url
     ].join('\n')
-    const sent = await sendWhatsAppMessage(ledger.customerPhone, message)
+    const sent = await sendWhatsAppMessage(ledger.customerPhone, message, { manual: true })
     return sent.ok ? { ok: true, url: link.url } : sent
   } catch (err: any) {
     return { ok: false, error: err?.message ?? 'تعذر إرسال رابط كشف الحساب' }
@@ -460,7 +637,7 @@ export async function sendVendorStatementLinkByWhatsApp(vendorId: number, origin
       'تقدر تشوف كشف حسابك بالتفصيل من الرابط ده — بيتحدّث تلقائيًا مع كل حركة جديدة، افتحه تاني في أي وقت:',
       link.url
     ].join('\n')
-    const sent = await sendWhatsAppMessage(String(vendor.phone), message)
+    const sent = await sendWhatsAppMessage(String(vendor.phone), message, { manual: true })
     return sent.ok ? { ok: true, url: link.url } : sent
   } catch (err: any) {
     return { ok: false, error: err?.message ?? 'تعذر إرسال رابط كشف الحساب' }

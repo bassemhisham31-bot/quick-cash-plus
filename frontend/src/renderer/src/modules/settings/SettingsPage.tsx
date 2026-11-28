@@ -2880,6 +2880,18 @@ function WhatsAppSection(): JSX.Element {
         </div>
       </div>
 
+      {status.connected && status.guard && (
+        <div className="qcp-card" style={{ marginBottom: 18, fontSize: 13 }}>
+          🛡️ حماية الرقم من التقييد: اتبعت النهاردة <b>{status.guard.sentToday}</b> من <b>{status.guard.dailyCap}</b> (الحد اليومي)
+          {' · '}في الطابور <b>{status.guard.queued}</b>
+          {status.guard.skippedToday > 0 && <> {' · '}اتخطّى <b>{status.guard.skippedToday}</b> بسبب الحد</>}
+          <div style={{ opacity: 0.7, marginTop: 4 }}>
+            الرسائل التلقائية بتتبعت واحدة واحدة بفاصل 20–60 ثانية، والحد بيزيد تدريجيًا في أول أسبوعين من ربط الرقم.
+            {status.guard.pausedUntil ? ' ⚠️ الإرسال موقوف مؤقتًا بسبب أخطاء متتالية.' : ''}
+          </div>
+        </div>
+      )}
+
       {!status.connected && status.lastError && (
         <div className="qcp-pill critical" style={{ marginBottom: 18 }}>
           {status.lastError}
